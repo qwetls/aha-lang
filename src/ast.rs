@@ -1,51 +1,7 @@
 // src/ast.rs
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenType {
-    // Literals
-    Integer,
-    String,
-    // Identifiers
-    Identifier,
-    // Keywords
-    Let,
-    Fn,
-    // Operators
-    Assign,       // =
-    Plus,         // +
-    Minus,        // -
-    Asterisk,     // *
-    Slash,        // /
-    // Delimiters
-    LeftParen,    // (
-    RightParen,   // )
-    // Special
-    Eof,          // End of File
-    Illegal,      // Karakter tidak dikenal
-}
-
-#[derive(Debug, Clone)]
-pub struct Token {
-    pub r#type: TokenType,
-    pub literal: String,
-    pub line: usize,
-    pub column: usize,
-}
-
-impl Token {
-    pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
-        Token {
-            type: token_type,
-            literal,
-            line,
-            column,
-        }
-    }
-}
-
-
-
-#[derive(Debug, Clone, PartialEq)]
+// --- Token & TokenType ---
+#[derive(Debug, Clone, PartialEq, Copy)] // TAMBAHKAN Copy, Clone
 pub enum TokenType {
     // Literals
     Integer,
@@ -84,8 +40,28 @@ pub enum TokenType {
     Illegal,      // Karakter tidak dikenal
 }
 
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub r#type: TokenType, // PERBAIKI: gunakan r#type
+    pub literal: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Token {
+    pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
+        Token {
+            r#type: token_type, // PERBAIKI: gunakan r#type
+            literal,
+            line,
+            column,
+        }
+    }
+}
+
+// --- AST Nodes ---
+
 // --- Node Ekspresi ---
-// Ekspresi adalah sesuatu yang menghasilkan nilai (misal: 5, x, 1 + 2)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Identifier(Identifier),
@@ -141,13 +117,11 @@ pub struct FunctionLiteral {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallExpression {
-    pub function: Box<Expression>, // Bisa Identifier atau FunctionLiteral
+    pub function: Box<Expression>,
     pub arguments: Vec<Expression>,
 }
 
-
 // --- Node Pernyataan ---
-// Pernyataan adalah instruksi yang melakukan sesuatu (misal: let x = 5; return y;)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Let(LetStatement),
@@ -175,7 +149,6 @@ pub struct ExpressionStatement {
 pub struct BlockStatement {
     pub statements: Vec<Statement>,
 }
-
 
 // --- Node Akar ---
 #[derive(Debug, Clone, PartialEq)]
