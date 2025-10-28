@@ -3,7 +3,7 @@
 use clap::Parser;
 use std::fs;
 use aha_lang::lexer::Lexer;
-use aha_lang::parser::Parser;
+use aha_lang::parser::Parser as AhaParser;
 use aha_lang::codegen::CodeGenerator;
 use inkwell::context::Context;
 
@@ -30,7 +30,7 @@ fn main() {
 
     // 2. PARSING
     println!("[2] PARSING...");
-    let mut parser = Parser::new(lexer);
+    let mut parser = AhaParser::new(lexer);
     let program = parser.parse_program();
 
     if !parser.errors.is_empty() {

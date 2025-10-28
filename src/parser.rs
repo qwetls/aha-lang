@@ -194,23 +194,6 @@ impl Parser {
         }
     }
 
-    fn parse_infix(&mut self, left: Expression) -> Option<Expression> {
-        if !self.is_infix_operator(&self.peek_token.r#type) {
-            return None;
-        }
-        
-        self.next_token(); // Pindah ke operator
-        let operator = self.current_token.literal.clone();
-        let precedence = self.current_precedence();
-        self.next_token(); // Pindah ke ekspresi di sebelah kanan
-        let right = Box::new(self.parse_expression(precedence));
-
-        Some(Expression::Infix(InfixExpression {
-            left: Box::new(left),
-            operator,
-            right,
-        }))
-    }
 
     // --- Presedence Helper ---
     fn peek_precedence(&self) -> Precedence {
@@ -236,9 +219,6 @@ impl Parser {
         }
     }
     
-    fn is_infix_operator(&self, t: &TokenType) -> bool {
-        matches!(t, TokenType::Plus | TokenType::Minus | TokenType::Slash | TokenType::Asterisk | TokenType::Eq | TokenType::NotEq | TokenType::LT | TokenType::GT)
-    }
 
     // --- Error Handling ---
     fn peek_error(&mut self, t: TokenType) {

@@ -45,13 +45,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(last_stmt) = program.statements.last() {
             if let ast::Statement::Expression(expr_stmt) = last_stmt {
                 let return_val = self.compile_expression(&expr_stmt.expression)?;
-                self.builder.build_return(Some(&return_val));
+                let _ = self.builder.build_return(Some(&return_val));
                 return Ok(());
             }
         }
         
         let zero = self.i64_type.const_int(0, false);
-        self.builder.build_return(Some(&zero));
+        let _ = self.builder.build_return(Some(&zero));
         
         Ok(())
     }
