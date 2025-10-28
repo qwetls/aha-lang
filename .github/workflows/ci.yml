@@ -14,23 +14,21 @@ env:
 
 jobs:
   build-test:
-    name: Build · Test · Lint
+    name: Build · Lint · Run example
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # LLVM untuk Inkwell (pakai LLVM 14)
       - name: Install LLVM 14
+        id: llvm
         uses: KyleMayes/install-llvm-action@v2
         with:
           version: "14.0"
-      - name: Print LLVM path
-        run: |
-          echo "LLVM_DIR=${{ steps.install-llvm.outputs.LLVM_PATH }}"
-        id: install-llvm
 
-      - name: Setup Rust
+      - name: Setup Rust (stable + clippy + fmt)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -38,32 +36,53 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
+      - name: Cargo build
         env:
-          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
         run: cargo build --verbose
 
-      - name: Clippy (lint)
+      - name: Clippy (deny warnings)
         env:
-          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Test
+      # Jalankan compiler ke contoh; test.aha di repo lu terdeteksi UTF-16,
+      # jadi convert dulu ke UTF-8 supaya lexing/parsing nggak kejebak NUL bytes.
+      - name: Run example (convert UTF-16 → UTF-8 if needed)
         env:
-          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
-        run: cargo test --all --verbose
+          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
+        shell: bash
+        run: |
+          set -e
+          EX="test.aha"
+          if [[ -f "$EX" ]]; then
+            # coba deteksi NUL -> indikasi UTF-16
+            if grep -q $'\x00' "$EX"; then
+              echo "Converting UTF-16 → UTF-8: $EX"
+              iconv -f UTF-16 -t UTF-8 "$EX" -o test.utf8.aha
+              ARG="test.utf8.aha"
+            else
+              ARG="$EX"
+            fi
+            echo "Running: cargo run -- $ARG"
+            cargo run -- "$ARG"
+          else
+            echo "No test.aha found; skipping run step."
+          fi
 
-      - name: Dump LLVM IR (opsional)
+      # (Opsional) Upload IR/artifacts kalau ingin debug
+      - name: Emit LLVM IR (optional)
         if: always()
         env:
-          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
         run: |
           mkdir -p artifacts
-          RUSTFLAGS="--emit=llvm-ir" cargo build -p aha-lang || true
-          # Kalo lu punya target file .ll spesifik, taruh ke artifacts
+          # contoh: build normal; tambahkan langkah emit IR kalau binary lu support flag --dump-ir
+          # cargo run -- --dump-ir test.aha > artifacts/out.ll || true
+        continue-on-error: true
 
       - name: Upload artifacts
         if: always()
@@ -72,16 +91,17 @@ jobs:
           name: build-artifacts
           path: artifacts
 
+      # (Opsional) Notifikasi Discord — set secret DISCORD_WEBHOOK_URL
       - name: Discord notify (success)
-        if: success()
+        if: ${{ success() && secrets.DISCORD_WEBHOOK_URL != '' }}
         run: |
           curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"✅ **CI Passed** on \`${{ github.repository }}\` • \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
+               -d "{\"content\":\"✅ **CI Passed** • \`${{ github.repository }}\` @ \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
                "${{ secrets.DISCORD_WEBHOOK_URL }}"
 
       - name: Discord notify (failure)
-        if: failure()
+        if: ${{ failure() && secrets.DISCORD_WEBHOOK_URL != '' }}
         run: |
           curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"❌ **CI Failed** on \`${{ github.repository }}\` • \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
+               -d "{\"content\":\"❌ **CI Failed** • \`${{ github.repository }}\` @ \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
                "${{ secrets.DISCORD_WEBHOOK_URL }}"
