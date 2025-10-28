@@ -1,5 +1,8 @@
 # 🧠 AHA Lang — Advanced Hybrid Architecture
 
+![Build Status](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml/badge.svg)
+
+
 > *“Kesederhanaan dalam Penulisan, Kekuatan dalam Eksekusi.”*
 
 AHA Lang adalah bahasa pemrograman baru yang dirancang untuk menjembatani kesenjangan antara **ekspresivitas Python** dan **kinerja C++**, dibangun dengan semangat kolaborasi antara manusia dan kecerdasan buatan.
