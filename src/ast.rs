@@ -26,7 +26,7 @@ pub enum TokenType {
 
 #[derive(Debug, Clone)]
 pub struct Token {
-    pub type: TokenType,
+    pub r#type: TokenType,
     pub literal: String,
     pub line: usize,
     pub column: usize,

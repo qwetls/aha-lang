@@ -42,7 +42,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut program = Program { statements: Vec::new() };
 
-        while self.current_token.type != TokenType::Eof {
+        while self.current_token.r#type != TokenType::Eof {
             if let Some(stmt) = self.parse_statement() {
                 program.statements.push(stmt);
             }
@@ -59,11 +59,11 @@ impl Parser {
     }
     
     fn current_token_is(&self, t: TokenType) -> bool {
-        self.current_token.type == t
+        self.current_token.r#type == t
     }
 
     fn peek_token_is(&self, t: TokenType) -> bool {
-        self.peek_token.type == t
+        self.peek_token.r#type == t
     }
 
     fn expect_peek(&mut self, t: TokenType) -> bool {
@@ -78,7 +78,7 @@ impl Parser {
 
     // --- Parsing Functions ---
     fn parse_statement(&mut self) -> Option<Statement> {
-        match self.current_token.type.clone() {
+        match self.current_token.r#type.clone() {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             _ => self.parse_expression_statement(),
@@ -92,7 +92,7 @@ impl Parser {
 
         // Sekarang current_token seharusnya adalah identifier (misal: 'x')
         if !self.current_token_is(TokenType::Identifier) {
-            self.errors.push(format!("expected next token to be Identifier, got {:?} instead", self.current_token.type));
+            self.errors.push(format!("expected next token to be Identifier, got {:?} instead", self.current_token.r#type));
             return None;
         }
         let name = Identifier { value: self.current_token.literal.clone() };
@@ -153,7 +153,7 @@ impl Parser {
     }
     
     fn parse_prefix(&mut self) -> Expression {
-        match self.current_token.type.clone() {
+        match self.current_token.r#type.clone() {
             TokenType::Identifier => Expression::Identifier(Identifier { value: self.current_token.literal.clone() }),
             TokenType::Integer => Expression::Integer(IntegerLiteral { value: self.current_token.literal.parse().unwrap() }),
             TokenType::True => Expression::Boolean(BooleanLiteral { value: true }),
@@ -175,7 +175,7 @@ impl Parser {
                 }
             }
             _ => {
-                self.no_prefix_parse_fn_error(self.current_token.type.clone());
+                self.no_prefix_parse_fn_error(self.current_token.r#type.clone());
                 // Return a dummy expression to avoid crashing
                 Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
@@ -183,7 +183,7 @@ impl Parser {
     }
 
     fn parse_infix(&mut self, left: Expression) -> Option<Expression> {
-        if !self.is_infix_operator(&self.peek_token.type) {
+        if !self.is_infix_operator(&self.peek_token.r#type) {
             return None;
         }
         
@@ -202,11 +202,11 @@ impl Parser {
 
     // --- Presedence Helper ---
     fn peek_precedence(&self) -> Precedence {
-        self.precedence(&self.peek_token.type)
+        self.precedence(&self.peek_token.r#type)
     }
 
     fn current_precedence(&self) -> Precedence {
-        self.precedence(&self.current_token.type)
+        self.precedence(&self.current_token.r#type)
     }
 
     fn precedence(&self, t: &TokenType) -> Precedence {
@@ -230,7 +230,7 @@ impl Parser {
 
     // --- Error Handling ---
     fn peek_error(&mut self, t: TokenType) {
-        let msg = format!("expected next token to be {:?}, got {:?} instead", t, self.peek_token.type);
+        let msg = format!("expected next token to be {:?}, got {:?} instead", t, self.peek_token.r#type);
         self.errors.push(msg);
     }
     
