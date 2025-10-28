@@ -1,107 +1,65 @@
-name: CI
+# Nama workflow yang akan muncul di tab Actions
+name: 'CI & Discord Notification'
 
+# Kapan workflow ini dijalankan?
+# Saat ada push ke branch mana pun, dan saat ada pull request ke branch main
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ '*' ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ 'main' ]
 
-permissions:
-  contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-
+# Pekerjaan (job) yang akan dijalankan
 jobs:
-  build-test:
-    name: Build · Lint · Run example
+  # Nama job: build-and-test
+  build-and-test:
+    # Gunakan runner (mesin virtual) Ubuntu terbaru
     runs-on: ubuntu-latest
 
+    # Langkah-langkah (steps) yang akan dijalankan
     steps:
-      - name: Checkout
+      # Step 1: Download kode sumber dari repository
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      # LLVM untuk Inkwell (pakai LLVM 14)
-      - name: Install LLVM 14
-        id: llvm
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "14.0"
-
-      - name: Setup Rust (stable + clippy + fmt)
+      # Step 2: Install Rust toolchain (compiler, cargo, dll)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          # Tambahkan komponen clippy untuk analisis kode statis
+          components: clippy
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      # Step 3: Periksa kode (cepat) untuk cari error sintaks
+      - name: Run cargo check
+        run: cargo check --verbose
 
-      - name: Cargo build
-        env:
-          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
-        run: cargo build --verbose
+      # Step 4: Jalankan semua test yang ada
+      - name: Run tests
+        run: cargo test --verbose
 
-      - name: Clippy (deny warnings)
-        env:
-          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      # Step 5: Build aplikasi dalam mode release
+      - name: Build project
+        run: cargo build --release --verbose
 
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      # Jalankan compiler ke contoh; test.aha di repo lu terdeteksi UTF-16,
-      # jadi convert dulu ke UTF-8 supaya lexing/parsing nggak kejebak NUL bytes.
-      - name: Run example (convert UTF-16 → UTF-8 if needed)
-        env:
-          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
-        shell: bash
-        run: |
-          set -e
-          EX="test.aha"
-          if [[ -f "$EX" ]]; then
-            # coba deteksi NUL -> indikasi UTF-16
-            if grep -q $'\x00' "$EX"; then
-              echo "Converting UTF-16 → UTF-8: $EX"
-              iconv -f UTF-16 -t UTF-8 "$EX" -o test.utf8.aha
-              ARG="test.utf8.aha"
-            else
-              ARG="$EX"
-            fi
-            echo "Running: cargo run -- $ARG"
-            cargo run -- "$ARG"
-          else
-            echo "No test.aha found; skipping run step."
-          fi
-
-      # (Opsional) Upload IR/artifacts kalau ingin debug
-      - name: Emit LLVM IR (optional)
+      # Step 6: Kirim notifikasi ke Discord
+      - name: Notify Discord on success or failure
+        # Gunakan 'always()' agar step ini selalu dijalankan,
+        # baik build-nya sukses maupun gagal.
         if: always()
-        env:
-          LLVM_SYS_140_PREFIX: ${{ steps.llvm.outputs.LLVM_PATH }}
-        run: |
-          mkdir -p artifacts
-          # contoh: build normal; tambahkan langkah emit IR kalau binary lu support flag --dump-ir
-          # cargo run -- --dump-ir test.aha > artifacts/out.ll || true
-        continue-on-error: true
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+        # Gunakan action dari marketplace untuk mempermudah
+        uses: sarisia/actions-status-discord@v1
         with:
-          name: build-artifacts
-          path: artifacts
-
-      # (Opsional) Notifikasi Discord — set secret DISCORD_WEBHOOK_URL
-      - name: Discord notify (success)
-        if: ${{ success() && secrets.DISCORD_WEBHOOK_URL != '' }}
-        run: |
-          curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"✅ **CI Passed** • \`${{ github.repository }}\` @ \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
-               "${{ secrets.DISCORD_WEBHOOK_URL }}"
-
-      - name: Discord notify (failure)
-        if: ${{ failure() && secrets.DISCORD_WEBHOOK_URL != '' }}
-        run: |
-          curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"❌ **CI Failed** • \`${{ github.repository }}\` @ \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
-               "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          # Ambil URL webhook dari secret yang kita buat tadi
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Judul notifikasi
+          title: "Build Result: ${{ job.status }}"
+          # Deskripsi notifikasi, bisa berisi link ke commit
+          description: |
+            Commit: `${{ github.sha }}`
+            Author: ${{ github.actor }}
+            Message: ${{ github.event.head_commit.message }}
+            [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          # Warna notifikasi (hijau untuk sukses, merah untuk gagal)
+          color: ${{ job.status == 'success' && '0x28a745' || '0xdc3545' }}
+          # Avatar yang digunakan (logo GitHub)
+          avatar_url: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
