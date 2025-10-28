@@ -1,6 +1,7 @@
 // src/codegen.rs
 
 use crate::ast;
+use inkwell::values::{IntValue, PointerValue, BasicValueEnum};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
