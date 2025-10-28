@@ -4,6 +4,8 @@
 use crate::ast::{Program, Statement, LetStatement, ReturnStatement, ExpressionStatement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, Token};
 use crate::lexer::Lexer;
 use crate::ast::TokenType;
+use inkwell::values::BasicValueEnum;
+use inkwell::values::PointerValue;
 
 pub struct Parser {
     lexer: Lexer,
