@@ -4,7 +4,6 @@ use crate::ast;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{IntValue, PointerValue, BasicValueEnum};
 use inkwell::types::IntType;
 use std::collections::HashMap;
 
@@ -119,7 +118,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| format!("Failed to create JIT engine: {}", e))?;
             
         let function_name = "main";
-        let function = self.module.get_function(function_name)
+        let _function = self.module.get_function(function_name)
             .ok_or_else(|| format!("Function '{}' not found", function_name))?;
             
         unsafe {

@@ -1,9 +1,6 @@
 // src/parser.rs
 
-use crate::ast;
-use crate::ast::{Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement, BlockStatement};
 use crate::lexer::Lexer;
-use crate::ast::Token;
 use crate::ast::TokenType;
 
 pub struct Parser {
@@ -137,20 +134,32 @@ impl Parser {
         Some(Statement::Expression(ExpressionStatement { expression }))
     }
 
-    // --- Parsing Expressions (Inti dari Pratt Parser) ---
     pub fn parse_expression(&mut self, precedence: Precedence) -> Expression {
         let mut left = self.parse_prefix();
 
+        // Loop selama kita melihat operator dengan presedensi lebih tinggi
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
-            if let Some(infix) = self.parse_infix(left) {
-                left = infix;
-            } else {
-                return left;
-            }
+            // Ambil operator
+            self.next_token();
+            let operator = self.current_token.literal.clone();
+            
+            // Tentukan presedensi operator
+            let right_precedence = self.current_precedence();
+            
+            // Pindah ke ekspresi di sebelah kanan
+            self.next_token();
+            let right = Box::new(self.parse_expression(right_precedence));
+
+            // Bangun ekspresi Infix baru dan jadikan sebagai 'left' untuk iterasi selanjutnya
+            left = Expression::Infix(InfixExpression {
+                left: Box::new(left),
+                operator,
+                right,
+            });
         }
 
         left
-    }
+    } 
     
     fn parse_prefix(&mut self) -> Expression {
         match self.current_token.r#type.clone() {
