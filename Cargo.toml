@@ -1,0 +1,8 @@
+[package]
+name = "aha-lang"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+inkwell = { version = "0.4", features = ["llvm14-0"] } # Gunakan versi LLVM yang tersedia
