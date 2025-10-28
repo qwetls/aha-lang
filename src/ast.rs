@@ -1,6 +1,88 @@
 // src/ast.rs
 
-// ... (Token dan TokenType tetap sama) ...
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenType {
+    // Literals
+    Integer,
+    String,
+    // Identifiers
+    Identifier,
+    // Keywords
+    Let,
+    Fn,
+    // Operators
+    Assign,       // =
+    Plus,         // +
+    Minus,        // -
+    Asterisk,     // *
+    Slash,        // /
+    // Delimiters
+    LeftParen,    // (
+    RightParen,   // )
+    // Special
+    Eof,          // End of File
+    Illegal,      // Karakter tidak dikenal
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub type: TokenType,
+    pub literal: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Token {
+    pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
+        Token {
+            type: token_type,
+            literal,
+            line,
+            column,
+        }
+    }
+}
+
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenType {
+    // Literals
+    Integer,
+    String,
+    Boolean,
+    // Identifiers
+    Identifier,
+    // Keywords
+    Let,
+    Fn,
+    True,
+    False,
+    If,
+    Else,
+    Return,
+    // Operators
+    Assign,       // =
+    Plus,         // +
+    Minus,        // -
+    Asterisk,     // *
+    Slash,        // /
+    Eq,           // ==
+    NotEq,        // !=
+    LT,           // <
+    GT,           // >
+    Bang,         // !
+    // Delimiters
+    Comma,        // ,
+    Semicolon,    // ;
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    // Special
+    Eof,          // End of File
+    Illegal,      // Karakter tidak dikenal
+}
 
 // --- Node Ekspresi ---
 // Ekspresi adalah sesuatu yang menghasilkan nilai (misal: 5, x, 1 + 2)
