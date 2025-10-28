@@ -34,6 +34,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     // Fungsi utama untuk mengompilasi seluruh program
+    // (tetap Result<(), String> sesuai instruksi)
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
         // Buat fungsi `main` implisit
         let fn_type = self.i64_type.fn_type(&[], false);
@@ -47,8 +48,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.compile_statement(statement)?;
         }
 
-        // Untuk saat ini, kita akan mengembalikan nilai ekspresi terakhir
-        // Dalam bahasa yang lebih kompleks, ini akan berbeda
+        // Kembalikan nilai ekspresi terakhir jika ada
         if let Some(last_stmt) = program.statements.last() {
             if let ast::Statement::Expression(expr_stmt) = last_stmt {
                 let return_val = self.compile_expression(&expr_stmt.expression)?;
@@ -64,17 +64,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    // Tambah propagasi error Result di statement
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
                 // Kompilasi nilai di sebelah kanan
                 let value = self.compile_expression(&let_stmt.value)?;
                 
-                // Alokasikan ruang di stack untuk variabel
-                let pointer = self.builder.build_alloca(self.i64_type, &let_stmt.name.value);
+                // Alokasikan ruang di stack untuk variabel (pakai ? sesuai instruksi)
+                let pointer = self.builder.build_alloca(self.i64_type, &let_stmt.name.value)?;
                 
-                // Simpan nilai ke dalam alokasi tersebut
-                self.builder.build_store(pointer, value);
+                // Simpan nilai ke dalam alokasi tersebut (pakai ? sesuai instruksi)
+                self.builder.build_store(pointer, value)?;
                 
                 // Simpan pointer ke symbol table
                 self.variables.insert(let_stmt.name.value.clone(), pointer);
@@ -91,6 +92,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    // Tambah Result<BasicValueEnum<'ctx>, String> + ? di builder aritmatika
     fn compile_expression(&mut self, expression: &ast::Expression) -> Result<BasicValueEnum<'ctx>, String> {
         match expression {
             ast::Expression::Integer(int_lit) => {
@@ -110,12 +112,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let left = self.compile_expression(&infix.left)?;
                 let right = self.compile_expression(&infix.right)?;
                 
-                // Generate instruksi LLVM berdasarkan operator
+                // Generate instruksi LLVM berdasarkan operator (pakai ? sesuai instruksi)
                 match infix.operator.as_str() {
-                    "+" => Ok(self.builder.build_int_add(left.into_int_value(), right.into_int_value(), "addtmp").into()),
-                    "-" => Ok(self.builder.build_int_sub(left.into_int_value(), right.into_int_value(), "subtmp").into()),
-                    "*" => Ok(self.builder.build_int_mul(left.into_int_value(), right.into_int_value(), "multmp").into()),
-                    "/" => Ok(self.builder.build_int_signed_div(left.into_int_value(), right.into_int_value(), "divtmp").into()),
+                    "+" => Ok(self.builder.build_int_add(left.into_int_value(), right.into_int_value(), "addtmp")?.into()),
+                    "-" => Ok(self.builder.build_int_sub(left.into_int_value(), right.into_int_value(), "subtmp")?.into()),
+                    "*" => Ok(self.builder.build_int_mul(left.into_int_value(), right.into_int_value(), "multmp")?.into()),
+                    "/" => Ok(self.builder.build_int_signed_div(left.into_int_value(), right.into_int_value(), "divtmp")?.into()),
                     // TODO: Tambahkan operator lainnya
                     _ => Err(format!("Unknown operator: {}", infix.operator)),
                 }
