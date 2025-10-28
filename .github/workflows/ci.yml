@@ -23,10 +23,10 @@ jobs:
 
       # --- STEP BARU: INSTALL LLVM ---
       # Step ini akan menginstall LLVM 14 dan Clang 14 yang dibutuhkan oleh inkwell
-      - name: Install LLVM
+      - name: Install LLVM and Polly
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-14-dev clang-14
+          sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
