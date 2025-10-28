@@ -34,7 +34,7 @@ impl Parser {
             lexer,
             current_token,
             peek_token,
-            errors: Vec::new(),
+            pub errors: Vec::new(),
         }
     }
 
