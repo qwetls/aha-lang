@@ -2,15 +2,15 @@
 
 use crate::Lexer;
 use crate::ast;
-use crate::ast::{Program, Statement, LetStatement, ReturnStatement, ExpressionStatement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, Token};
+use crate::ast::{Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement, BlockStatement};
+use crate::ast::Token;
 use crate::ast::TokenType;
-
 
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
     peek_token: Token,
-    errors: Vec<String>,
+    pub errors: Vec<String>, // PASTIKAN INI PUBLIK
 }
 
 // Definisi presedensi operator
@@ -34,7 +34,7 @@ impl Parser {
             lexer,
             current_token,
             peek_token,
-            pub errors: Vec<String>,
+            errors: Vec::new(),
         }
     }
 
@@ -85,32 +85,24 @@ impl Parser {
         }
     }
 
-     fn parse_let_statement(&mut self) -> Option<Statement> {
-        // Saat fungsi ini dipanggil, current_token adalah 'Let'.
-        // Kita perlu memajukan token untuk mendapatkan identifier.
-        self.next_token();
+    fn parse_let_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // Lewati 'let'
 
-        // Sekarang current_token seharusnya adalah identifier (misal: 'x')
         if !self.current_token_is(TokenType::Identifier) {
             self.errors.push(format!("expected next token to be Identifier, got {:?} instead", self.current_token.r#type));
             return None;
         }
         let name = Identifier { value: self.current_token.literal.clone() };
 
-        // Sekarang kita perlu memastikan token berikutnya adalah '='
         if !self.expect_peek(TokenType::Assign) {
             return None;
         }
 
-        // Lewati token '=' untuk menuju ke awal ekspresi
-        self.next_token();
-
-        // Parse ekspresi di sebelah kanan tanda '='
+        self.next_token(); // Lewati '='
         let value = self.parse_expression(Precedence::Lowest);
 
-        // Lewati semicolon jika ada
         if self.peek_token_is(TokenType::Semicolon) {
-            self.next_token();
+            self.next_token(); // Lewati ';'
         }
 
         Some(Statement::Let(LetStatement { name, value }))
@@ -137,23 +129,17 @@ impl Parser {
         Some(Statement::Expression(ExpressionStatement { expression }))
     }
 
+    // --- Parsing Expressions (Versi Diperbaiki) ---
     pub fn parse_expression(&mut self, precedence: Precedence) -> Expression {
         let mut left = self.parse_prefix();
 
-        // Loop selama kita melihat operator dengan presedensi lebih tinggi
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
-            // Ambil operator
-            self.next_token();
+            self.next_token(); // Ambil operator
             let operator = self.current_token.literal.clone();
-            
-            // Tentukan presedensi operator
             let right_precedence = self.current_precedence();
-            
-            // Pindah ke ekspresi di sebelah kanan
-            self.next_token();
+            self.next_token(); // Pindah ke ekspresi di sebelah kanan
             let right = Box::new(self.parse_expression(right_precedence));
 
-            // Bangun ekspresi Infix baru dan jadikan sebagai 'left' untuk iterasi selanjutnya
             left = Expression::Infix(InfixExpression {
                 left: Box::new(left),
                 operator,
@@ -162,7 +148,7 @@ impl Parser {
         }
 
         left
-    } 
+    }
     
     fn parse_prefix(&mut self) -> Expression {
         match self.current_token.r#type.clone() {
@@ -180,20 +166,16 @@ impl Parser {
                 self.next_token();
                 let exp = self.parse_expression(Precedence::Lowest);
                 if !self.expect_peek(TokenType::RightParen) {
-                    // TODO: Handle error better, maybe return a dummy expression
-                    Expression::Identifier(Identifier{ value: "ERROR".to_string() })
-                } else {
-                    exp
+                    return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
                 }
+                exp
             }
             _ => {
                 self.no_prefix_parse_fn_error(self.current_token.r#type.clone());
-                // Return a dummy expression to avoid crashing
                 Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
         }
     }
-
 
     // --- Presedence Helper ---
     fn peek_precedence(&self) -> Precedence {
@@ -219,7 +201,6 @@ impl Parser {
         }
     }
     
-
     // --- Error Handling ---
     fn peek_error(&mut self, t: TokenType) {
         let msg = format!("expected next token to be {:?}, got {:?} instead", t, self.peek_token.r#type);
