@@ -2,7 +2,6 @@
 name: 'CI & Discord Notification'
 
 # Kapan workflow ini dijalankan?
-# Saat ada push ke branch mana pun, dan saat ada pull request ke branch main
 on:
   push:
     branches: [ '*' ]
@@ -21,6 +20,13 @@ jobs:
       # Step 1: Download kode sumber dari repository
       - name: Checkout source code
         uses: actions/checkout@v4
+
+      # --- STEP BARU: INSTALL LLVM ---
+      # Step ini akan menginstall LLVM 14 dan Clang 14 yang dibutuhkan oleh inkwell
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-14-dev clang-14
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
