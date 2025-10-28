@@ -1,6 +1,7 @@
 // src/parser.rs
 
-
+use crate::Lexer;
+use crate::ast;
 use crate::ast::{Program, Statement, LetStatement, ReturnStatement, ExpressionStatement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, Token};
 use crate::ast::TokenType;
 
