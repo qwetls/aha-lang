@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    name: Build · Test · Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 14
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "14.0"
+      - name: Print LLVM path
+        run: |
+          echo "LLVM_DIR=${{ steps.install-llvm.outputs.LLVM_PATH }}"
+        id: install-llvm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        env:
+          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+        run: cargo build --verbose
+
+      - name: Clippy (lint)
+        env:
+          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        env:
+          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+        run: cargo test --all --verbose
+
+      - name: Dump LLVM IR (opsional)
+        if: always()
+        env:
+          LLVM_SYS_140_PREFIX: ${{ steps.install-llvm.outputs.LLVM_PATH }}
+        run: |
+          mkdir -p artifacts
+          RUSTFLAGS="--emit=llvm-ir" cargo build -p aha-lang || true
+          # Kalo lu punya target file .ll spesifik, taruh ke artifacts
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: artifacts
+
+      - name: Discord notify (success)
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{\"content\":\"✅ **CI Passed** on \`${{ github.repository }}\` • \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
+               "${{ secrets.DISCORD_WEBHOOK_URL }}"
+
+      - name: Discord notify (failure)
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{\"content\":\"❌ **CI Failed** on \`${{ github.repository }}\` • \`${{ github.ref_name }}\` • [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\"}" \
+               "${{ secrets.DISCORD_WEBHOOK_URL }}"
