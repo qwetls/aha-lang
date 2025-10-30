@@ -117,7 +117,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     let condition_val = self.compile_expression(&if_expr.condition)?;
     
     // 2. Buat blok-blok yang dibutuhkan
-    let function = self.builder.get_insert_block().get_parent().unwrap();
+    let function = self.builder.get_insert_block().expect("Error: Builder is not in a block!").get_parent().unwrap();
     let consequence_block = self.context.append_basic_block(function, "consequence");
     let alternative_block = self.context.append_basic_block(function, "alternative");
     let merge_block = self.context.append_basic_block(function, "merge");
@@ -185,3 +185,4 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
 }
+
