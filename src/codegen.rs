@@ -4,7 +4,7 @@ use crate::ast;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{PointerValue, BasicValueEnum}; // PASTIKAN BARIS INI ADA
+use inkwell::values::{PointerValue, BasicValueEnum};
 use inkwell::types::IntType;
 use std::collections::HashMap;
 
@@ -103,11 +103,82 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .map_err(|e| e.to_string())?.into()),
                     "/" => Ok(self.builder.build_int_signed_div(left.into_int_value(), right.into_int_value(), "divtmp")
                         .map_err(|e| e.to_string())?.into()),
+                    "==" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, left.into_int_value(), right.into_int_value(), "eqtmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "eqzext") // NAMA METHOD Y BENAR
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    "!=" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, left.into_int_value(), right.into_int_value(), "netmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "nezext") // NAMA METHOD Y BENAR
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    "<" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, left.into_int_value(), right.into_int_value(), "lttmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "ltzext") // NAMA METHOD Y BENAR
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    ">" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, left.into_int_value(), right.into_int_value(), "gttmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "gtzext") // NAMA METHOD Y BENAR
+                            .map_err(|e| e.to_string())?.into())
+                    },
                     _ => Err(format!("Unknown operator: {}", infix.operator)),
                 }
             },
+            ast::Expression::If(if_expr) => self.compile_if_expression(if_expr),
             _ => Err("Expression type not yet implemented".to_string()),
         }
+    }
+
+    fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
+        let condition_val = self.compile_expression(&if_expr.condition)?;
+        
+        let function = self.builder.get_insert_block().expect("Error: Builder is not in a block!").get_parent().unwrap();
+        let consequence_block = self.context.append_basic_block(function, "consequence");
+        let alternative_block = self.context.append_basic_block(function, "alternative");
+        let merge_block = self.context.append_basic_block(function, "merge");
+
+        self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block)
+            .map_err(|e| e.to_string())?;
+
+        self.builder.position_at_end(consequence_block);
+        let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
+        self.builder.build_unconditional_branch(merge_block)
+            .map_err(|e| e.to_string())?;
+
+        self.builder.position_at_end(alternative_block);
+        let alternative_val = if let Some(alt_block) = &if_expr.alternative {
+            self.compile_block_statement(alt_block)?
+        } else {
+            self.i64_type.const_int(0, false).into()
+        };
+        self.builder.build_unconditional_branch(merge_block)
+            .map_err(|e| e.to_string())?;
+
+        self.builder.position_at_end(merge_block);
+        let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
+            .map_err(|e| e.to_string())?;
+        
+        phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
+        
+        Ok(phi_node.as_basic_value())
+    }
+    
+    fn compile_block_statement(&mut self, block: &ast::BlockStatement) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut last_value = self.i64_type.const_int(0, false).into();
+        for statement in &block.statements {
+            if let ast::Statement::Expression(expr_stmt) = statement {
+                last_value = self.compile_expression(&expr_stmt.expression)?;
+            } else {
+                self.compile_statement(statement)?;
+            }
+        }
+        Ok(last_value)
     }
 
     pub fn print_llvm_ir(&self) {
@@ -131,3 +202,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 }
+
+
+
+

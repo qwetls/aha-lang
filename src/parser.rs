@@ -156,6 +156,7 @@ impl Parser {
             TokenType::Integer => Expression::Integer(IntegerLiteral { value: self.current_token.literal.parse().unwrap() }),
             TokenType::True => Expression::Boolean(BooleanLiteral { value: true }),
             TokenType::False => Expression::Boolean(BooleanLiteral { value: false }),
+            TokenType::If => self.parse_if_expression(),
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
@@ -175,6 +176,62 @@ impl Parser {
                 Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
         }
+    }
+
+    // Fungsi baru untuk parsing if expression
+    fn parse_if_expression(&mut self) -> Expression {
+        self.next_token(); // Lewati 'if'
+
+        // Parse kondisi
+        let condition = self.parse_expression(Precedence::Lowest);
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
+        }
+
+        // Parse blok consequence
+        let consequence = self.parse_block_statement();
+
+        // Cek apakah ada 'else'
+        let alternative = if self.peek_token_is(TokenType::Else) {
+            self.next_token(); // Lewati 'else'
+            
+            // Cek apakah 'else' diikuti oleh 'if' (untuk if-else if)
+            if self.peek_token_is(TokenType::If) {
+                self.next_token(); // Lewati 'if'
+                // Rekursif untuk if-else if
+                Some(BlockStatement { statements: vec![Statement::Expression(ExpressionStatement{ expression: self.parse_if_expression() })] })
+            } else if self.expect_peek(TokenType::LeftBrace) {
+                // Parse blok else
+                Some(self.parse_block_statement())
+            } else {
+                return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
+            }
+        } else {
+            None
+        };
+
+        Expression::If(ast::IfExpression {
+            condition: Box::new(condition),
+            consequence,
+            alternative,
+        })
+    }
+
+    // Fungsi baru untuk parsing blok statement { ... }
+    fn parse_block_statement(&mut self) -> BlockStatement {
+        self.next_token(); // Lewati '{'
+
+        let mut statements = Vec::new();
+
+        while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
+            if let Some(stmt) = self.parse_statement() {
+                statements.push(stmt);
+            }
+            self.next_token();
+        }
+        
+        BlockStatement { statements }
     }
 
     // --- Presedence Helper ---
