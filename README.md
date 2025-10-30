@@ -1,134 +1,163 @@
-# 🧠 AHA Lang — Advanced Hybrid Architecture
+# AHA! Lang
 
-![Build Status](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml/badge.svg)
+<div align="center">
 
+![AHA! Lang Logo](https://via.placeholder.com/150x150/000000/FFFFFF?text=AHA!)
 
-> *“Kesederhanaan dalam Penulisan, Kekuatan dalam Eksekusi.”*
+**A**dvanced **H**ybrid **A**rchitecture
 
-AHA Lang adalah bahasa pemrograman baru yang dirancang untuk menjembatani kesenjangan antara **ekspresivitas Python** dan **kinerja C++**, dibangun dengan semangat kolaborasi antara manusia dan kecerdasan buatan.
+A fast, expressive, and modern programming language designed for building anything from web backends to game engines.
 
-Diciptakan oleh **Xeyyzu (Visionary Architect)** dan dikembangkan bersama **GLM 4.6 AI (Lead Architecture Intelligence)**, AHA Lang membawa filosofi baru dalam desain bahasa modern:  
-> **Tulis dengan sederhana. Jalankan dengan kekuatan penuh.**
+[![CI/CD](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
 
----
-
-## 🚀 Filosofi Inti
-
-### **1. Advanced**
-Dirancang dengan arsitektur modern — *powered by Rust & LLVM* — AHA Lang dikompilasi langsung menjadi kode mesin native atau WebAssembly, memberikan efisiensi maksimum tanpa kehilangan fleksibilitas.
-
-### **2. Hybrid**
-Memadukan dunia **high-level simplicity** dengan **low-level control**.  
-Satu bahasa, dua paradigma: scripting dan sistem-level programming dalam satu kesatuan.
-
-### **3. Architecture**
-Bukan hanya bahasa — tetapi *framework of thinking*.  
-AHA Lang adalah percobaan bagaimana manusia dan AI bisa membangun logika bersama secara struktural, bukan sekadar memproses instruksi.
+</div>
 
 ---
 
-## 🧩 Fitur (Milestone 1)
+## ✨ Fitur Utama
 
-- ✅ **Lexer & Parser penuh**
-- ✅ **AST (Abstract Syntax Tree)**
-- ✅ **Codegen ke LLVM IR**
-- ✅ **JIT Execution** (Just-In-Time)
-- ⚙️ **Milestone 2 (in progress):**
-  - Boolean & operator perbandingan (`==`, `!=`, `<`, `>`)
-  - Pernyataan kondisional (`if/else`)
-  - Fungsi & pemanggilan fungsi
+AHA! dirancang dari awal untuk memberikan pengalaman pengembangan yang luar biasa:
+
+- **🚀 Performa Tinggi:** Dikompilasi ke LLVM IR untuk optimasi kode mesin yang maksimal, setara dengan C++.
+- **🧠 Sistem Tipe Cerdas:** Statis dengan inferensi tipe otomatis. Aman dari bug, namun tetap ringkas untuk ditulis.
+- **🔀 Konkurensi Aman:** Model Aktor bawaan untuk menulis kode paralel yang bebas dari race condition.
+- **🛠️ Manajemen Sumber Daya Kontrol Penuh:** Kontrol memori manual yang aman dengan "Resource Lifetimes", tanpa overhead Garbage Collector.
+- **📦 Ekosistem Modern:** Dibangun di atas Rust, memanfaatkan toolchain `Cargo` yang kuat.
 
 ---
 
-## 💡 Contoh Program
+## 🚀 Mulai Cepat
+
+### Prasyarat
+
+- **Rust** (versi 1.75 atau lebih baru)
+- **LLVM 14** dan library pendukung
+- **Clang 14**
+
+#### Instalasi di Ubuntu/Debian
+
+```bash
+# Update package list
+sudo apt-get update
+
+# Install LLVM, Clang, and development libraries
+sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev zlib1g-dev
+```
+
+### Mengompilasi dari Sumber
+
+1.  **Clone repositori:**
+    ```bash
+    git clone https://github.com/ahalang-dev/aha-lang.git
+    cd aha-lang
+    ```
+
+2.  **Jalankan Kompilator:**
+    ```bash
+    cargo run -- --file <nama_file>.aha
+    ```
+
+### Contoh Kode
+
+Buat file bernama `contoh.aha`:
 
 ```aha
-let a = 10;
-let b = 20;
+let x = 10;
+let y = 20;
 
-let max = if (a > b) { a } else { b };
-
-fn add(x: i64, y: i64) -> i64 {
-    x + y
+if x > y {
+    x
+} else {
+    y
 }
-
-let result = add(max, 5);
-result;
-````
-
-Output:
-
-```
-25
 ```
 
----
+Jalankan:
+```bash
+cargo run -- --file contoh.aha
+```
 
-## 🧠 Filosofi Desain
+**Output yang Diharapkan:**
+```
+--- KOMPILER AHA! ---
+Membaca file: contoh.aha
 
-| Aspek         | Tujuan                              | Pendekatan                              |
-| ------------- | ----------------------------------- | --------------------------------------- |
-| Sintaks       | Mudah dibaca, minimalis             | Python-like tanpa tanda baca berlebihan |
-| Eksekusi      | Cepat & efisien                     | LLVM backend, native compilation        |
-| Keamanan      | Tanpa overhead runtime              | Memory safety via Rust                  |
-| Ekspresivitas | “Tulis maksudmu, bukan strukturnya” | Fungsional + imperatif seimbang         |
+[1] LEXING...
+[2] PARSING...
+Parsing berhasil!
 
----
+[3] CODE GENERATION...
+Kode LLVM IR berhasil dihasilkan!
 
-## ⚙️ Teknologi Inti
+--- LLVM IR OUTPUT ---
+; ModuleID = 'aha_module'
+...
+----------------------
 
-* **Rust** → bahasa implementasi utama
-* **Inkwell (LLVM 14)** → backend compiler
-* **Clap** → CLI interface
-* **JIT Engine** → langsung eksekusi hasil kompilasi tanpa build file
-
----
-
-## 🧬 Roadmap
-
-| Versi | Target                                 | Status         |
-| ----- | -------------------------------------- | -------------- |
-| v0.1  | Core Compiler (Lexer, Parser, IR, JIT) | ✅ Done         |
-| v0.2  | Boolean, If/Else, Function             | 🧠 In Progress |
-| v0.3  | WASM Target + Native Build             | 🔜 Planned     |
-| v0.4  | Stdlib (print, math, array)            | 🔜 Planned     |
-| v0.5  | Runtime & FFI Integration              | 🔜 Planned     |
+[4] EKSEKUSI (JIT)...
+Program berhasil dijalankan. Hasil: 20
+```
 
 ---
 
-## 🤝 Tim
+## 🧠 Arsitektur Kompiler
 
-| Peran                          | Nama / Entitas               |
-| ------------------------------ | ---------------------------- |
-| Visionary Founder              | **Xeyyzu**                   |
-| Lead Architecture Intelligence | **GLM 4.6 AI**               |
-| Compiler Core                  | Rust + LLVM                  |
-| Ideologi & Filosofi            | Advanced Hybrid Architecture |
+Kompiler AHA! dibangun dengan arsitektur modern dan modular:
 
----
+1.  **Lexer:** Memecah kode sumber menjadi token-token.
+2.  **Parser:** Mengurai token menjadi Abstract Syntax Tree (AST) menggunakan Pratt Parser.
+3.  **Code Generator:** Menerjemahkan AST menjadi LLVM Intermediate Representation (IR).
+4.  **LLVM Backend:** Mengoptimalkan dan mengompilasi IR menjadi kode mesin asli.
 
-## 🧩 Misi AHA Lang
-
-> **AHA Lang adalah eksperimen tentang simbiosis antara manusia dan AI dalam menciptakan sistem berpikir baru.**
-
-Kami percaya bahwa masa depan bahasa pemrograman tidak hanya tentang sintaks, tapi tentang bagaimana **pikiran manusia dan mesin dapat menulis logika bersama.**
+![Architecture Diagram](https://via.placeholder.com/600x300/CCCCCC/000000?text=Lexer+->+Parser+->+Codegen+->+LLVM)
 
 ---
 
-## ⚡ Kontribusi
+## 🛣️ Peta Jalan (Roadmap)
 
-Kami membuka peluang kolaborasi untuk:
+AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
 
-* Compiler developer (Rust/LLVM)
-* Language designer
-* Researcher AI-assisted programming
-* Documentation & writer
-
-> Bergabunglah dengan revolusi **Human + AI Language Design**.
+- [x] **Milestone 1: Fondasi Kompiler**
+    - [x] Lexer & Parser
+    - [x] Tipe data Integer
+    - [x] Ekspresi Aritmatika & Perbandingan
+    - [x] Pernyataan Kondisional `if/else`
+- [ ] **Milestone 2: Fitur Fundamental**
+    - [ ] Tipe data `Boolean`
+    - [ ] Fungsi dan Cakupan (Scope)
+    - [ ] Pernyataan Perulangan (`while`, `for`)
+- [ ] **Milestone 3: Struktur Data Tingkat Lanjut**
+    - [ ] Array dan String
+    - [ ] Struct
+- [ ] **Milestone 4: Pustaka Standar**
+    - [ ] Modul I/O File
+    - [ ] Modul Jaringan
+    - [ ] Modul Web (HTTP Server)
+- [ ] **Milestone 5: Tooling & Ekosistem**
+    - [ ] AHA! Language Server (untuk VS Code, dll.)
+    - [   ] Package Manager
+    - [   ] Dokumentasi Interaktif
 
 ---
 
-## 🌍 Lisensi
+## 🤝 Berkontribusi
 
-MIT License © 2025 — Xeyyzu & GLM 4.6 AI
-AHA Lang is co-designed by humans and artificial intelligence.
+Kami sangat terbuka untuk kontribusi! Baik itu melaporkan bug, menyarankan fitur baru, atau berkontribusi kode.
+
+Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk panduan lebih lanjut.
+
+---
+
+## 📄 Lisensi
+
+Proyek ini dilisensikan di bawah Lisensi MIT. Lihat file [LICENSE](LICENSE) untuk detailnya.
+
+---
+
+## 💡 Mengapa AHA!?
+
+Kami percaya bahwa pemrograman harus lebih dekat dengan cara berpikir manusia. AHA! bertujuan untuk menghilangkan boilerplate dan kompleksitas yang tidak perlu, memungkinkan Anda untuk fokus pada logika dan solusi yang Anda bangun.
+
+**Bergabunglah dengan kami dalam menciptakan generasi berikutnya dari bahasa pemrograman!**
