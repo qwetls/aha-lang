@@ -14,6 +14,7 @@ pub struct CodeGenerator<'ctx> {
     builder: Builder<'ctx>,
     variables: HashMap<String, PointerValue<'ctx>>,
     i64_type: IntType<'ctx>,
+    bool_type: IntType<'ctx>, // TAMBAHKAN INI
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -21,6 +22,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let module = context.create_module("aha_module");
         let builder = context.create_builder();
         let i64_type = context.i64_type();
+        let bool_type = context.bool_type(); // INISIASI INI
 
         CodeGenerator {
             context,
@@ -28,6 +30,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             builder,
             variables: HashMap::new(),
             i64_type,
+            bool_type, // TAMBAHKAN INI
         }
     }
 
@@ -45,6 +48,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(last_stmt) = program.statements.last() {
             if let ast::Statement::Expression(expr_stmt) = last_stmt {
                 let return_val = self.compile_expression(&expr_stmt.expression)?;
+                
+                // Handle boolean return value - convert to i64 if needed
+                let return_val = if return_val.is_int_value() && return_val.into_int_value().get_type() == self.bool_type {
+                    self.builder.build_int_z_extend(return_val.into_int_value(), self.i64_type, "bool_extend")
+                        .map_err(|e| e.to_string())?
+                        .into()
+                } else {
+                    return_val
+                };
+                
                 let _ = self.builder.build_return(Some(&return_val));
                 return Ok(());
             }
@@ -60,7 +73,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         match statement {
             ast::Statement::Let(let_stmt) => {
                 let value = self.compile_expression(&let_stmt.value)?;
-                let pointer = self.builder.build_alloca(self.i64_type, &let_stmt.name.value)
+                
+                // Determine the type for allocation based on the value type
+                let alloca_type = if value.is_int_value() && value.into_int_value().get_type() == self.bool_type {
+                    self.bool_type
+                } else {
+                    self.i64_type
+                };
+                
+                let pointer = self.builder.build_alloca(alloca_type, &let_stmt.name.value)
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(pointer, value)
                     .map_err(|e| e.to_string())?;
@@ -80,6 +101,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         match expression {
             ast::Expression::Integer(int_lit) => {
                 Ok(self.i64_type.const_int(int_lit.value as u64, false).into())
+            },
+            ast::Expression::Boolean(bool_lit) => {
+                // KOMPILASI BOOLEAN LANGSUNG KE i1
+                Ok(self.bool_type.const_int(bool_lit.value as u64, false).into())
             },
             ast::Expression::Identifier(ident) => {
                 if let Some(pointer) = self.variables.get(&ident.value) {
@@ -106,26 +131,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                     "==" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, left.into_int_value(), right.into_int_value(), "eqtmp")
                             .map_err(|e| e.to_string())?;
-                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "eqzext") // NAMA METHOD Y BENAR
-                            .map_err(|e| e.to_string())?.into())
+                        // JANGAN UBAH KE i64 LAGI. KEMBALIKAN LANGSUNG HASIL BOOLEAN (i1)
+                        Ok(cmp.into())
                     },
                     "!=" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, left.into_int_value(), right.into_int_value(), "netmp")
                             .map_err(|e| e.to_string())?;
-                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "nezext") // NAMA METHOD Y BENAR
-                            .map_err(|e| e.to_string())?.into())
+                        Ok(cmp.into())
                     },
                     "<" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, left.into_int_value(), right.into_int_value(), "lttmp")
                             .map_err(|e| e.to_string())?;
-                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "ltzext") // NAMA METHOD Y BENAR
-                            .map_err(|e| e.to_string())?.into())
+                        Ok(cmp.into())
                     },
                     ">" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, left.into_int_value(), right.into_int_value(), "gttmp")
                             .map_err(|e| e.to_string())?;
-                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "gtzext") // NAMA METHOD Y BENAR
-                            .map_err(|e| e.to_string())?.into())
+                        Ok(cmp.into())
                     },
                     _ => Err(format!("Unknown operator: {}", infix.operator)),
                 }
@@ -138,12 +160,22 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
         let condition_val = self.compile_expression(&if_expr.condition)?;
         
+        // Ensure condition is a boolean (i1)
+        let condition_bool = if condition_val.is_int_value() && condition_val.into_int_value().get_type() == self.i64_type {
+            // Convert i64 to i1 for condition
+            let zero = self.i64_type.const_int(0, false);
+            self.builder.build_int_compare(inkwell::IntPredicate::NE, condition_val.into_int_value(), zero, "bool_cond")
+                .map_err(|e| e.to_string())?
+        } else {
+            condition_val.into_int_value()
+        };
+        
         let function = self.builder.get_insert_block().expect("Error: Builder is not in a block!").get_parent().unwrap();
         let consequence_block = self.context.append_basic_block(function, "consequence");
         let alternative_block = self.context.append_basic_block(function, "alternative");
         let merge_block = self.context.append_basic_block(function, "merge");
 
-        self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block)
+        self.builder.build_conditional_branch(condition_bool, consequence_block, alternative_block)
             .map_err(|e| e.to_string())?;
 
         self.builder.position_at_end(consequence_block);
@@ -161,10 +193,39 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| e.to_string())?;
 
         self.builder.position_at_end(merge_block);
-        let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
+        
+        // Handle phi node with proper type inference
+        let consequence_type = consequence_val.get_type();
+        let alternative_type = alternative_val.get_type();
+        
+        let phi_type = if consequence_type == alternative_type {
+            consequence_type.into_int_type()
+        } else {
+            // Default to i64 if types differ
+            self.i64_type
+        };
+        
+        let phi_node = self.builder.build_phi(phi_type, "iftmp")
             .map_err(|e| e.to_string())?;
         
-        phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
+        // Convert values to phi type if needed
+        let consequence_for_phi = if consequence_val.get_type().into_int_type() != phi_type {
+            self.builder.build_int_z_extend(consequence_val.into_int_value(), phi_type, "conv_cons")
+                .map_err(|e| e.to_string())?
+                .into()
+        } else {
+            consequence_val
+        };
+        
+        let alternative_for_phi = if alternative_val.get_type().into_int_type() != phi_type {
+            self.builder.build_int_z_extend(alternative_val.into_int_value(), phi_type, "conv_alt")
+                .map_err(|e| e.to_string())?
+                .into()
+        } else {
+            alternative_val
+        };
+        
+        phi_node.add_incoming(&[(&consequence_for_phi, consequence_block), (&alternative_for_phi, alternative_block)]);
         
         Ok(phi_node.as_basic_value())
     }
@@ -202,7 +263,3 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 }
-
-
-
-
