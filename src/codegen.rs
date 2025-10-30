@@ -123,30 +123,32 @@ impl<'ctx> CodeGenerator<'ctx> {
     let merge_block = self.context.append_basic_block(function, "merge");
 
     // 3. Buat instruksi lompatan bersyarat
-    self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block);
+    self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block)
+        .map_err(|e| e.to_string())?; // TANGANI RESULT
 
     // 4. Kompilasi blok consequence
     self.builder.position_at_end(consequence_block);
     let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
-    self.builder.build_br(merge_block);
+    self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
+        .map_err(|e| e.to_string())?; // TANGANI RESULT
 
     // 5. Kompilasi blok alternative
     self.builder.position_at_end(alternative_block);
     let alternative_val = if let Some(alt_block) = &if_expr.alternative {
         self.compile_block_statement(alt_block)?
     } else {
-        // Jika tidak ada else, gunakan nilai default (0)
         self.i64_type.const_int(0, false).into()
     };
-    self.builder.build_br(merge_block);
+    self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
+        .map_err(|e| e.to_string())?; // TANGANI RESULT
 
     // 6. Kompilasi blok merge dengan PHI node
     self.builder.position_at_end(merge_block);
-    let phi_node = self.builder.build_phi(self.i64_type, "iftmp");
+    let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
+        .map_err(|e| e.to_string())?; // TANGANI RESULT
     
     phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
     
-    // BARI INI ADALAH BARIS YANG BENAR:
     Ok(phi_node.as_basic_value())
 }
     
@@ -185,4 +187,5 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
 }
+
 
