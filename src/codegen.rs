@@ -113,45 +113,42 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     // Fungsi baru untuk kompilasi if expression
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
-        // 1. Kompilasi kondisi
-        let condition_val = self.compile_expression(&if_expr.condition)?;
-        
-        // 2. Buat blok-blok yang dibutuhkan
-        let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-        let consequence_block = self.context.append_basic_block(function, "consequence");
-        let alternative_block = self.context.append_basic_block(function, "alternative");
-        let merge_block = self.context.append_basic_block(function, "merge");
+    // 1. Kompilasi kondisi
+    let condition_val = self.compile_expression(&if_expr.condition)?;
+    
+    // 2. Buat blok-blok yang dibutuhkan
+    let function = self.builder.get_insert_block().get_parent().unwrap();
+    let consequence_block = self.context.append_basic_block(function, "consequence");
+    let alternative_block = self.context.append_basic_block(function, "alternative");
+    let merge_block = self.context.append_basic_block(function, "merge");
 
-        // 3. Buat instruksi lompatan bersyarat
-        self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block);
+    // 3. Buat instruksi lompatan bersyarat
+    self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block);
 
-        // 4. Kompilasi blok consequence
-        self.builder.position_at_end(consequence_block);
-        let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
-        self.builder.build_unconditional_branch(merge_block);
+    // 4. Kompilasi blok consequence
+    self.builder.position_at_end(consequence_block);
+    let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
+    self.builder.build_br(merge_block);
 
-        // 5. Kompilasi blok alternative
-        self.builder.position_at_end(alternative_block);
-        let alternative_val = if let Some(alt_block) = &if_expr.alternative {
-            self.compile_block_statement(alt_block)?
-        } else {
-            // Jika tidak ada else, gunakan nilai default (0)
-            self.i64_type.const_int(0, false).into()
-        };
-        self.builder.build_unconditional_branch(merge_block);
+    // 5. Kompilasi blok alternative
+    self.builder.position_at_end(alternative_block);
+    let alternative_val = if let Some(alt_block) = &if_expr.alternative {
+        self.compile_block_statement(alt_block)?
+    } else {
+        // Jika tidak ada else, gunakan nilai default (0)
+        self.i64_type.const_int(0, false).into()
+    };
+    self.builder.build_br(merge_block);
 
-        // 6. Kompilasi blok merge dengan PHI node
-        self.builder.position_at_end(merge_block);
-        let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
-            .map_err(|e| e.to_string())?;
-        
-        phi_node.add_incoming(&[
-            (&consequence_val, self.context.append_basic_block(function, "consequence")),
-            (&alternative_val, self.context.append_basic_block(function, "alternative")),
-        ]);
-        
-        Ok(phi_node.as_basic_value_enum())
-    }
+    // 6. Kompilasi blok merge dengan PHI node
+    self.builder.position_at_end(merge_block);
+    let phi_node = self.builder.build_phi(self.i64_type, "iftmp");
+    
+    phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
+    
+    // BARI INI ADALAH BARIS YANG BENAR:
+    Ok(phi_node.as_basic_value())
+}
     
     // Fungsi baru untuk kompilasi block statement
     fn compile_block_statement(&mut self, block: &ast::BlockStatement) -> Result<BasicValueEnum<'ctx>, String> {
@@ -186,4 +183,5 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(compiled_fn())
         }
     }
+
 }
