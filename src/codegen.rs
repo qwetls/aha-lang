@@ -95,6 +95,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let right = self.compile_expression(&infix.right)?;
                 
                 match infix.operator.as_str() {
+                    // --- Operator Aritmatika ---
                     "+" => Ok(self.builder.build_int_add(left.into_int_value(), right.into_int_value(), "addtmp")
                         .map_err(|e| e.to_string())?.into()),
                     "-" => Ok(self.builder.build_int_sub(left.into_int_value(), right.into_int_value(), "subtmp")
@@ -103,6 +104,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .map_err(|e| e.to_string())?.into()),
                     "/" => Ok(self.builder.build_int_signed_div(left.into_int_value(), right.into_int_value(), "divtmp")
                         .map_err(|e| e.to_string())?.into()),
+                    
+                    // --- Operator Perbandingan ---
+                    "==" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, left.into_int_value(), right.into_int_value(), "eqtmp")
+                            .map_err(|e| e.to_string())?;
+                        // Ubah hasil boolean (i1) menjadi integer (i64) agar konsisten
+                        Ok(self.builder.build_int_zext(cmp, self.i64_type, "eqzext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    "!=" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, left.into_int_value(), right.into_int_value(), "netmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_zext(cmp, self.i64_type, "nezext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    "<" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, left.into_int_value(), right.into_int_value(), "lttmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_zext(cmp, self.i64_type, "ltzext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    ">" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, left.into_int_value(), right.into_int_value(), "gttmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_zext(cmp, self.i64_type, "gtzext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    
                     _ => Err(format!("Unknown operator: {}", infix.operator)),
                 }
             },
@@ -113,44 +142,44 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     // Fungsi baru untuk kompilasi if expression
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
-    // 1. Kompilasi kondisi
-    let condition_val = self.compile_expression(&if_expr.condition)?;
-    
-    // 2. Buat blok-blok yang dibutuhkan
-    let function = self.builder.get_insert_block().expect("Error: Builder is not in a block!").get_parent().unwrap();
-    let consequence_block = self.context.append_basic_block(function, "consequence");
-    let alternative_block = self.context.append_basic_block(function, "alternative");
-    let merge_block = self.context.append_basic_block(function, "merge");
+        // 1. Kompilasi kondisi
+        let condition_val = self.compile_expression(&if_expr.condition)?;
+        
+        // 2. Buat blok-blok yang dibutuhkan
+        let function = self.builder.get_insert_block().expect("Error: Builder is not in a block!").get_parent().unwrap();
+        let consequence_block = self.context.append_basic_block(function, "consequence");
+        let alternative_block = self.context.append_basic_block(function, "alternative");
+        let merge_block = self.context.append_basic_block(function, "merge");
 
-    // 3. Buat instruksi lompatan bersyarat
-    self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block)
-        .map_err(|e| e.to_string())?; // TANGANI RESULT
+        // 3. Buat instruksi lompatan bersyarat
+        self.builder.build_conditional_branch(condition_val.into_int_value(), consequence_block, alternative_block)
+            .map_err(|e| e.to_string())?; // TANGANI RESULT
 
-    // 4. Kompilasi blok consequence
-    self.builder.position_at_end(consequence_block);
-    let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
-    self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
-        .map_err(|e| e.to_string())?; // TANGANI RESULT
+        // 4. Kompilasi blok consequence
+        self.builder.position_at_end(consequence_block);
+        let consequence_val = self.compile_block_statement(&if_expr.consequence)?;
+        self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
+            .map_err(|e| e.to_string())?; // TANGANI RESULT
 
-    // 5. Kompilasi blok alternative
-    self.builder.position_at_end(alternative_block);
-    let alternative_val = if let Some(alt_block) = &if_expr.alternative {
-        self.compile_block_statement(alt_block)?
-    } else {
-        self.i64_type.const_int(0, false).into()
-    };
-    self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
-        .map_err(|e| e.to_string())?; // TANGANI RESULT
+        // 5. Kompilasi blok alternative
+        self.builder.position_at_end(alternative_block);
+        let alternative_val = if let Some(alt_block) = &if_expr.alternative {
+            self.compile_block_statement(alt_block)?
+        } else {
+            self.i64_type.const_int(0, false).into()
+        };
+        self.builder.build_unconditional_branch(merge_block) // GANTI DARI build_br
+            .map_err(|e| e.to_string())?; // TANGANI RESULT
 
-    // 6. Kompilasi blok merge dengan PHI node
-    self.builder.position_at_end(merge_block);
-    let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
-        .map_err(|e| e.to_string())?; // TANGANI RESULT
-    
-    phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
-    
-    Ok(phi_node.as_basic_value())
-}
+        // 6. Kompilasi blok merge dengan PHI node
+        self.builder.position_at_end(merge_block);
+        let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
+            .map_err(|e| e.to_string())?; // TANGANI RESULT
+        
+        phi_node.add_incoming(&[(&consequence_val, consequence_block), (&alternative_val, alternative_block)]);
+        
+        Ok(phi_node.as_basic_value())
+    }
     
     // Fungsi baru untuk kompilasi block statement
     fn compile_block_statement(&mut self, block: &ast::BlockStatement) -> Result<BasicValueEnum<'ctx>, String> {
@@ -185,7 +214,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(compiled_fn())
         }
     }
-
 }
+}
+
 
 
