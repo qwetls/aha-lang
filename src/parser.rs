@@ -187,14 +187,9 @@ impl Parser {
     fn parse_function_literal(&mut self) -> Expression {
         self.next_token(); // Lewati 'fn'
 
-        // Parse nama fungsi
-        if !self.expect_peek(TokenType::Identifier) {
-            return self.error("expected function name");
-        }
-        let name = Identifier { value: self.current_token.literal.clone() };
-
+        // Parse parameter
         if !self.expect_peek(TokenType::LeftParen) {
-            return self.error("expected '(' after function name");
+            return self.error("expected '(' after 'fn'");
         }
 
         // Parse parameter
@@ -221,7 +216,6 @@ impl Parser {
         let body = self.parse_block_statement();
 
         Expression::Function(FunctionLiteral {
-            name,
             parameters,
             body,
         })

@@ -160,7 +160,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     // Fungsi baru untuk kompilasi definisi fungsi
-    fn compile_function_literal(&mut self, fn_lit: &ast::FunctionLiteral) -> Result<BasicValueEnum<'ctx>, String> {
+    fn compile_function_literal(&mut self, _fn_lit: &ast::FunctionLiteral) -> Result<BasicValueEnum<'ctx>, String> {
         // TODO: Implementasi pembuatan fungsi LLVM
         // Ini adalah bagian yang paling kompleks. Untuk saat ini, kita kembalikan error
         // agar kita bisa fokus pada pemanggilan fungsi terlebih dahulu.
@@ -185,7 +185,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             
             // Buat pemanggilan fungsi
-            let call_site_value = self.builder.build_call(function, &args, "calltmp")
+            let call_site_value = self.builder.build_call(function, &args.iter().collect::<Vec<_>>(), "calltmp")
                 .map_err(|e| e.to_string())?
                 .try_as_basic_value()
                 .left()
