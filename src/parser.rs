@@ -2,7 +2,7 @@
 
 use crate::Lexer;
 use crate::ast;
-use crate::ast::{Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement, BlockStatement};
+use crate::ast::{Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement, BlockStatement, FunctionLiteral, CallExpression};
 use crate::ast::Token;
 use crate::ast::TokenType;
 
@@ -134,17 +134,21 @@ impl Parser {
         let mut left = self.parse_prefix();
 
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
-            self.next_token(); // Ambil operator
-            let operator = self.current_token.literal.clone();
-            let right_precedence = self.current_precedence();
-            self.next_token(); // Pindah ke ekspresi di sebelah kanan
-            let right = Box::new(self.parse_expression(right_precedence));
+            if self.peek_token_is(TokenType::LeftParen) {
+                left = self.parse_call_expression(left);
+            } else {
+                self.next_token(); // Ambil operator
+                let operator = self.current_token.literal.clone();
+                let right_precedence = self.current_precedence();
+                self.next_token(); // Pindah ke ekspresi di sebelah kanan
+                let right = Box::new(self.parse_expression(right_precedence));
 
-            left = Expression::Infix(InfixExpression {
-                left: Box::new(left),
-                operator,
-                right,
-            });
+                left = Expression::Infix(InfixExpression {
+                    left: Box::new(left),
+                    operator,
+                    right,
+                });
+            }
         }
 
         left
@@ -167,30 +171,78 @@ impl Parser {
                 self.next_token();
                 let exp = self.parse_expression(Precedence::Lowest);
                 if !self.expect_peek(TokenType::RightParen) {
-                    return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
+                    return self.error("expected ')'");
                 }
                 exp
             }
-            TokenType::Fn => self.parse_function_literal(), // TAMBAHKAN INI
+            TokenType::Fn => self.parse_function_literal(),
             _ => {
                 self.no_prefix_parse_fn_error(self.current_token.r#type.clone());
-                Expression::Identifier(Identifier{ value: "ERROR".to_string() })
+                self.error("no prefix parse function")
             }
         }
     }
 
     // Fungsi baru untuk parsing definisi fungsi
     fn parse_function_literal(&mut self) -> Expression {
-        // ... logika parsing `fn nama(p1, p2) -> Tipe { ... }` ...
-        // UNTUK SEKARANG KITA RETURN EXPRESSION ERROR DULU
-        Expression::Identifier(Identifier{ value: "FUNCTION_NOT_IMPLEMENTED".to_string() })
+        self.next_token(); // Lewati 'fn'
+
+        // Parse nama fungsi
+        if !self.expect_peek(TokenType::Identifier) {
+            return self.error("expected function name");
+        }
+        let name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftParen) {
+            return self.error("expected '(' after function name");
+        }
+
+        // Parse parameter
+        let mut parameters = Vec::new();
+        self.next_token(); // Lewati '('
+        while !self.peek_token_is(TokenType::RightParen) {
+            if !self.current_token_is(TokenType::Identifier) {
+                return self.error("expected parameter name");
+            }
+            parameters.push(Identifier { value: self.current_token.literal.clone() });
+            self.next_token();
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // Lewati ','
+            }
+        }
+        self.next_token(); // Lewati ')'
+
+        // TODO: Parse return type di sini untuk masa depan
+        // if self.peek_token_is(TokenType::Arrow) { ... }
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return self.error("expected '{' before function body");
+        }
+        let body = self.parse_block_statement();
+
+        Expression::Function(FunctionLiteral {
+            name,
+            parameters,
+            body,
+        })
     }
 
     // Fungsi baru untuk parsing pemanggilan fungsi
     fn parse_call_expression(&mut self, function: Expression) -> Expression {
-        // ... logika parsing `nama(arg1, arg2)` ...
-        // UNTUK SEKARANG KITA RETURN EXPRESSION ERROR DULU  
-        Expression::Identifier(Identifier{ value: "CALL_NOT_IMPLEMENTED".to_string() })
+        self.next_token(); // Lewati '('
+        let mut arguments = Vec::new();
+        while !self.peek_token_is(TokenType::RightParen) {
+            arguments.push(self.parse_expression(Precedence::Lowest));
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // Lewati ','
+            }
+        }
+        self.next_token(); // Lewati ')'
+        
+        Expression::Call(CallExpression {
+            function: Box::new(function),
+            arguments,
+        })
     }
 
     // Fungsi baru untuk parsing if expression
@@ -201,7 +253,7 @@ impl Parser {
         let condition = self.parse_expression(Precedence::Lowest);
 
         if !self.expect_peek(TokenType::LeftBrace) {
-            return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
+            return self.error("expected '{'");
         }
 
         // Parse blok consequence
@@ -220,7 +272,7 @@ impl Parser {
                 // Parse blok else
                 Some(self.parse_block_statement())
             } else {
-                return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
+                return self.error("expected '{' or 'if' after 'else'");
             }
         } else {
             None
@@ -247,6 +299,12 @@ impl Parser {
         }
         
         BlockStatement { statements }
+    }
+
+    // Helper function untuk error
+    fn error(&mut self, message: &str) -> Expression {
+        self.errors.push(message.to_string());
+        Expression::Identifier(Identifier{ value: "ERROR".to_string() })
     }
 
     // --- Presedence Helper ---

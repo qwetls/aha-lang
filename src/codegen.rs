@@ -153,24 +153,48 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             },
             ast::Expression::If(if_expr) => self.compile_if_expression(if_expr),
-            ast::Expression::Function(fn_lit) => self.compile_function_literal(fn_lit), // TAMBAHKAN INI
-            ast::Expression::Call(call_expr) => self.compile_call_expression(call_expr), // TAMBAHKAN INI
+            ast::Expression::Function(fn_lit) => self.compile_function_literal(fn_lit),
+            ast::Expression::Call(call_expr) => self.compile_call_expression(call_expr),
             _ => Err("Expression type not yet implemented".to_string()),
         }
     }
 
     // Fungsi baru untuk kompilasi definisi fungsi
     fn compile_function_literal(&mut self, fn_lit: &ast::FunctionLiteral) -> Result<BasicValueEnum<'ctx>, String> {
-        // ... logika membuat fungsi LLVM ...
-        // UNTUK SEKARANG KITA RETURN ERROR DULU
-        Err("Function literal compilation not yet implemented".to_string())
+        // TODO: Implementasi pembuatan fungsi LLVM
+        // Ini adalah bagian yang paling kompleks. Untuk saat ini, kita kembalikan error
+        // agar kita bisa fokus pada pemanggilan fungsi terlebih dahulu.
+        Err("Function literals as values (closures) are not yet implemented".to_string())
     }
 
     // Fungsi baru untuk kompilasi pemanggilan fungsi
     fn compile_call_expression(&mut self, call_expr: &ast::CallExpression) -> Result<BasicValueEnum<'ctx>, String> {
-        // ... logika membuat call instruction LLVM ...
-        // UNTUK SEKARANG KITA RETURN ERROR DULU
-        Err("Call expression compilation not yet implemented".to_string())
+        // Compile ekspresi fungsi untuk mendapatkan nama atau nilai fungsi
+        let function_value = self.compile_expression(&call_expr.function)?;
+        
+        // Untuk saat ini, kita asumsikan fungsi adalah identifier global
+        if let ast::Expression::Identifier(ident) = &*call_expr.function {
+            let function_name = &ident.value;
+            let function = self.module.get_function(function_name)
+                .ok_or_else(|| format!("Function '{}' not found", function_name))?;
+
+            // Compile argumen
+            let mut args = Vec::new();
+            for arg in &call_expr.arguments {
+                args.push(self.compile_expression(arg)?);
+            }
+            
+            // Buat pemanggilan fungsi
+            let call_site_value = self.builder.build_call(function, &args, "calltmp")
+                .map_err(|e| e.to_string())?
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| "Failed to get return value from function call")?;
+            
+            Ok(call_site_value)
+        } else {
+            Err("Calling non-identifier functions is not yet supported".to_string())
+        }
     }
 
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
