@@ -153,8 +153,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             },
             ast::Expression::If(if_expr) => self.compile_if_expression(if_expr),
+            ast::Expression::Function(fn_lit) => self.compile_function_literal(fn_lit), // TAMBAHKAN INI
+            ast::Expression::Call(call_expr) => self.compile_call_expression(call_expr), // TAMBAHKAN INI
             _ => Err("Expression type not yet implemented".to_string()),
         }
+    }
+
+    // Fungsi baru untuk kompilasi definisi fungsi
+    fn compile_function_literal(&mut self, fn_lit: &ast::FunctionLiteral) -> Result<BasicValueEnum<'ctx>, String> {
+        // ... logika membuat fungsi LLVM ...
+        // UNTUK SEKARANG KITA RETURN ERROR DULU
+        Err("Function literal compilation not yet implemented".to_string())
+    }
+
+    // Fungsi baru untuk kompilasi pemanggilan fungsi
+    fn compile_call_expression(&mut self, call_expr: &ast::CallExpression) -> Result<BasicValueEnum<'ctx>, String> {
+        // ... logika membuat call instruction LLVM ...
+        // UNTUK SEKARANG KITA RETURN ERROR DULU
+        Err("Call expression compilation not yet implemented".to_string())
     }
 
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {

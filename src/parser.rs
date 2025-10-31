@@ -171,11 +171,26 @@ impl Parser {
                 }
                 exp
             }
+            TokenType::Fn => self.parse_function_literal(), // TAMBAHKAN INI
             _ => {
                 self.no_prefix_parse_fn_error(self.current_token.r#type.clone());
                 Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
         }
+    }
+
+    // Fungsi baru untuk parsing definisi fungsi
+    fn parse_function_literal(&mut self) -> Expression {
+        // ... logika parsing `fn nama(p1, p2) -> Tipe { ... }` ...
+        // UNTUK SEKARANG KITA RETURN EXPRESSION ERROR DULU
+        Expression::Identifier(Identifier{ value: "FUNCTION_NOT_IMPLEMENTED".to_string() })
+    }
+
+    // Fungsi baru untuk parsing pemanggilan fungsi
+    fn parse_call_expression(&mut self, function: Expression) -> Expression {
+        // ... logika parsing `nama(arg1, arg2)` ...
+        // UNTUK SEKARANG KITA RETURN EXPRESSION ERROR DULU  
+        Expression::Identifier(Identifier{ value: "CALL_NOT_IMPLEMENTED".to_string() })
     }
 
     // Fungsi baru untuk parsing if expression
