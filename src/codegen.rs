@@ -179,17 +179,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .ok_or_else(|| format!("Function '{}' not found", function_name))?;
 
             // Compile argumen
-            let mut args = Vec::new();
-            for arg in &call_expr.arguments {
-                args.push(self.compile_expression(arg)?);
-            }
-            
-            // Buat pemanggilan fungsi
-            let call_site_value = self.builder.build_call(function, &args.iter().collect::<Vec<_>>(), "calltmp")
-                .map_err(|e| e.to_string())?
-                .try_as_basic_value()
-                .left()
-                .ok_or_else(|| "Failed to get return value from function call")?;
+            let mut compiled_args = Vec::new();
+                for arg in &call_expr.arguments {
+                compiled_args.push(self.compile_expression(arg)?.into());
+}
+
+            let call_site_value = self.builder.build_call(function, &compiled_args, "calltmp")
+             .map_err(|e| e.to_string())?
+             .try_as_basic_value()
+             .left()
+             .ok_or_else(|| "Failed to get return value from function call")?;
             
             Ok(call_site_value)
         } else {
