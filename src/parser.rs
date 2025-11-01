@@ -10,10 +10,9 @@ pub struct Parser {
     lexer: Lexer,
     current_token: Token,
     peek_token: Token,
-    pub errors: Vec<String>, // PASTIKAN INI PUBLIK
+    pub errors: Vec<String>,
 }
 
-// Definisi presedensi operator
 #[derive(Debug, PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
@@ -38,7 +37,6 @@ impl Parser {
         }
     }
 
-    // Fungsi utama untuk mem-parse seluruh program
     pub fn parse_program(&mut self) -> Program {
         let mut program = Program { statements: Vec::new() };
 
@@ -81,6 +79,12 @@ impl Parser {
         match self.current_token.r#type.clone() {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
+            TokenType::Fn => {
+                // Untuk saat ini, kita abaikan definisi fungsi.
+                // Kita akan mem-parse-nya untuk mencegah error, tapi tidak menyimpannya.
+                self.parse_function_literal();
+                None
+            },
             _ => self.parse_expression_statement(),
         }
     }
@@ -129,42 +133,40 @@ impl Parser {
         Some(Statement::Expression(ExpressionStatement { expression }))
     }
 
-    // --- Parsing Expressions (Versi Diperbaiki) ---
+    // --- Parsing Expressions ---
     pub fn parse_expression(&mut self, precedence: Precedence) -> Expression {
-        println!("-> parse_expression called with precedence: {:?}", precedence);
         let mut left = self.parse_prefix();
-        println!("-> parse_prefix returned: {:?}", left);
 
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
-            println!("-> Looping in parse_expression. Current token: {:?}", self.current_token);
             if self.peek_token_is(TokenType::LeftParen) {
-                println!("-> Detected a call expression.");
                 left = self.parse_call_expression(left);
             } else {
-                self.next_token(); // Ambil operator
+                self.next_token(); // Pindah ke operator
                 let operator = self.current_token.literal.clone();
                 let right_precedence = self.current_precedence();
                 self.next_token(); // Pindah ke ekspresi di sebelah kanan
                 let right = Box::new(self.parse_expression(right_precedence));
-
-                left = Expression::Infix(InfixExpression {
-                    left: Box::new(left),
-                    operator,
-                    right,
-                });
+                left = Expression::Infix(InfixExpression { left: Box::new(left), operator, right });
             }
         }
-
         left
     }
     
     fn parse_prefix(&mut self) -> Expression {
         match self.current_token.r#type.clone() {
-            TokenType::Identifier => Expression::Identifier(Identifier { value: self.current_token.literal.clone() }),
+            TokenType::Identifier => {
+                let ident = Expression::Identifier(Identifier { value: self.current_token.literal.clone() });
+                
+                // Cek apakah ini adalah pemanggilan fungsi
+                if self.peek_token_is(TokenType::LeftParen) {
+                    self.parse_call_expression(ident)
+                } else {
+                    ident
+                }
+            },
             TokenType::Integer => Expression::Integer(IntegerLiteral { value: self.current_token.literal.parse().unwrap() }),
             TokenType::True => Expression::Boolean(BooleanLiteral { value: true }),
             TokenType::False => Expression::Boolean(BooleanLiteral { value: false }),
-            TokenType::If => self.parse_if_expression(),
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
@@ -175,28 +177,29 @@ impl Parser {
                 self.next_token();
                 let exp = self.parse_expression(Precedence::Lowest);
                 if !self.expect_peek(TokenType::RightParen) {
-                    return self.error("expected ')'");
+                    return Expression::Identifier(Identifier{ value: "ERROR".to_string() });
                 }
                 exp
             }
-            TokenType::Fn => self.parse_function_literal(),
             _ => {
                 self.no_prefix_parse_fn_error(self.current_token.r#type.clone());
-                self.error("no prefix parse function")
+                Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
         }
     }
 
-    // Fungsi baru untuk parsing definisi fungsi
     fn parse_function_literal(&mut self) -> Expression {
         self.next_token(); // Lewati 'fn'
 
-        // Parse parameter
+        if !self.current_token_is(TokenType::Identifier) {
+            return self.error("expected function name");
+        }
+        self.next_token(); // Lewati nama fungsi
+
         if !self.expect_peek(TokenType::LeftParen) {
-            return self.error("expected '(' after 'fn'");
+            return self.error("expected '(' after function name");
         }
 
-        // Parse parameter
         let mut parameters = Vec::new();
         self.next_token(); // Lewati '('
         while !self.peek_token_is(TokenType::RightParen) {
@@ -211,9 +214,6 @@ impl Parser {
         }
         self.next_token(); // Lewati ')'
 
-        // TODO: Parse return type di sini untuk masa depan
-        // if self.peek_token_is(TokenType::Arrow) { ... }
-
         if !self.expect_peek(TokenType::LeftBrace) {
             return self.error("expected '{' before function body");
         }
@@ -225,17 +225,17 @@ impl Parser {
         })
     }
 
-    // Fungsi baru untuk parsing pemanggilan fungsi
     fn parse_call_expression(&mut self, function: Expression) -> Expression {
-        println!("-> parse_call_expression called for: {:?}", function);
         self.next_token(); // Lewati '('
         let mut arguments = Vec::new();
+        
         while !self.peek_token_is(TokenType::RightParen) {
             arguments.push(self.parse_expression(Precedence::Lowest));
             if self.peek_token_is(TokenType::Comma) {
                 self.next_token(); // Lewati ','
             }
         }
+        
         self.next_token(); // Lewati ')'
         
         Expression::Call(CallExpression {
@@ -244,47 +244,6 @@ impl Parser {
         })
     }
 
-    // Fungsi baru untuk parsing if expression
-    fn parse_if_expression(&mut self) -> Expression {
-        self.next_token(); // Lewati 'if'
-
-        // Parse kondisi
-        let condition = self.parse_expression(Precedence::Lowest);
-
-        if !self.expect_peek(TokenType::LeftBrace) {
-            return self.error("expected '{'");
-        }
-
-        // Parse blok consequence
-        let consequence = self.parse_block_statement();
-
-        // Cek apakah ada 'else'
-        let alternative = if self.peek_token_is(TokenType::Else) {
-            self.next_token(); // Lewati 'else'
-            
-            // Cek apakah 'else' diikuti oleh 'if' (untuk if-else if)
-            if self.peek_token_is(TokenType::If) {
-                self.next_token(); // Lewati 'if'
-                // Rekursif untuk if-else if
-                Some(BlockStatement { statements: vec![Statement::Expression(ExpressionStatement{ expression: self.parse_if_expression() })] })
-            } else if self.expect_peek(TokenType::LeftBrace) {
-                // Parse blok else
-                Some(self.parse_block_statement())
-            } else {
-                return self.error("expected '{' or 'if' after 'else'");
-            }
-        } else {
-            None
-        };
-
-        Expression::If(ast::IfExpression {
-            condition: Box::new(condition),
-            consequence,
-            alternative,
-        })
-    }
-
-    // Fungsi baru untuk parsing blok statement { ... }
     fn parse_block_statement(&mut self) -> BlockStatement {
         self.next_token(); // Lewati '{'
 
@@ -299,13 +258,7 @@ impl Parser {
         
         BlockStatement { statements }
     }
-
-    // Helper function untuk error
-    fn error(&mut self, message: &str) -> Expression {
-        self.errors.push(message.to_string());
-        Expression::Identifier(Identifier{ value: "ERROR".to_string() })
-    }
-
+    
     // --- Presedence Helper ---
     fn peek_precedence(&self) -> Precedence {
         self.precedence(&self.peek_token.r#type)
@@ -339,5 +292,10 @@ impl Parser {
     fn no_prefix_parse_fn_error(&mut self, t: TokenType) {
         let msg = format!("no prefix parse function for {:?} found", t);
         self.errors.push(msg);
+    }
+
+    fn error(&self, msg: &str) -> Expression {
+        self.errors.push(msg.to_string());
+        Expression::Identifier(Identifier{ value: "ERROR".to_string() })
     }
 }
