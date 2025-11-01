@@ -131,10 +131,14 @@ impl Parser {
 
     // --- Parsing Expressions (Versi Diperbaiki) ---
     pub fn parse_expression(&mut self, precedence: Precedence) -> Expression {
+        println!("-> parse_expression called with precedence: {:?}", precedence);
         let mut left = self.parse_prefix();
+        println!("-> parse_prefix returned: {:?}", left);
 
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
+            println!("-> Looping in parse_expression. Current token: {:?}", self.current_token);
             if self.peek_token_is(TokenType::LeftParen) {
+                println!("-> Detected a call expression.");
                 left = self.parse_call_expression(left);
             } else {
                 self.next_token(); // Ambil operator
@@ -223,6 +227,7 @@ impl Parser {
 
     // Fungsi baru untuk parsing pemanggilan fungsi
     fn parse_call_expression(&mut self, function: Expression) -> Expression {
+        println!("-> parse_call_expression called for: {:?}", function);
         self.next_token(); // Lewati '('
         let mut arguments = Vec::new();
         while !self.peek_token_is(TokenType::RightParen) {
