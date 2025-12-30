@@ -80,11 +80,16 @@ impl Lexer {
         match ident {
             "fn" => TokenType::Fn,
             "let" => TokenType::Let,
-            "true" => TokenType::True, // Akan kita tambahkan di ast.rs
-            "false" => TokenType::False, // Akan kita tambahkan di ast.rs
-            "if" => TokenType::If, // Akan kita tambahkan di ast.rs
-            "else" => TokenType::Else, // Akan kita tambahkan di ast.rs
-            "return" => TokenType::Return, // Akan kita tambahkan di ast.rs
+            "true" => TokenType::True,
+            "false" => TokenType::False,
+            "if" => TokenType::If,
+            "else" => TokenType::Else,
+            "return" => TokenType::Return,
+            "while" => TokenType::While,
+            "for" => TokenType::For,
+            "in" => TokenType::In,
+            "break" => TokenType::Break,
+            "continue" => TokenType::Continue,
             _ => TokenType::Identifier,
         }
     }
@@ -120,15 +125,50 @@ impl Lexer {
             '+' => tok = Token::new(TokenType::Plus, self.ch.to_string(), line, column),
             '-' => tok = Token::new(TokenType::Minus, self.ch.to_string(), line, column),
             '*' => tok = Token::new(TokenType::Asterisk, self.ch.to_string(), line, column),
-            '/' => tok = Token::new(TokenType::Slash, self.ch.to_string(), line, column),
-            '<' => tok = Token::new(TokenType::LT, self.ch.to_string(), line, column),
-            '>' => tok = Token::new(TokenType::GT, self.ch.to_string(), line, column),
+            '/' => {
+                if self.peek_char() == '/' {
+                    // Skip line comments
+                    while self.ch != '\n' && self.ch != '\0' {
+                        self.read_char();
+                    }
+                    return self.next_token();
+                } else {
+                    tok = Token::new(TokenType::Slash, self.ch.to_string(), line, column);
+                }
+            }
+            '<' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    tok = Token::new(TokenType::LtEq, "<=".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::LT, self.ch.to_string(), line, column);
+                }
+            }
+            '>' => {
+                if self.peek_char() == '=' {
+                    self.read_char();
+                    tok = Token::new(TokenType::GtEq, ">=".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::GT, self.ch.to_string(), line, column);
+                }
+            }
+            '.' => {
+                if self.peek_char() == '.' {
+                    self.read_char();
+                    tok = Token::new(TokenType::DotDot, "..".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::Illegal, self.ch.to_string(), line, column);
+                }
+            }
             ',' => tok = Token::new(TokenType::Comma, self.ch.to_string(), line, column),
             ';' => tok = Token::new(TokenType::Semicolon, self.ch.to_string(), line, column),
+            ':' => tok = Token::new(TokenType::Colon, self.ch.to_string(), line, column),
             '(' => tok = Token::new(TokenType::LeftParen, self.ch.to_string(), line, column),
             ')' => tok = Token::new(TokenType::RightParen, self.ch.to_string(), line, column),
             '{' => tok = Token::new(TokenType::LeftBrace, self.ch.to_string(), line, column),
             '}' => tok = Token::new(TokenType::RightBrace, self.ch.to_string(), line, column),
+            '[' => tok = Token::new(TokenType::LeftBracket, self.ch.to_string(), line, column),
+            ']' => tok = Token::new(TokenType::RightBracket, self.ch.to_string(), line, column),
             '\0' => tok = Token::new(TokenType::Eof, "".to_string(), line, column),
             _ => {
                 if self.ch.is_alphabetic() {
