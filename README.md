@@ -124,12 +124,17 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] Tipe data Integer
     - [x] Ekspresi Aritmatika & Perbandingan
     - [x] Pernyataan Kondisional `if/else`
-- [ ] **Milestone 2: Fitur Fundamental**
-    - [ ] Tipe data `Boolean`
-    - [ ] Fungsi dan Cakupan (Scope)
-    - [ ] Pernyataan Perulangan (`while`, `for`)
+- [x] **Milestone 2: Fitur Fundamental** *(In Progress)*
+    - [x] Tipe data `Boolean` (codegen)
+    - [x] Operator `<=`, `>=`
+    - [x] Pernyataan Perulangan `while` ✅
+    - [x] Pernyataan Perulangan `for` (parser) 
+    - [ ] Fungsi dengan parameter
+    - [ ] Statement `return`
 - [ ] **Milestone 3: Struktur Data Tingkat Lanjut**
-    - [ ] Array dan String
+    - [x] Array (parser)
+    - [ ] Array (codegen)
+    - [ ] String
     - [ ] Struct
 - [ ] **Milestone 4: Pustaka Standar**
     - [ ] Modul I/O File
@@ -137,8 +142,8 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [ ] Modul Web (HTTP Server)
 - [ ] **Milestone 5: Tooling & Ekosistem**
     - [ ] AHA! Language Server (untuk VS Code, dll.)
-    - [   ] Package Manager
-    - [   ] Dokumentasi Interaktif
+    - [ ] Package Manager
+    - [ ] Dokumentasi Interaktif
 
 ---
 
