@@ -2,7 +2,11 @@
 
 use crate::Lexer;
 use crate::ast;
-use crate::ast::{Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement, BlockStatement};
+use crate::ast::{
+    Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral,
+    PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement,
+    BlockStatement, WhileExpression, ForExpression, RangeExpression, ArrayLiteral, IndexExpression
+};
 use crate::ast::Token;
 use crate::ast::TokenType;
 
@@ -157,6 +161,9 @@ impl Parser {
             TokenType::True => Expression::Boolean(BooleanLiteral { value: true }),
             TokenType::False => Expression::Boolean(BooleanLiteral { value: false }),
             TokenType::If => self.parse_if_expression(),
+            TokenType::While => self.parse_while_expression(),
+            TokenType::For => self.parse_for_expression(),
+            TokenType::LeftBracket => self.parse_array_literal(),
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();
                 self.next_token();
@@ -176,6 +183,84 @@ impl Parser {
                 Expression::Identifier(Identifier{ value: "ERROR".to_string() })
             }
         }
+    }
+
+    // NEW: Parse while expression
+    fn parse_while_expression(&mut self) -> Expression {
+        self.next_token(); // Skip 'while'
+        
+        // Parse condition
+        let condition = self.parse_expression(Precedence::Lowest);
+        
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+        }
+        
+        let body = self.parse_block_statement();
+        
+        Expression::While(WhileExpression {
+            condition: Box::new(condition),
+            body,
+        })
+    }
+
+    // NEW: Parse for expression
+    fn parse_for_expression(&mut self) -> Expression {
+        self.next_token(); // Skip 'for'
+        
+        // Parse loop variable
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected identifier in for loop".to_string());
+            return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+        }
+        let variable = Identifier { value: self.current_token.literal.clone() };
+        
+        // Expect 'in' keyword
+        if !self.expect_peek(TokenType::In) {
+            return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+        }
+        
+        self.next_token(); // Skip 'in'
+        
+        // Parse iterable (could be a range like 0..10)
+        let iterable = self.parse_expression(Precedence::Lowest);
+        
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+        }
+        
+        let body = self.parse_block_statement();
+        
+        Expression::For(ForExpression {
+            variable,
+            iterable: Box::new(iterable),
+            body,
+        })
+    }
+
+    // NEW: Parse array literal [1, 2, 3]
+    fn parse_array_literal(&mut self) -> Expression {
+        let mut elements = Vec::new();
+        
+        if self.peek_token_is(TokenType::RightBracket) {
+            self.next_token();
+            return Expression::Array(ArrayLiteral { elements });
+        }
+        
+        self.next_token(); // Skip '['
+        elements.push(self.parse_expression(Precedence::Lowest));
+        
+        while self.peek_token_is(TokenType::Comma) {
+            self.next_token(); // Skip current element
+            self.next_token(); // Skip ','
+            elements.push(self.parse_expression(Precedence::Lowest));
+        }
+        
+        if !self.expect_peek(TokenType::RightBracket) {
+            return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+        }
+        
+        Expression::Array(ArrayLiteral { elements })
     }
 
     // Fungsi baru untuk parsing if expression
