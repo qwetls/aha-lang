@@ -17,6 +17,11 @@ pub enum TokenType {
     If,
     Else,
     Return,
+    While,    // NEW: while loops
+    For,      // NEW: for loops
+    In,       // NEW: for x in range
+    Break,    // NEW: break from loop
+    Continue, // NEW: continue loop
     // Operators
     Assign,       // =
     Plus,         // +
@@ -27,14 +32,20 @@ pub enum TokenType {
     NotEq,        // !=
     LT,           // <
     GT,           // >
+    LtEq,         // <= NEW
+    GtEq,         // >= NEW
     Bang,         // !
     // Delimiters
     Comma,        // ,
     Semicolon,    // ;
+    Colon,        // : NEW for type hints
     LeftParen,    // (
     RightParen,   // )
     LeftBrace,    // {
     RightBrace,   // }
+    LeftBracket,  // [ NEW for arrays
+    RightBracket, // ] NEW for arrays
+    DotDot,       // .. NEW for ranges
     // Special
     Eof,          // End of File
     Illegal,      // Karakter tidak dikenal
@@ -70,8 +81,13 @@ pub enum Expression {
     Prefix(PrefixExpression),
     Infix(InfixExpression),
     If(IfExpression),
+    While(WhileExpression),       // NEW
+    For(ForExpression),           // NEW
     Function(FunctionLiteral),
     Call(CallExpression),
+    Array(ArrayLiteral),          // NEW
+    Index(IndexExpression),       // NEW
+    Range(RangeExpression),       // NEW
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,8 +125,44 @@ pub struct IfExpression {
     pub alternative: Option<BlockStatement>,
 }
 
+// NEW: While loop expression
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhileExpression {
+    pub condition: Box<Expression>,
+    pub body: BlockStatement,
+}
+
+// NEW: For loop expression
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForExpression {
+    pub variable: Identifier,
+    pub iterable: Box<Expression>,
+    pub body: BlockStatement,
+}
+
+// NEW: Range expression (0..10)
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeExpression {
+    pub start: Box<Expression>,
+    pub end: Box<Expression>,
+}
+
+// NEW: Array literal [1, 2, 3]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayLiteral {
+    pub elements: Vec<Expression>,
+}
+
+// NEW: Index expression arr[0]
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexExpression {
+    pub left: Box<Expression>,
+    pub index: Box<Expression>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionLiteral {
+    pub name: Option<Identifier>,  // NEW: optional function name
     pub parameters: Vec<Identifier>,
     pub body: BlockStatement,
 }
