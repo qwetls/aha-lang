@@ -227,16 +227,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_call(&mut self, call: &ast::CallExpression) -> Result<BasicValueEnum<'ctx>, String> {
         // Get function name from expression
         let func_name = match call.function.as_ref() {
-            ast::Expression::Identifier(id) => &id.value,
+            ast::Expression::Identifier(id) => id.value.clone(),
             _ => return Err("Can only call named functions".to_string()),
         };
         
-        // Look up function
-        let function = self.functions.get(func_name)
-            .or_else(|| self.module.get_function(func_name).as_ref())
-            .ok_or_else(|| format!("Unknown function: {}", func_name))?;
-        
-        // Compile arguments
+        // Compile arguments FIRST to avoid borrow issues
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
             args.push(self.compile_expression(arg)?);
@@ -247,8 +242,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|a| (*a).into())
             .collect();
         
+        // Look up function (after args are compiled)
+        let function = if let Some(f) = self.functions.get(&func_name) {
+            *f
+        } else if let Some(f) = self.module.get_function(&func_name) {
+            f
+        } else {
+            return Err(format!("Unknown function: {}", func_name));
+        };
+        
         // Build call
-        let call_result = self.builder.build_call(*function, &args_meta, "calltmp")
+        let call_result = self.builder.build_call(function, &args_meta, "calltmp")
             .map_err(|e| e.to_string())?;
         
         // Get return value
