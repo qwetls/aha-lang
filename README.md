@@ -124,13 +124,13 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] Tipe data Integer
     - [x] Ekspresi Aritmatika & Perbandingan
     - [x] Pernyataan Kondisional `if/else`
-- [x] **Milestone 2: Fitur Fundamental** *(In Progress)*
+- [x] **Milestone 2: Fitur Fundamental** ✅
     - [x] Tipe data `Boolean` (codegen)
     - [x] Operator `<=`, `>=`
     - [x] Pernyataan Perulangan `while` ✅
     - [x] Pernyataan Perulangan `for` (parser) 
-    - [ ] Fungsi dengan parameter
-    - [ ] Statement `return`
+    - [x] Fungsi dengan parameter ✅
+    - [x] Statement `return` ✅
 - [ ] **Milestone 3: Struktur Data Tingkat Lanjut**
     - [x] Array (parser)
     - [ ] Array (codegen)
