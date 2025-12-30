@@ -4,7 +4,7 @@ use crate::ast;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{PointerValue, BasicValueEnum};
+use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue};
 use inkwell::types::IntType;
 use std::collections::HashMap;
 
@@ -13,7 +13,9 @@ pub struct CodeGenerator<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     variables: HashMap<String, PointerValue<'ctx>>,
+    functions: HashMap<String, FunctionValue<'ctx>>,  // NEW: store compiled functions
     i64_type: IntType<'ctx>,
+    current_function: Option<FunctionValue<'ctx>>,    // NEW: track current function
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -27,7 +29,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             module,
             builder,
             variables: HashMap::new(),
+            functions: HashMap::new(),
             i64_type,
+            current_function: None,
         }
     }
 
@@ -69,8 +73,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Statement::Expression(expr_stmt) => {
                 self.compile_expression(&expr_stmt.expression)?;
             },
-            ast::Statement::Return(_) => {
-                return Err("Return statement not yet implemented".to_string());
+            ast::Statement::Return(ret_stmt) => {
+                let return_val = self.compile_expression(&ret_stmt.return_value)?;
+                self.builder.build_return(Some(&return_val))
+                    .map_err(|e| e.to_string())?;
             }
         }
         Ok(())
@@ -148,8 +154,107 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let val = if bool_lit.value { 1 } else { 0 };
                 Ok(self.i64_type.const_int(val, false).into())
             },
+            ast::Expression::Function(func_lit) => self.compile_function(func_lit),
+            ast::Expression::Call(call_expr) => self.compile_call(call_expr),
             _ => Err("Expression type not yet implemented".to_string()),
         }
+    }
+
+    // NEW: Compile function definition
+    fn compile_function(&mut self, func: &ast::FunctionLiteral) -> Result<BasicValueEnum<'ctx>, String> {
+        let func_name = func.name.as_ref()
+            .map(|id| id.value.clone())
+            .unwrap_or_else(|| format!("anonymous_{}", self.functions.len()));
+        
+        // Create function type based on parameter count
+        let param_types: Vec<_> = func.parameters.iter()
+            .map(|_| self.i64_type.into())
+            .collect();
+        let fn_type = self.i64_type.fn_type(&param_types, false);
+        
+        // Add function to module
+        let function = self.module.add_function(&func_name, fn_type, None);
+        self.functions.insert(func_name.clone(), function);
+        
+        // Save current state
+        let saved_block = self.builder.get_insert_block();
+        let saved_vars = self.variables.clone();
+        let saved_function = self.current_function;
+        
+        // Set up function body
+        let entry_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry_block);
+        self.current_function = Some(function);
+        self.variables.clear();
+        
+        // Bind parameters to variables
+        for (i, param) in func.parameters.iter().enumerate() {
+            let param_value = function.get_nth_param(i as u32)
+                .ok_or("Failed to get parameter")?;
+            let alloca = self.builder.build_alloca(self.i64_type, &param.value)
+                .map_err(|e| e.to_string())?;
+            self.builder.build_store(alloca, param_value)
+                .map_err(|e| e.to_string())?;
+            self.variables.insert(param.value.clone(), alloca);
+        }
+        
+        // Compile function body
+        let mut last_value = self.i64_type.const_int(0, false).into();
+        for stmt in &func.body.statements {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                last_value = self.compile_expression(&expr_stmt.expression)?;
+            } else {
+                self.compile_statement(stmt)?;
+            }
+        }
+        
+        // Return last expression value
+        self.builder.build_return(Some(&last_value))
+            .map_err(|e| e.to_string())?;
+        
+        // Restore state
+        self.variables = saved_vars;
+        self.current_function = saved_function;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        
+        // Return zero (function definitions don't produce a value in expression context)
+        Ok(self.i64_type.const_int(0, false).into())
+    }
+
+    // NEW: Compile function call
+    fn compile_call(&mut self, call: &ast::CallExpression) -> Result<BasicValueEnum<'ctx>, String> {
+        // Get function name from expression
+        let func_name = match call.function.as_ref() {
+            ast::Expression::Identifier(id) => &id.value,
+            _ => return Err("Can only call named functions".to_string()),
+        };
+        
+        // Look up function
+        let function = self.functions.get(func_name)
+            .or_else(|| self.module.get_function(func_name))
+            .ok_or_else(|| format!("Unknown function: {}", func_name))?;
+        
+        // Compile arguments
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            args.push(self.compile_expression(arg)?);
+        }
+        
+        // Convert to BasicMetadataValueEnum
+        let args_meta: Vec<_> = args.iter()
+            .map(|a| (*a).into())
+            .collect();
+        
+        // Build call
+        let call_result = self.builder.build_call(*function, &args_meta, "calltmp")
+            .map_err(|e| e.to_string())?;
+        
+        // Get return value
+        call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| "Function call did not return a value".to_string())
     }
 
     // NEW: Compile while loop
