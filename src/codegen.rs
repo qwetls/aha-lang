@@ -124,15 +124,78 @@ impl<'ctx> CodeGenerator<'ctx> {
                     ">" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, left.into_int_value(), right.into_int_value(), "gttmp")
                             .map_err(|e| e.to_string())?;
-                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "gtzext") // NAMA METHOD Y BENAR
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "gtzext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    "<=" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLE, left.into_int_value(), right.into_int_value(), "letmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "lezext")
+                            .map_err(|e| e.to_string())?.into())
+                    },
+                    ">=" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGE, left.into_int_value(), right.into_int_value(), "getmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder.build_int_z_extend(cmp, self.i64_type, "gezext")
                             .map_err(|e| e.to_string())?.into())
                     },
                     _ => Err(format!("Unknown operator: {}", infix.operator)),
                 }
             },
             ast::Expression::If(if_expr) => self.compile_if_expression(if_expr),
+            ast::Expression::While(while_expr) => self.compile_while_expression(while_expr),
+            ast::Expression::Boolean(bool_lit) => {
+                let val = if bool_lit.value { 1 } else { 0 };
+                Ok(self.i64_type.const_int(val, false).into())
+            },
             _ => Err("Expression type not yet implemented".to_string()),
         }
+    }
+
+    // NEW: Compile while loop
+    fn compile_while_expression(&mut self, while_expr: &ast::WhileExpression) -> Result<BasicValueEnum<'ctx>, String> {
+        let function = self.builder.get_insert_block()
+            .expect("Builder not in a block!")
+            .get_parent()
+            .unwrap();
+        
+        // Create blocks for while loop
+        let condition_block = self.context.append_basic_block(function, "while_cond");
+        let body_block = self.context.append_basic_block(function, "while_body");
+        let after_block = self.context.append_basic_block(function, "while_after");
+        
+        // Jump to condition block
+        self.builder.build_unconditional_branch(condition_block)
+            .map_err(|e| e.to_string())?;
+        
+        // Build condition block
+        self.builder.position_at_end(condition_block);
+        let condition_val = self.compile_expression(&while_expr.condition)?;
+        
+        // Convert to i1 for branch (non-zero = true)
+        let condition_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            condition_val.into_int_value(),
+            self.i64_type.const_int(0, false),
+            "while_cond_bool"
+        ).map_err(|e| e.to_string())?;
+        
+        self.builder.build_conditional_branch(condition_bool, body_block, after_block)
+            .map_err(|e| e.to_string())?;
+        
+        // Build body block
+        self.builder.position_at_end(body_block);
+        self.compile_block_statement(&while_expr.body)?;
+        
+        // Jump back to condition
+        self.builder.build_unconditional_branch(condition_block)
+            .map_err(|e| e.to_string())?;
+        
+        // Continue after loop
+        self.builder.position_at_end(after_block);
+        
+        // While loops return 0 (unit type)
+        Ok(self.i64_type.const_int(0, false).into())
     }
 
     fn compile_if_expression(&mut self, if_expr: &ast::IfExpression) -> Result<BasicValueEnum<'ctx>, String> {
