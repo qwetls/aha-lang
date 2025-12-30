@@ -233,7 +233,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         
         // Look up function
         let function = self.functions.get(func_name)
-            .or_else(|| self.module.get_function(func_name))
+            .or_else(|| self.module.get_function(func_name).as_ref())
             .ok_or_else(|| format!("Unknown function: {}", func_name))?;
         
         // Compile arguments
