@@ -128,15 +128,16 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] Tipe data `Boolean` (codegen)
     - [x] Operator `<=`, `>=`
     - [x] Pernyataan Perulangan `while` ✅
-    - [x] Pernyataan Perulangan `for` (parser) 
+    - [x] Pernyataan Perulangan `for` (parser)
     - [x] Fungsi dengan parameter ✅
     - [x] Statement `return` ✅
-- [ ] **Milestone 3: Struktur Data Tingkat Lanjut**
-    - [x] Array (parser)
-    - [ ] Array (codegen)
-    - [ ] String
-    - [ ] Struct
+- [x] **Milestone 3: Struktur Data Tingkat Lanjut** ✅
+    - [x] String type
+    - [x] Array (parser + codegen)
+    - [x] Struct definitions
+    - [x] Field access (person.name)
 - [ ] **Milestone 4: Pustaka Standar**
+    - [ ] print/println builtin
     - [ ] Modul I/O File
     - [ ] Modul Jaringan
     - [ ] Modul Web (HTTP Server)
