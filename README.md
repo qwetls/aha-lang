@@ -147,6 +147,33 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] CLI improvements (--emit-ir, --version)
     - [x] Better error messages
 
+### 🚀 Phase 2: Advanced Features
+
+- [ ] **Milestone 6: Type System**
+    - [ ] Type inference
+    - [ ] Type annotations
+    - [ ] Generics / Parametric types
+
+- [ ] **Milestone 7: Resource Lifetimes** ⭐
+    - [ ] Ownership semantics
+    - [ ] Borrow checking
+    - [ ] Automatic resource cleanup
+
+- [ ] **Milestone 8: Concurrency**
+    - [ ] Actor model
+    - [ ] Message passing
+    - [ ] Async/await
+
+- [ ] **Milestone 9: Package Ecosystem**
+    - [ ] Package manager (`aha install`)
+    - [ ] Module system
+    - [ ] Dependency resolution
+
+- [ ] **Milestone 10: Self-Hosting** 🏆
+    - [ ] AHA! compiler written in AHA!
+    - [ ] Bootstrap process
+    - [ ] Production ready
+
 ---
 
 ## 🤝 Berkontribusi
