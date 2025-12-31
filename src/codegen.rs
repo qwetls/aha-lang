@@ -36,6 +36,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
+        // Declare external printf function for I/O
+        self.declare_printf();
+        
         let fn_type = self.i64_type.fn_type(&[], false);
         let function = self.module.add_function("main", fn_type, None);
         let basic_block = self.context.append_basic_block(function, "entry");
@@ -58,6 +61,136 @@ impl<'ctx> CodeGenerator<'ctx> {
         let _ = self.builder.build_return(Some(&zero));
         
         Ok(())
+    }
+
+    // NEW: Declare C printf and create all builtins
+    fn declare_printf(&mut self) {
+        let i8_ptr_type = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let printf_type = self.i64_type.fn_type(&[i8_ptr_type.into()], true); // variadic
+        let printf_fn = self.module.add_function("printf", printf_type, None);
+        self.functions.insert("printf".to_string(), printf_fn);
+        
+        // Create all builtin functions
+        self.create_print_int_builtin();
+        self.create_print_str_builtin();
+        self.create_abs_builtin();
+        self.create_min_builtin();
+        self.create_max_builtin();
+    }
+
+    // Builtin: print(int) -> prints integer with newline
+    fn create_print_int_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let function = self.module.add_function("print", fn_type, None);
+        
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        
+        let value = function.get_nth_param(0).unwrap().into_int_value();
+        let format_str = self.builder.build_global_string_ptr("%lld\n", "fmt")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let printf_fn = self.functions.get("printf").unwrap();
+        let _ = self.builder.build_call(
+            *printf_fn,
+            &[format_str.as_pointer_value().into(), value.into()],
+            "printf_call"
+        );
+        
+        let _ = self.builder.build_return(Some(&value));
+        self.functions.insert("print".to_string(), function);
+    }
+
+    // Builtin: print_str(str_ptr) -> prints string
+    fn create_print_str_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let i8_ptr_type = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false); // takes i64 (ptr as int)
+        let function = self.module.add_function("print_str", fn_type, None);
+        
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        
+        let str_as_int = function.get_nth_param(0).unwrap().into_int_value();
+        let str_ptr = self.builder.build_int_to_ptr(str_as_int, i8_ptr_type, "str_ptr")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let format_str = self.builder.build_global_string_ptr("%s\n", "str_fmt")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let printf_fn = self.functions.get("printf").unwrap();
+        let _ = self.builder.build_call(
+            *printf_fn,
+            &[format_str.as_pointer_value().into(), str_ptr.into()],
+            "printf_str_call"
+        );
+        
+        let zero = i64_type.const_int(0, false);
+        let _ = self.builder.build_return(Some(&zero));
+        self.functions.insert("print_str".to_string(), function);
+    }
+
+    // Builtin: abs(x) -> absolute value
+    fn create_abs_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let function = self.module.add_function("abs", fn_type, None);
+        
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        
+        let x = function.get_nth_param(0).unwrap().into_int_value();
+        let zero = i64_type.const_int(0, false);
+        let neg_x = self.builder.build_int_neg(x, "neg_x")
+            .map_err(|e| e.to_string()).unwrap();
+        let is_neg = self.builder.build_int_compare(inkwell::IntPredicate::SLT, x, zero, "is_neg")
+            .map_err(|e| e.to_string()).unwrap();
+        let result = self.builder.build_select(is_neg, neg_x, x, "abs_result")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("abs".to_string(), function);
+    }
+
+    // Builtin: min(a, b) -> minimum value
+    fn create_min_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("min", fn_type, None);
+        
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        
+        let a = function.get_nth_param(0).unwrap().into_int_value();
+        let b = function.get_nth_param(1).unwrap().into_int_value();
+        let is_less = self.builder.build_int_compare(inkwell::IntPredicate::SLT, a, b, "is_less")
+            .map_err(|e| e.to_string()).unwrap();
+        let result = self.builder.build_select(is_less, a, b, "min_result")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("min".to_string(), function);
+    }
+
+    // Builtin: max(a, b) -> maximum value
+    fn create_max_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("max", fn_type, None);
+        
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        
+        let a = function.get_nth_param(0).unwrap().into_int_value();
+        let b = function.get_nth_param(1).unwrap().into_int_value();
+        let is_greater = self.builder.build_int_compare(inkwell::IntPredicate::SGT, a, b, "is_greater")
+            .map_err(|e| e.to_string()).unwrap();
+        let result = self.builder.build_select(is_greater, a, b, "max_result")
+            .map_err(|e| e.to_string()).unwrap();
+        
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("max".to_string(), function);
     }
 
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
