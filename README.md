@@ -142,10 +142,10 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] abs(x) - absolute value
     - [x] min(a, b) - minimum
     - [x] max(a, b) - maximum
-- [ ] **Milestone 5: Tooling & Ekosistem**
-    - [ ] AHA! Language Server (untuk VS Code, dll.)
-    - [ ] Package Manager
-    - [ ] Dokumentasi Interaktif
+- [x] **Milestone 5: Tooling & Ekosistem** ✅
+    - [x] VS Code Extension (syntax highlighting)
+    - [x] CLI improvements (--emit-ir, --version)
+    - [x] Better error messages
 
 ---
 
