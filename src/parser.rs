@@ -6,7 +6,7 @@ use crate::ast::{
     Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral,
     StringLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement,
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
-    IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess
+    IndexExpression, StructDefinition, StructField, FieldAccess
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
