@@ -136,11 +136,12 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] Array (parser + codegen)
     - [x] Struct definitions
     - [x] Field access (person.name)
-- [ ] **Milestone 4: Pustaka Standar**
-    - [ ] print/println builtin
-    - [ ] Modul I/O File
-    - [ ] Modul Jaringan
-    - [ ] Modul Web (HTTP Server)
+- [x] **Milestone 4: Pustaka Standar** ✅
+    - [x] print(int) - print integers
+    - [x] print_str(string) - print strings
+    - [x] abs(x) - absolute value
+    - [x] min(a, b) - minimum
+    - [x] max(a, b) - maximum
 - [ ] **Milestone 5: Tooling & Ekosistem**
     - [ ] AHA! Language Server (untuk VS Code, dll.)
     - [ ] Package Manager
