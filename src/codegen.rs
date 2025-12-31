@@ -195,7 +195,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = self.i64_type.const_int(0, false);
             
             let elem_ptr = unsafe {
-                self.builder.build_gep(array_type, array_ptr, &[zero, idx], "elem_ptr")
+                self.builder.build_gep(array_ptr, &[zero, idx], "elem_ptr")
                     .map_err(|e| e.to_string())?
             };
             self.builder.build_store(elem_ptr, value)
@@ -222,12 +222,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         
         // Get element pointer (simplified - treats as flat i64 array)
         let elem_ptr = unsafe {
-            self.builder.build_gep(self.i64_type, array_ptr, &[index_val.into_int_value()], "elem")
+            self.builder.build_gep(array_ptr, &[index_val.into_int_value()], "elem")
                 .map_err(|e| e.to_string())?
         };
         
         // Load and return element
-        let elem_val = self.builder.build_load(self.i64_type, elem_ptr, "elem_val")
+        let elem_val = self.builder.build_load(elem_ptr, "elem_val")
             .map_err(|e| e.to_string())?;
         Ok(elem_val)
     }
