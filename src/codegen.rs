@@ -561,6 +561,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn print_llvm_ir(&self) {
         self.module.print_to_stderr();
     }
+
+    // NEW: Get LLVM IR as string for saving to file
+    pub fn get_llvm_ir(&self) -> String {
+        self.module.print_to_string().to_string()
+    }
     
     pub fn run_jit(&self) -> Result<i64, String> {
         let execution_engine = self.module.create_jit_execution_engine(inkwell::OptimizationLevel::None)
