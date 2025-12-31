@@ -77,6 +77,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let return_val = self.compile_expression(&ret_stmt.return_value)?;
                 self.builder.build_return(Some(&return_val))
                     .map_err(|e| e.to_string())?;
+            },
+            ast::Statement::Struct(_struct_def) => {
+                // Struct definitions are compile-time metadata
+                // No LLVM code needed for the definition itself
+                // Struct types will be created when instantiated
             }
         }
         Ok(())
@@ -154,10 +159,77 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let val = if bool_lit.value { 1 } else { 0 };
                 Ok(self.i64_type.const_int(val, false).into())
             },
+            ast::Expression::String(str_lit) => {
+                // For now, create a global string constant and return its address as i64
+                // This is a temporary solution until we have proper string type
+                let string_ptr = self.builder.build_global_string_ptr(&str_lit.value, "str")
+                    .map_err(|e| e.to_string())?;
+                let ptr_as_int = self.builder.build_ptr_to_int(
+                    string_ptr.as_pointer_value(),
+                    self.i64_type,
+                    "str_ptr"
+                ).map_err(|e| e.to_string())?;
+                Ok(ptr_as_int.into())
+            },
             ast::Expression::Function(func_lit) => self.compile_function(func_lit),
             ast::Expression::Call(call_expr) => self.compile_call(call_expr),
+            ast::Expression::Array(arr_lit) => self.compile_array_literal(arr_lit),
+            ast::Expression::Index(idx_expr) => self.compile_index_expression(idx_expr),
             _ => Err("Expression type not yet implemented".to_string()),
         }
+    }
+
+    // NEW: Compile array literal [1, 2, 3]
+    fn compile_array_literal(&mut self, arr: &ast::ArrayLiteral) -> Result<BasicValueEnum<'ctx>, String> {
+        let array_size = arr.elements.len() as u32;
+        let array_type = self.i64_type.array_type(array_size);
+        
+        // Allocate array on stack
+        let array_ptr = self.builder.build_alloca(array_type, "arr")
+            .map_err(|e| e.to_string())?;
+        
+        // Store each element
+        for (i, elem) in arr.elements.iter().enumerate() {
+            let value = self.compile_expression(elem)?;
+            let idx = self.i64_type.const_int(i as u64, false);
+            let zero = self.i64_type.const_int(0, false);
+            
+            let elem_ptr = unsafe {
+                self.builder.build_gep(array_type, array_ptr, &[zero, idx], "elem_ptr")
+                    .map_err(|e| e.to_string())?
+            };
+            self.builder.build_store(elem_ptr, value)
+                .map_err(|e| e.to_string())?;
+        }
+        
+        // Return pointer as i64 (array address)
+        let ptr_as_int = self.builder.build_ptr_to_int(array_ptr, self.i64_type, "arr_ptr")
+            .map_err(|e| e.to_string())?;
+        Ok(ptr_as_int.into())
+    }
+
+    // NEW: Compile index expression arr[i]
+    fn compile_index_expression(&mut self, idx: &ast::IndexExpression) -> Result<BasicValueEnum<'ctx>, String> {
+        let array_val = self.compile_expression(&idx.left)?;
+        let index_val = self.compile_expression(&idx.index)?;
+        
+        // Convert array pointer from i64 back to pointer
+        let array_ptr = self.builder.build_int_to_ptr(
+            array_val.into_int_value(),
+            self.i64_type.ptr_type(inkwell::AddressSpace::default()),
+            "arr_ptr_cast"
+        ).map_err(|e| e.to_string())?;
+        
+        // Get element pointer (simplified - treats as flat i64 array)
+        let elem_ptr = unsafe {
+            self.builder.build_gep(self.i64_type, array_ptr, &[index_val.into_int_value()], "elem")
+                .map_err(|e| e.to_string())?
+        };
+        
+        // Load and return element
+        let elem_val = self.builder.build_load(self.i64_type, elem_ptr, "elem_val")
+            .map_err(|e| e.to_string())?;
+        Ok(elem_val)
     }
 
     // NEW: Compile function definition

@@ -4,8 +4,9 @@ use crate::Lexer;
 use crate::ast;
 use crate::ast::{
     Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral,
-    PrefixExpression, InfixExpression, LetStatement, ReturnStatement, ExpressionStatement,
-    BlockStatement, WhileExpression, ForExpression, RangeExpression, ArrayLiteral, IndexExpression
+    StringLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement,
+    ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
+    IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -27,6 +28,7 @@ pub enum Precedence {
     Product,     // *
     Prefix,      // -X or !X
     Call,        // myFunction(X)
+    Index,       // arr[i]
 }
 
 impl Parser {
@@ -85,8 +87,54 @@ impl Parser {
         match self.current_token.r#type.clone() {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
+            TokenType::Struct => self.parse_struct_definition(),
             _ => self.parse_expression_statement(),
         }
+    }
+
+    // NEW: Parse struct definition
+    fn parse_struct_definition(&mut self) -> Option<Statement> {
+        self.next_token(); // Skip 'struct'
+        
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected struct name".to_string());
+            return None;
+        }
+        let name = Identifier { value: self.current_token.literal.clone() };
+        
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return None;
+        }
+        
+        let mut fields = Vec::new();
+        self.next_token(); // Skip '{'
+        
+        while !self.current_token_is(TokenType::RightBrace) {
+            if !self.current_token_is(TokenType::Identifier) {
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+            
+            // Optional type hint after colon
+            let type_hint = if self.peek_token_is(TokenType::Colon) {
+                self.next_token(); // Skip field name
+                self.next_token(); // Skip ':'
+                Some(self.current_token.literal.clone())
+            } else {
+                None
+            };
+            
+            fields.push(StructField { name: field_name, type_hint });
+            
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // Skip current
+                self.next_token(); // Skip ','
+            } else {
+                self.next_token();
+            }
+        }
+        
+        Some(Statement::Struct(StructDefinition { name, fields }))
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
@@ -138,6 +186,36 @@ impl Parser {
         let mut left = self.parse_prefix();
 
         while !self.peek_token_is(TokenType::Semicolon) && precedence < self.peek_precedence() {
+            // Handle index expression arr[i]
+            if self.peek_token_is(TokenType::LeftBracket) {
+                self.next_token(); // consume '['
+                self.next_token(); // move to index expression
+                let index = self.parse_expression(Precedence::Lowest);
+                if !self.expect_peek(TokenType::RightBracket) {
+                    return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+                }
+                left = Expression::Index(IndexExpression {
+                    left: Box::new(left),
+                    index: Box::new(index),
+                });
+                continue;
+            }
+            
+            // Handle field access person.name
+            if self.peek_token_is(TokenType::Dot) {
+                self.next_token(); // consume '.'
+                self.next_token(); // move to field name
+                if !self.current_token_is(TokenType::Identifier) {
+                    return Expression::Identifier(Identifier { value: "ERROR".to_string() });
+                }
+                let field = Identifier { value: self.current_token.literal.clone() };
+                left = Expression::FieldAccess(FieldAccess {
+                    object: Box::new(left),
+                    field,
+                });
+                continue;
+            }
+            
             self.next_token(); // Ambil operator
             let operator = self.current_token.literal.clone();
             let right_precedence = self.current_precedence();
@@ -160,6 +238,7 @@ impl Parser {
             TokenType::Integer => Expression::Integer(IntegerLiteral { value: self.current_token.literal.parse().unwrap() }),
             TokenType::True => Expression::Boolean(BooleanLiteral { value: true }),
             TokenType::False => Expression::Boolean(BooleanLiteral { value: false }),
+            TokenType::String => Expression::String(StringLiteral { value: self.current_token.literal.clone() }),
             TokenType::If => self.parse_if_expression(),
             TokenType::While => self.parse_while_expression(),
             TokenType::For => self.parse_for_expression(),

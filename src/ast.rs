@@ -17,11 +17,12 @@ pub enum TokenType {
     If,
     Else,
     Return,
-    While,    // NEW: while loops
-    For,      // NEW: for loops
-    In,       // NEW: for x in range
-    Break,    // NEW: break from loop
-    Continue, // NEW: continue loop
+    While,    // while loops
+    For,      // for loops
+    In,       // for x in range
+    Break,    // break from loop
+    Continue, // continue loop
+    Struct,   // NEW: struct definition
     // Operators
     Assign,       // =
     Plus,         // +
@@ -43,9 +44,10 @@ pub enum TokenType {
     RightParen,   // )
     LeftBrace,    // {
     RightBrace,   // }
-    LeftBracket,  // [ NEW for arrays
-    RightBracket, // ] NEW for arrays
-    DotDot,       // .. NEW for ranges
+    LeftBracket,  // [ for arrays
+    RightBracket, // ] for arrays
+    DotDot,       // .. for ranges
+    Dot,          // . NEW: field access
     // Special
     Eof,          // End of File
     Illegal,      // Karakter tidak dikenal
@@ -78,16 +80,19 @@ pub enum Expression {
     Identifier(Identifier),
     Integer(IntegerLiteral),
     Boolean(BooleanLiteral),
+    String(StringLiteral),
     Prefix(PrefixExpression),
     Infix(InfixExpression),
     If(IfExpression),
-    While(WhileExpression),       // NEW
-    For(ForExpression),           // NEW
+    While(WhileExpression),
+    For(ForExpression),
     Function(FunctionLiteral),
     Call(CallExpression),
-    Array(ArrayLiteral),          // NEW
-    Index(IndexExpression),       // NEW
-    Range(RangeExpression),       // NEW
+    Array(ArrayLiteral),
+    Index(IndexExpression),
+    Range(RangeExpression),
+    StructLiteral(StructLiteral),  // NEW: Person { name: "x", age: 25 }
+    FieldAccess(FieldAccess),      // NEW: person.name
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +108,12 @@ pub struct IntegerLiteral {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BooleanLiteral {
     pub value: bool,
+}
+
+// NEW: String literal
+#[derive(Debug, Clone, PartialEq)]
+pub struct StringLiteral {
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +190,7 @@ pub enum Statement {
     Let(LetStatement),
     Return(ReturnStatement),
     Expression(ExpressionStatement),
+    Struct(StructDefinition),  // NEW: struct definitions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,4 +218,29 @@ pub struct BlockStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>,
+}
+
+// NEW: Struct-related nodes
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDefinition {
+    pub name: Identifier,
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub name: Identifier,
+    pub type_hint: Option<String>,  // Optional type annotation
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructLiteral {
+    pub name: Identifier,
+    pub fields: Vec<(Identifier, Expression)>,  // field: value pairs
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldAccess {
+    pub object: Box<Expression>,
+    pub field: Identifier,
 }

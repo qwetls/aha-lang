@@ -75,6 +75,18 @@ impl Lexer {
         self.input[position..self.position].iter().collect()
     }
 
+    // NEW: Baca string literal
+    fn read_string(&mut self) -> String {
+        self.read_char(); // Skip opening quote
+        let position = self.position;
+        while self.ch != '"' && self.ch != '\0' {
+            self.read_char();
+        }
+        let result: String = self.input[position..self.position].iter().collect();
+        self.read_char(); // Skip closing quote
+        result
+    }
+
     // Cek apakah identifier adalah keyword
     fn lookup_identifier(&self, ident: &str) -> TokenType {
         match ident {
@@ -90,6 +102,7 @@ impl Lexer {
             "in" => TokenType::In,
             "break" => TokenType::Break,
             "continue" => TokenType::Continue,
+            "struct" => TokenType::Struct,
             _ => TokenType::Identifier,
         }
     }
@@ -157,7 +170,7 @@ impl Lexer {
                     self.read_char();
                     tok = Token::new(TokenType::DotDot, "..".to_string(), line, column);
                 } else {
-                    tok = Token::new(TokenType::Illegal, self.ch.to_string(), line, column);
+                    tok = Token::new(TokenType::Dot, ".".to_string(), line, column);
                 }
             }
             ',' => tok = Token::new(TokenType::Comma, self.ch.to_string(), line, column),
@@ -170,6 +183,11 @@ impl Lexer {
             '[' => tok = Token::new(TokenType::LeftBracket, self.ch.to_string(), line, column),
             ']' => tok = Token::new(TokenType::RightBracket, self.ch.to_string(), line, column),
             '\0' => tok = Token::new(TokenType::Eof, "".to_string(), line, column),
+            '"' => {
+                // String literal
+                let literal = self.read_string();
+                return Token::new(TokenType::String, literal, line, column);
+            }
             _ => {
                 if self.ch.is_alphabetic() {
                     let literal = self.read_identifier();
