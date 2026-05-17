@@ -1,0 +1,70 @@
+# Changelog
+
+All notable changes to AHA! Lang are documented in this file.
+
+## [1.4.0] - 2026-05-17
+
+## File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/types.rs` | ✨ NEW | 155 | Type system: AhaType, TypedValue, check_binary_op, check_prefix_op |
+| `src/codegen.rs` | 🔨 REWRITE | 840 | VarInfo scope, TypedValue returns, string struct, C runtime, compile_infix, string ops, len builtin |
+| `src/parser.rs` | 🔧 REFACTOR | 579 | `r#type`→`kind` (12 sites), removed "ERROR" identifiers, added call/fn parsing |
+| `src/ast.rs` | 🔧 REFACTOR | 251 | `r#type`→`kind`, added Assignment/Break/Continue nodes |
+| `src/lexer.rs` | 🔧 ENHANCED | 249 | Fixed != literal, added block comments, digit identifiers, escape sequences |
+| `src/main.rs` | 📝 UPDATED | 81 | All messages to English |
+| `src/lib.rs` | 📝 UPDATED | 14 | Added `pub mod types` + re-exports |
+| `Cargo.toml` | 📝 UPDATED | 8 | Comment to English |
+| `README.md` | 📝 UPDATED | 203 | Roadmap accuracy, expected output updated |
+| `tests/lexer_tests.rs` | ✨ NEW | ~200 | 19 lexer tests |
+| `tests/parser_tests.rs` | ✨ NEW | ~300 | 22 parser tests |
+| `tests/types_tests.rs` | ✨ NEW | ~170 | 18 type system tests |
+| `tests/integration_tests.rs` | ✨ NEW | ~230 | 25 end-to-end JIT tests |
+
+
+### Added
+- **Type System** (`src/types.rs`): `AhaType` enum (`Int`, `Bool`, `String`, `Void`, `Array`, `Function`) with compile-time type checking via `check_binary_op()` and `check_prefix_op()`
+- **TypedValue**: All codegen expression methods now return `TypedValue<'ctx>` — a struct pairing LLVM `BasicValueEnum` with `AhaType` information
+- **String Type**: Strings are now LLVM struct `{i8*, i64}` (pointer + length), replacing the unsafe pointer-to-int cast
+- **String Concatenation**: `"hello" + " world"` allocates new buffer via `malloc`, copies via `memcpy`, null-terminates
+- **String Comparison**: `==` and `!=` on strings use `strcmp` from C standard library
+- **`len()` builtin**: Takes a string, returns its length in O(1) by reading the struct's length field
+- **C Runtime Linkage**: External declarations for `malloc`, `memcpy`, `strlen`, `strcmp`
+- **Block Comments**: `/* ... */` multi-line comment syntax via `skip_block_comment()` in lexer
+- **String Escape Sequences**: `\n`, `\t`, `\\`, `\"`, `\r`, `\0` in string literals
+- **Identifier Improvements**: Digits allowed after first character (`my_var2`), underscore prefix (`_private`)
+- **Test Suite**: 84 tests across 4 modules:
+  - `tests/lexer_tests.rs` — 19 tests (tokenization)
+  - `tests/parser_tests.rs` — 22 tests (AST generation)
+  - `tests/types_tests.rs` — 18 tests (type checking logic)
+  - `tests/integration_tests.rs` — 25 tests (full compile → JIT pipeline)
+
+### Changed
+- `Token.r#type` renamed to `Token.kind` — eliminates raw identifier syntax, follows Rust convention
+- Variable scope: flat `HashMap<String, PointerValue>` → stack `Vec<HashMap<String, VarInfo>>` with type tracking
+- `compile_expression()` return type: `BasicValueEnum` → `TypedValue` throughout all 14 expression handlers
+- `print_str()` builtin: now accepts string struct `{i8*, i64}` instead of `i64`
+- All output messages in `main.rs` standardized to English
+- All source code comments across all files standardized to English
+- README.md roadmap updated to accurately reflect implementation status (honest about parser-only features)
+
+### Fixed
+- **C-01**: `!=` operator produced literal `"=="` instead of `"!="` (copy-paste error in lexer)
+- **C-02**: `if` conditions not converted from `i64` to `i1` before `build_conditional_branch`
+- **C-03**: Phi nodes referenced original basic blocks instead of actual end blocks after nested codegen
+- **C-04**: Last expression in program body was compiled twice (once in loop, once for return)
+- **C-05**: Functions emitted both implicit and explicit return, causing LLVM "multiple terminators" error
+- **C-06**: Function compilation could leak scope/builder state on error (now uses `std::mem::replace` + closure safety pattern)
+- **M-04**: Parser returned `Expression::Identifier("ERROR")` on parse failure, propagating invalid AST to codegen
+
+### Security
+- Type mismatches (`"hello" + 5`) now produce compile-time errors instead of undefined runtime behavior
+- All `.unwrap()` calls replaced with `.expect("descriptive context")` for debuggable panics
+
+## [1.3.0] - Previous Release
+- Initial compiler with lexer, parser, codegen
+- Integer, boolean, string (as pointer hack) types
+- If/else, while, for loops
+- Functions with parameters
+- Basic stdlib: print, print_str, abs, min, max
