@@ -81,23 +81,23 @@ cargo run -- --file contoh.aha
 
 **Output yang Diharapkan:**
 ```
---- KOMPILER AHA! ---
-Membaca file: contoh.aha
+--- AHA! COMPILER v1.3 ---
+Reading file: contoh.aha
 
 [1] LEXING...
 [2] PARSING...
-Parsing berhasil!
+Parsing successful!
 
 [3] CODE GENERATION...
-Kode LLVM IR berhasil dihasilkan!
+LLVM IR generated successfully!
 
 --- LLVM IR OUTPUT ---
 ; ModuleID = 'aha_module'
 ...
 ----------------------
 
-[4] EKSEKUSI (JIT)...
-Program berhasil dijalankan. Hasil: 20
+[4] EXECUTION (JIT)...
+Program executed successfully. Result: 20
 ```
 
 ---
@@ -126,16 +126,20 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] Pernyataan Kondisional `if/else`
 - [x] **Milestone 2: Fitur Fundamental** ✅
     - [x] Tipe data `Boolean` (codegen)
-    - [x] Operator `<=`, `>=`
+    - [x] Operator `<=`, `>=`, `!=` (fixed)
     - [x] Pernyataan Perulangan `while` ✅
-    - [x] Pernyataan Perulangan `for` (parser)
+    - [x] Pernyataan Perulangan `for` (parser + codegen) ✅
     - [x] Fungsi dengan parameter ✅
     - [x] Statement `return` ✅
+    - [x] Prefix expressions `-x`, `!x` ✅
+    - [x] Assignment `x = value` ✅
+    - [x] Break & Continue ✅
+    - [x] Variable scoping (block-level) ✅
 - [x] **Milestone 3: Struktur Data Tingkat Lanjut** ✅
-    - [x] String type
+    - [x] String type (pointer-as-int, limited)
     - [x] Array (parser + codegen)
-    - [x] Struct definitions
-    - [x] Field access (person.name)
+    - [x] Struct definitions (parser only)
+    - [x] Field access (parser only)
 - [x] **Milestone 4: Pustaka Standar** ✅
     - [x] print(int) - print integers
     - [x] print_str(string) - print strings
@@ -146,6 +150,7 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
     - [x] VS Code Extension (syntax highlighting)
     - [x] CLI improvements (--emit-ir, --version)
     - [x] Better error messages
+    - [x] Multi-line comments `/* */` ✅
 
 ### 🚀 Phase 2: Advanced Features
 
