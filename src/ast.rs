@@ -1,7 +1,7 @@
 // src/ast.rs
 
 // --- Token & TokenType ---
-#[derive(Debug, Clone, PartialEq, Copy)] // TAMBAHKAN Copy, Clone
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum TokenType {
     // Literals
     Integer,
@@ -17,12 +17,12 @@ pub enum TokenType {
     If,
     Else,
     Return,
-    While,    // while loops
-    For,      // for loops
-    In,       // for x in range
-    Break,    // break from loop
-    Continue, // continue loop
-    Struct,   // NEW: struct definition
+    While,
+    For,
+    In,
+    Break,
+    Continue,
+    Struct,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -33,38 +33,39 @@ pub enum TokenType {
     NotEq,        // !=
     LT,           // <
     GT,           // >
-    LtEq,         // <= NEW
-    GtEq,         // >= NEW
+    LtEq,        // <=
+    GtEq,        // >=
     Bang,         // !
     // Delimiters
     Comma,        // ,
     Semicolon,    // ;
-    Colon,        // : NEW for type hints
+    Colon,        // :
     LeftParen,    // (
     RightParen,   // )
     LeftBrace,    // {
     RightBrace,   // }
-    LeftBracket,  // [ for arrays
-    RightBracket, // ] for arrays
-    DotDot,       // .. for ranges
-    Dot,          // . NEW: field access
+    LeftBracket,  // [
+    RightBracket, // ]
+    DotDot,       // ..
+    Dot,          // .
     // Special
-    Eof,          // End of File
-    Illegal,      // Karakter tidak dikenal
+    Eof,          // End of file
+    Illegal,      // Unrecognized character
 }
 
+// L-01: Renamed `r#type` to `kind` for idiomatic Rust
 #[derive(Debug, Clone)]
 pub struct Token {
-    pub r#type: TokenType, // PERBAIKI: gunakan r#type
+    pub kind: TokenType,
     pub literal: String,
     pub line: usize,
     pub column: usize,
 }
 
 impl Token {
-    pub fn new(token_type: TokenType, literal: String, line: usize, column: usize) -> Self {
+    pub fn new(kind: TokenType, literal: String, line: usize, column: usize) -> Self {
         Token {
-            r#type: token_type, // PERBAIKI: gunakan r#type
+            kind,
             literal,
             line,
             column,
@@ -74,7 +75,7 @@ impl Token {
 
 // --- AST Nodes ---
 
-// --- Node Ekspresi ---
+// --- Expression Nodes ---
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Identifier(Identifier),
@@ -91,8 +92,18 @@ pub enum Expression {
     Array(ArrayLiteral),
     Index(IndexExpression),
     Range(RangeExpression),
-    StructLiteral(StructLiteral),  // NEW: Person { name: "x", age: 25 }
-    FieldAccess(FieldAccess),      // NEW: person.name
+    StructLiteral(StructLiteral),
+    FieldAccess(FieldAccess),
+    Assignment(AssignmentExpression),
+    Break,
+    Continue,
+}
+
+// Assignment expression: name = value
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssignmentExpression {
+    pub name: Identifier,
+    pub value: Box<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,7 +121,6 @@ pub struct BooleanLiteral {
     pub value: bool,
 }
 
-// NEW: String literal
 #[derive(Debug, Clone, PartialEq)]
 pub struct StringLiteral {
     pub value: String,
@@ -136,14 +146,12 @@ pub struct IfExpression {
     pub alternative: Option<BlockStatement>,
 }
 
-// NEW: While loop expression
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhileExpression {
     pub condition: Box<Expression>,
     pub body: BlockStatement,
 }
 
-// NEW: For loop expression
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForExpression {
     pub variable: Identifier,
@@ -151,20 +159,17 @@ pub struct ForExpression {
     pub body: BlockStatement,
 }
 
-// NEW: Range expression (0..10)
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeExpression {
     pub start: Box<Expression>,
     pub end: Box<Expression>,
 }
 
-// NEW: Array literal [1, 2, 3]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrayLiteral {
     pub elements: Vec<Expression>,
 }
 
-// NEW: Index expression arr[0]
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexExpression {
     pub left: Box<Expression>,
@@ -173,7 +178,7 @@ pub struct IndexExpression {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionLiteral {
-    pub name: Option<Identifier>,  // NEW: optional function name
+    pub name: Option<Identifier>,
     pub parameters: Vec<Identifier>,
     pub body: BlockStatement,
 }
@@ -184,13 +189,13 @@ pub struct CallExpression {
     pub arguments: Vec<Expression>,
 }
 
-// --- Node Pernyataan ---
+// --- Statement Nodes ---
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Let(LetStatement),
     Return(ReturnStatement),
     Expression(ExpressionStatement),
-    Struct(StructDefinition),  // NEW: struct definitions
+    Struct(StructDefinition),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,13 +219,13 @@ pub struct BlockStatement {
     pub statements: Vec<Statement>,
 }
 
-// --- Node Akar ---
+// --- Root Node ---
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>,
 }
 
-// NEW: Struct-related nodes
+// --- Struct-related Nodes ---
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
     pub name: Identifier,
@@ -230,13 +235,13 @@ pub struct StructDefinition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructField {
     pub name: Identifier,
-    pub type_hint: Option<String>,  // Optional type annotation
+    pub type_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructLiteral {
     pub name: Identifier,
-    pub fields: Vec<(Identifier, Expression)>,  // field: value pairs
+    pub fields: Vec<(Identifier, Expression)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
