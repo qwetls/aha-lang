@@ -25,10 +25,10 @@ impl Lexer {
         l
     }
 
-    // Baca karakter berikutnya dari input
+    // Read the next character from input and advance the position
     fn read_char(&mut self) {
         if self.read_position >= self.input.len() {
-            self.ch = '\0'; // Karakter null untuk EOF
+            self.ch = '\0'; // Null character for EOF
         } else {
             self.ch = self.input[self.read_position];
         }
@@ -37,7 +37,7 @@ impl Lexer {
         self.column += 1;
     }
 
-    // Lihat karakter di posisi berikutnya tanpa memajukan pointer
+    // Peek at the next character without advancing the position
     fn peek_char(&self) -> char {
         if self.read_position >= self.input.len() {
             '\0'
@@ -46,7 +46,7 @@ impl Lexer {
         }
     }
 
-    // Lewati whitespace dan update line/column
+    // Skip whitespace characters and track line/column
     fn skip_whitespace(&mut self) {
         while self.ch == ' ' || self.ch == '\t' || self.ch == '\r' || self.ch == '\n' {
             if self.ch == '\n' {
@@ -57,16 +57,18 @@ impl Lexer {
         }
     }
 
-    // Baca identifier atau keyword
+    // Read an identifier or keyword (alphanumeric + underscore)
     fn read_identifier(&mut self) -> String {
         let position = self.position;
-        while self.ch.is_alphabetic() || self.ch == '_' {
+        // First char is alphabetic or underscore (checked by caller)
+        // Subsequent chars can also be digits (e.g., my_var2)
+        while self.ch.is_alphanumeric() || self.ch == '_' {
             self.read_char();
         }
         self.input[position..self.position].iter().collect()
     }
 
-    // Baca angka (hanya integer untuk saat ini)
+    // Read an integer literal (digits only, for now)
     fn read_number(&mut self) -> String {
         let position = self.position;
         while self.ch.is_digit(10) {
@@ -75,19 +77,56 @@ impl Lexer {
         self.input[position..self.position].iter().collect()
     }
 
-    // NEW: Baca string literal
+    // Read a string literal with escape sequence support (\n, \t, \\, \", \r, \0)
     fn read_string(&mut self) -> String {
         self.read_char(); // Skip opening quote
-        let position = self.position;
+        let mut result = String::new();
         while self.ch != '"' && self.ch != '\0' {
+            if self.ch == '\\' {
+                self.read_char(); // Skip backslash
+                match self.ch {
+                    'n' => result.push('\n'),
+                    't' => result.push('\t'),
+                    'r' => result.push('\r'),
+                    '\\' => result.push('\\'),
+                    '"' => result.push('"'),
+                    '0' => result.push('\0'),
+                    _ => {
+                        // Unknown escape — keep as-is
+                        result.push('\\');
+                        result.push(self.ch);
+                    }
+                }
+            } else {
+                result.push(self.ch);
+            }
             self.read_char();
         }
-        let result: String = self.input[position..self.position].iter().collect();
         self.read_char(); // Skip closing quote
         result
     }
 
-    // Cek apakah identifier adalah keyword
+    // M-03: Skip multi-line comments /* ... */ (supports nested newlines)
+    fn skip_block_comment(&mut self) {
+        self.read_char(); // Skip '*' (already consumed '/')
+        loop {
+            if self.ch == '\0' {
+                break; // Unterminated comment — reached EOF
+            }
+            if self.ch == '\n' {
+                self.line += 1;
+                self.column = 0;
+            }
+            if self.ch == '*' && self.peek_char() == '/' {
+                self.read_char(); // Skip '*'
+                self.read_char(); // Skip '/'
+                break;
+            }
+            self.read_char();
+        }
+    }
+
+    // Check if an identifier is a reserved keyword
     fn lookup_identifier(&self, ident: &str) -> TokenType {
         match ident {
             "fn" => TokenType::Fn,
@@ -107,7 +146,7 @@ impl Lexer {
         }
     }
 
-    // Fungsi utama untuk mendapatkan token berikutnya
+    // Main function: get the next token from input
     pub fn next_token(&mut self) -> Token {
         let tok: Token;
 
@@ -120,8 +159,7 @@ impl Lexer {
             '=' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    let literal = format!("{}{}", self.ch, self.ch);
-                    tok = Token::new(TokenType::Eq, literal, line, column);
+                    tok = Token::new(TokenType::Eq, "==".to_string(), line, column);
                 } else {
                     tok = Token::new(TokenType::Assign, self.ch.to_string(), line, column);
                 }
@@ -129,8 +167,7 @@ impl Lexer {
             '!' => {
                 if self.peek_char() == '=' {
                     self.read_char();
-                    let literal = format!("{}{}", self.ch, self.ch);
-                    tok = Token::new(TokenType::NotEq, literal, line, column);
+                    tok = Token::new(TokenType::NotEq, "!=".to_string(), line, column);
                 } else {
                     tok = Token::new(TokenType::Bang, self.ch.to_string(), line, column);
                 }
@@ -140,10 +177,15 @@ impl Lexer {
             '*' => tok = Token::new(TokenType::Asterisk, self.ch.to_string(), line, column),
             '/' => {
                 if self.peek_char() == '/' {
-                    // Skip line comments
+                    // Single-line comment: skip until end of line
                     while self.ch != '\n' && self.ch != '\0' {
                         self.read_char();
                     }
+                    return self.next_token();
+                } else if self.peek_char() == '*' {
+                    // M-03: Multi-line comment /* ... */
+                    self.read_char(); // Skip '/'
+                    self.skip_block_comment();
                     return self.next_token();
                 } else {
                     tok = Token::new(TokenType::Slash, self.ch.to_string(), line, column);
@@ -184,12 +226,11 @@ impl Lexer {
             ']' => tok = Token::new(TokenType::RightBracket, self.ch.to_string(), line, column),
             '\0' => tok = Token::new(TokenType::Eof, "".to_string(), line, column),
             '"' => {
-                // String literal
                 let literal = self.read_string();
                 return Token::new(TokenType::String, literal, line, column);
             }
             _ => {
-                if self.ch.is_alphabetic() {
+                if self.ch.is_alphabetic() || self.ch == '_' {
                     let literal = self.read_identifier();
                     let token_type = self.lookup_identifier(&literal);
                     return Token::new(token_type, literal, line, column);
