@@ -18,6 +18,7 @@ fn parse(input: &str) -> Program {
 }
 
 /// Helper: parse and expect errors
+#[allow(dead_code)]
 fn parse_with_errors(input: &str) -> Vec<String> {
     let lexer = Lexer::new(input.to_string());
     let mut parser = Parser::new(lexer);
