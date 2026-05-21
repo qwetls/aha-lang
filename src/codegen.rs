@@ -5,7 +5,7 @@ use crate::types::{AhaType, TypedValue};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue, BasicValue};
+use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue};
 use inkwell::types::{IntType, StructType};
 use std::collections::HashMap;
 
@@ -276,7 +276,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         match statement {
             ast::Statement::Let(let_stmt) => {
                 let typed_val = self.compile_expression(&let_stmt.value)?;
-                let alloc_type = match &typed_val.aha_type {
+                let alloc_type: inkwell::types::BasicTypeEnum<'ctx> = match &typed_val.aha_type {
                     AhaType::String => self.string_type.into(),
                     _ => self.i64_type.into(),
                 };
