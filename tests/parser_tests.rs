@@ -298,7 +298,7 @@ fn test_assignment() {
     if let Statement::Expression(expr_stmt) = &program.statements[0] {
         if let Expression::Assignment(assign) = &expr_stmt.expression {
             assert_eq!(assign.name.value, "x");
-            if let Expression::Integer(i) = &assign.value {
+            if let Expression::Integer(i) = &*assign.value {
                 assert_eq!(i.value, 42);
             }
         } else {
