@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![AHA! Lang Logo](https://via.placeholder.com/150x150/000000/FFFFFF?text=AHA!)
+<img src="assets/logo.png" alt="AHA! Lang Logo" width="200">
 
 **A**dvanced **H**ybrid **A**rchitecture
 
@@ -16,27 +16,27 @@ A fast, expressive, and modern programming language designed for building anythi
 
 ---
 
-## ✨ Fitur Utama
+## ✨ Key Features
 
-AHA! dirancang dari awal untuk memberikan pengalaman pengembangan yang luar biasa:
+AHA! is designed from the ground up to deliver an outstanding developer experience:
 
-- **🚀 Performa Tinggi:** Dikompilasi ke LLVM IR untuk optimasi kode mesin yang maksimal, setara dengan C++.
-- **🧠 Sistem Tipe Cerdas:** Statis dengan inferensi tipe otomatis. Aman dari bug, namun tetap ringkas untuk ditulis.
-- **🔀 Konkurensi Aman:** Model Aktor bawaan untuk menulis kode paralel yang bebas dari race condition.
-- **🛠️ Manajemen Sumber Daya Kontrol Penuh:** Kontrol memori manual yang aman dengan "Resource Lifetimes", tanpa overhead Garbage Collector.
-- **📦 Ekosistem Modern:** Dibangun di atas Rust, memanfaatkan toolchain `Cargo` yang kuat.
+- **🚀 High Performance:** Compiles to LLVM IR for maximum machine code optimization, on par with C++.
+- **🧠 Smart Type System:** Static typing with automatic type inference. Safe from bugs, yet concise to write.
+- **🔀 Safe Concurrency:** Built-in Actor model for writing parallel code free from race conditions.
+- **🛠️ Full Resource Control:** Safe manual memory management with "Resource Lifetimes", without Garbage Collector overhead.
+- **📦 Modern Ecosystem:** Built on Rust, leveraging the powerful `Cargo` toolchain.
 
 ---
 
-## 🚀 Mulai Cepat
+## 🚀 Quick Start
 
-### Prasyarat
+### Prerequisites
 
-- **Rust** (versi 1.75 atau lebih baru)
-- **LLVM 14** dan library pendukung
+- **Rust** (version 1.75 or later)
+- **LLVM 14** and supporting libraries
 - **Clang 14**
 
-#### Instalasi di Ubuntu/Debian
+#### Installation on Ubuntu/Debian
 
 ```bash
 # Update package list
@@ -46,22 +46,22 @@ sudo apt-get update
 sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev zlib1g-dev
 ```
 
-### Mengompilasi dari Sumber
+### Building from Source
 
-1.  **Clone repositori:**
+1.  **Clone the repository:**
     ```bash
     git clone https://github.com/ahalang-dev/aha-lang.git
     cd aha-lang
     ```
 
-2.  **Jalankan Kompilator:**
+2.  **Run the Compiler:**
     ```bash
-    cargo run -- --file <nama_file>.aha
+    cargo run -- --file <filename>.aha
     ```
 
-### Contoh Kode
+### Code Example
 
-Buat file bernama `contoh.aha`:
+Create a file called `example.aha`:
 
 ```aha
 let x = 10;
@@ -74,15 +74,15 @@ if x > y {
 }
 ```
 
-Jalankan:
+Run it:
 ```bash
-cargo run -- --file contoh.aha
+cargo run -- --file example.aha
 ```
 
-**Output yang Diharapkan:**
+**Expected Output:**
 ```
 --- AHA! COMPILER v1.3 ---
-Reading file: contoh.aha
+Reading file: example.aha
 
 [1] LEXING...
 [2] PARSING...
@@ -102,51 +102,53 @@ Program executed successfully. Result: 20
 
 ---
 
-## 🧠 Arsitektur Kompiler
+## 🧠 Compiler Architecture
 
-Kompiler AHA! dibangun dengan arsitektur modern dan modular:
+The AHA! compiler is built with a modern, modular architecture:
 
-1.  **Lexer:** Memecah kode sumber menjadi token-token.
-2.  **Parser:** Mengurai token menjadi Abstract Syntax Tree (AST) menggunakan Pratt Parser.
-3.  **Code Generator:** Menerjemahkan AST menjadi LLVM Intermediate Representation (IR).
-4.  **LLVM Backend:** Mengoptimalkan dan mengompilasi IR menjadi kode mesin asli.
+```
+Source Code → Lexer → Parser → Code Generator → LLVM Backend → Native Binary
+```
 
-![Architecture Diagram](https://via.placeholder.com/600x300/CCCCCC/000000?text=Lexer+->+Parser+->+Codegen+->+LLVM)
+1.  **Lexer:** Breaks source code into tokens.
+2.  **Parser:** Transforms tokens into an Abstract Syntax Tree (AST) using a Pratt Parser.
+3.  **Code Generator:** Translates the AST into LLVM Intermediate Representation (IR).
+4.  **LLVM Backend:** Optimizes and compiles IR into native machine code.
 
 ---
 
-## 🛣️ Peta Jalan (Roadmap)
+## 🛣️ Roadmap
 
-AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
+AHA! is still in early development. Here is our plan:
 
-- [x] **Milestone 1: Fondasi Kompiler**
+- [x] **Milestone 1: Compiler Foundation**
     - [x] Lexer & Parser
-    - [x] Tipe data Integer
-    - [x] Ekspresi Aritmatika & Perbandingan
-    - [x] Pernyataan Kondisional `if/else`
-- [x] **Milestone 2: Fitur Fundamental** ✅
-    - [x] Tipe data `Boolean` (codegen)
-    - [x] Operator `<=`, `>=`, `!=` (fixed)
-    - [x] Pernyataan Perulangan `while` ✅
-    - [x] Pernyataan Perulangan `for` (parser + codegen) ✅
-    - [x] Fungsi dengan parameter ✅
-    - [x] Statement `return` ✅
+    - [x] Integer data type
+    - [x] Arithmetic & Comparison expressions
+    - [x] Conditional statements `if/else`
+- [x] **Milestone 2: Fundamental Features** ✅
+    - [x] `Boolean` data type (codegen)
+    - [x] Operators `<=`, `>=`, `!=` (fixed)
+    - [x] `while` loop ✅
+    - [x] `for` loop (parser + codegen) ✅
+    - [x] Functions with parameters ✅
+    - [x] `return` statement ✅
     - [x] Prefix expressions `-x`, `!x` ✅
     - [x] Assignment `x = value` ✅
     - [x] Break & Continue ✅
     - [x] Variable scoping (block-level) ✅
-- [x] **Milestone 3: Struktur Data Tingkat Lanjut** ✅
+- [x] **Milestone 3: Advanced Data Structures** ✅
     - [x] String type (pointer-as-int, limited)
     - [x] Array (parser + codegen)
     - [x] Struct definitions (parser only)
     - [x] Field access (parser only)
-- [x] **Milestone 4: Pustaka Standar** ✅
-    - [x] print(int) - print integers
-    - [x] print_str(string) - print strings
-    - [x] abs(x) - absolute value
-    - [x] min(a, b) - minimum
-    - [x] max(a, b) - maximum
-- [x] **Milestone 5: Tooling & Ekosistem** ✅
+- [x] **Milestone 4: Standard Library** ✅
+    - [x] print(int) — print integers
+    - [x] print_str(string) — print strings
+    - [x] abs(x) — absolute value
+    - [x] min(a, b) — minimum
+    - [x] max(a, b) — maximum
+- [x] **Milestone 5: Tooling & Ecosystem** ✅
     - [x] VS Code Extension (syntax highlighting)
     - [x] CLI improvements (--emit-ir, --version)
     - [x] Better error messages
@@ -181,22 +183,22 @@ AHA! masih dalam pengembangan awal. Ini adalah rencana kami:
 
 ---
 
-## 🤝 Berkontribusi
+## 🤝 Contributing
 
-Kami sangat terbuka untuk kontribusi! Baik itu melaporkan bug, menyarankan fitur baru, atau berkontribusi kode.
+We welcome contributions of all kinds! Whether it's reporting bugs, suggesting new features, or contributing code.
 
-Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk panduan lebih lanjut.
-
----
-
-## 📄 Lisensi
-
-Proyek ini dilisensikan di bawah Lisensi MIT. Lihat file [LICENSE](LICENSE) untuk detailnya.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
-## 💡 Mengapa AHA!?
+## 📄 License
 
-Kami percaya bahwa pemrograman harus lebih dekat dengan cara berpikir manusia. AHA! bertujuan untuk menghilangkan boilerplate dan kompleksitas yang tidak perlu, memungkinkan Anda untuk fokus pada logika dan solusi yang Anda bangun.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-**Bergabunglah dengan kami dalam menciptakan generasi berikutnya dari bahasa pemrograman!**
+---
+
+## 💡 Why AHA!?
+
+We believe programming should be closer to the way humans think. AHA! aims to eliminate unnecessary boilerplate and complexity, allowing you to focus on the logic and solutions you're building.
+
+**Join us in creating the next generation of programming languages!**
