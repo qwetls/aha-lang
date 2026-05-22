@@ -364,3 +364,288 @@ fn test_function_call() {
         }
     }
 }
+
+// =====================================================================
+// Grouped / Parenthesized Expressions
+// =====================================================================
+
+#[test]
+fn test_grouped_expression() {
+    // (1 + 2) * 3 should parse as (* (+ 1 2) 3)
+    let program = parse("(1 + 2) * 3");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(infix) = &expr_stmt.expression {
+            assert_eq!(infix.operator, "*");
+            // Left side should be the grouped (1 + 2)
+            if let Expression::Infix(left) = infix.left.as_ref() {
+                assert_eq!(left.operator, "+");
+            } else {
+                panic!("Left side should be infix (1 + 2)");
+            }
+        } else {
+            panic!("Expected Infix expression");
+        }
+    }
+}
+
+#[test]
+fn test_nested_grouped_expression() {
+    let program = parse("((1 + 2))");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(infix) = &expr_stmt.expression {
+            assert_eq!(infix.operator, "+");
+        } else {
+            panic!("Expected Infix expression inside nested parens");
+        }
+    }
+}
+
+// =====================================================================
+// Range Expressions
+// =====================================================================
+
+#[test]
+fn test_range_expression() {
+    let program = parse("0..10");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Range(range) = &expr_stmt.expression {
+            if let Expression::Integer(start) = range.start.as_ref() {
+                assert_eq!(start.value, 0);
+            } else {
+                panic!("Expected Integer start");
+            }
+            if let Expression::Integer(end) = range.end.as_ref() {
+                assert_eq!(end.value, 10);
+            } else {
+                panic!("Expected Integer end");
+            }
+        } else {
+            panic!("Expected Range expression");
+        }
+    }
+}
+
+// =====================================================================
+// Chained Arithmetic
+// =====================================================================
+
+#[test]
+fn test_chained_arithmetic() {
+    // 1 + 2 + 3 should left-associate: ((1 + 2) + 3)
+    let program = parse("1 + 2 + 3");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(outer) = &expr_stmt.expression {
+            assert_eq!(outer.operator, "+");
+            // Left should be (1 + 2)
+            if let Expression::Infix(inner) = outer.left.as_ref() {
+                assert_eq!(inner.operator, "+");
+            } else {
+                panic!("Expected left-associative chaining");
+            }
+            // Right should be 3
+            if let Expression::Integer(r) = outer.right.as_ref() {
+                assert_eq!(r.value, 3);
+            } else {
+                panic!("Expected Integer on right");
+            }
+        } else {
+            panic!("Expected Infix expression");
+        }
+    }
+}
+
+#[test]
+fn test_mixed_arithmetic_precedence() {
+    // 1 * 2 + 3 should parse as ((1 * 2) + 3)
+    let program = parse("1 * 2 + 3");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(outer) = &expr_stmt.expression {
+            assert_eq!(outer.operator, "+");
+            if let Expression::Infix(left) = outer.left.as_ref() {
+                assert_eq!(left.operator, "*");
+            } else {
+                panic!("Expected multiplication on left");
+            }
+        } else {
+            panic!("Expected Infix expression");
+        }
+    }
+}
+
+// =====================================================================
+// Nested Function Calls
+// =====================================================================
+
+#[test]
+fn test_nested_function_call() {
+    let program = parse("add(mul(1, 2), 3)");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Call(call) = &expr_stmt.expression {
+            assert_eq!(call.arguments.len(), 2);
+            // First arg should be a Call(mul)
+            assert!(matches!(&call.arguments[0], Expression::Call(_)));
+        } else {
+            panic!("Expected Call expression");
+        }
+    }
+}
+
+#[test]
+fn test_function_call_no_args() {
+    let program = parse("foo()");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Call(call) = &expr_stmt.expression {
+            assert_eq!(call.arguments.len(), 0);
+        } else {
+            panic!("Expected Call expression");
+        }
+    }
+}
+
+// =====================================================================
+// Empty Array
+// =====================================================================
+
+#[test]
+fn test_empty_array() {
+    let program = parse("[]");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Array(arr) = &expr_stmt.expression {
+            assert_eq!(arr.elements.len(), 0);
+        } else {
+            panic!("Expected empty Array expression");
+        }
+    }
+}
+
+// =====================================================================
+// Index with Complex Expressions
+// =====================================================================
+
+#[test]
+fn test_index_with_arithmetic() {
+    let program = parse("arr[1 + 2]");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Index(idx) = &expr_stmt.expression {
+            // left should be identifier "arr"
+            assert!(matches!(idx.left.as_ref(), Expression::Identifier(_)));
+            // index should be infix (1 + 2)
+            assert!(matches!(idx.index.as_ref(), Expression::Infix(_)));
+        } else {
+            panic!("Expected Index expression");
+        }
+    }
+}
+
+// =====================================================================
+// String in Expressions
+// =====================================================================
+
+#[test]
+fn test_string_expression_standalone() {
+    let program = parse("\"hello world\"");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::String(s) = &expr_stmt.expression {
+            assert_eq!(s.value, "hello world");
+        } else {
+            panic!("Expected String expression");
+        }
+    }
+}
+
+#[test]
+fn test_string_concatenation_parse() {
+    let program = parse("\"hello\" + \"world\"");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(infix) = &expr_stmt.expression {
+            assert_eq!(infix.operator, "+");
+            assert!(matches!(infix.left.as_ref(), Expression::String(_)));
+            assert!(matches!(infix.right.as_ref(), Expression::String(_)));
+        } else {
+            panic!("Expected Infix expression for string concat");
+        }
+    }
+}
+
+// =====================================================================
+// Complex Nested Expressions
+// =====================================================================
+
+#[test]
+fn test_deeply_nested_if_else() {
+    let program = parse("if a > 0 { if b > 0 { if c > 0 { 1 } else { 2 } } else { 3 } } else { 4 }");
+    assert_eq!(program.statements.len(), 1);
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        assert!(matches!(&expr_stmt.expression, Expression::If(_)));
+    } else {
+        panic!("Expected expression statement");
+    }
+}
+
+#[test]
+fn test_while_with_complex_condition() {
+    let program = parse("while x > 0 { x }");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::While(w) = &expr_stmt.expression {
+            // Condition should be an infix (x > 0)
+            assert!(matches!(w.condition.as_ref(), Expression::Infix(_)));
+        } else {
+            panic!("Expected While expression");
+        }
+    }
+}
+
+#[test]
+fn test_prefix_chain() {
+    // !!true should parse as !(!(true))
+    let program = parse("!!true");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Prefix(outer) = &expr_stmt.expression {
+            assert_eq!(outer.operator, "!");
+            if let Expression::Prefix(inner) = outer.right.as_ref() {
+                assert_eq!(inner.operator, "!");
+                assert!(matches!(inner.right.as_ref(), Expression::Boolean(_)));
+            } else {
+                panic!("Expected nested Prefix");
+            }
+        } else {
+            panic!("Expected Prefix expression");
+        }
+    }
+}
+
+#[test]
+fn test_negative_in_arithmetic() {
+    // -5 + 3 should parse as ((-5) + 3)
+    let program = parse("-5 + 3");
+    if let Statement::Expression(expr_stmt) = &program.statements[0] {
+        if let Expression::Infix(infix) = &expr_stmt.expression {
+            assert_eq!(infix.operator, "+");
+            assert!(matches!(infix.left.as_ref(), Expression::Prefix(_)));
+        } else {
+            panic!("Expected Infix expression");
+        }
+    }
+}
+
+// =====================================================================
+// Parser Error Cases
+// =====================================================================
+
+#[test]
+fn test_error_missing_closing_paren() {
+    let errors = parse_with_errors("(1 + 2");
+    assert!(!errors.is_empty(), "Expected parser errors for missing ')'");
+}
+
+#[test]
+fn test_error_missing_let_identifier() {
+    let errors = parse_with_errors("let = 42;");
+    assert!(!errors.is_empty(), "Expected parser errors for missing identifier");
+}
+
+#[test]
+fn test_error_missing_assign_in_let() {
+    let errors = parse_with_errors("let x 42;");
+    assert!(!errors.is_empty(), "Expected parser errors for missing '='");
+}
