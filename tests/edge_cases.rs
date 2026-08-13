@@ -176,7 +176,7 @@ fn test_parser_only_semicolons() {
     // Semicolons alone should not crash the parser.
     // The parser will try to parse them as expression statements;
     // since Semicolon has no prefix parser, it produces errors but should not panic.
-    let lexer = Lexer::new(";;;");
+    let lexer = Lexer::new(";;;".to_string());
     let mut parser = Parser::new(lexer);
     let program = parser.parse_program();
     // Parser should complete without panicking.
