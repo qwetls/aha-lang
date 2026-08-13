@@ -559,6 +559,7 @@ impl Parser {
             TokenType::Asterisk => Precedence::Product,
             TokenType::LeftParen => Precedence::Call,
             TokenType::LeftBracket => Precedence::Index,
+            TokenType::Dot => Precedence::Index,
             _ => Precedence::Lowest,
         }
     }
