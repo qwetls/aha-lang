@@ -40,9 +40,8 @@ jobs:
         run: cargo check --verbose
 
       # Step 4: Jalankan semua test yang ada
-      # NOTE: single-threaded so a JIT segfault is attributable to one test
       - name: Run tests
-        run: cargo test --verbose -- --test-threads=1
+        run: cargo test --verbose
 
       # Step 5: Build aplikasi dalam mode release
       - name: Build project
