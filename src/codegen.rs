@@ -721,14 +721,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
             .map_err(|e| e.to_string())?;
-        let mut incoming = Vec::new();
         if !consequence_terminated {
-            incoming.push((&consequence_tv.value, consequence_end_block));
+            phi_node.add_incoming(&[(&consequence_tv.value as &dyn inkwell::values::BasicValue, consequence_end_block)]);
         }
         if !alternative_terminated {
-            incoming.push((&alternative_tv.value, alternative_end_block));
+            phi_node.add_incoming(&[(&alternative_tv.value as &dyn inkwell::values::BasicValue, alternative_end_block)]);
         }
-        phi_node.add_incoming(&incoming);
         Ok(TypedValue::new(phi_node.as_basic_value(), consequence_tv.aha_type))
     }
     
