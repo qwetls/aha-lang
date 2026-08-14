@@ -1075,6 +1075,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let cond_block = self.context.append_basic_block(function, "for_cond");
         let body_block = self.context.append_basic_block(function, "for_body");
+        let increment_block = self.context.append_basic_block(function, "for_incr");
         let after_block = self.context.append_basic_block(function, "for_after");
         self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
 
@@ -1086,19 +1087,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         ).map_err(|e| e.to_string())?;
         self.builder.build_conditional_branch(cond, body_block, after_block).map_err(|e| e.to_string())?;
 
+        // 'continue' must jump to the increment block, not the condition
+        // block, otherwise the loop variable never advances (infinite loop).
         self.builder.position_at_end(body_block);
-        self.loop_stack.push((cond_block, after_block));
+        self.loop_stack.push((increment_block, after_block));
         self.compile_block_statement(&for_expr.body)?;
         self.loop_stack.pop();
 
         let body_end = self.builder.get_insert_block().unwrap();
         if body_end.get_terminator().is_none() {
-            let current = self.builder.build_load(loop_var_ptr, "cur").map_err(|e| e.to_string())?;
-            let next = self.builder.build_int_add(current.into_int_value(), self.i64_type.const_int(1, false), "next")
-                .map_err(|e| e.to_string())?;
-            self.builder.build_store(loop_var_ptr, next).map_err(|e| e.to_string())?;
-            self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
+            self.builder.build_unconditional_branch(increment_block).map_err(|e| e.to_string())?;
         }
+
+        self.builder.position_at_end(increment_block);
+        let current = self.builder.build_load(loop_var_ptr, "cur").map_err(|e| e.to_string())?;
+        let next = self.builder.build_int_add(current.into_int_value(), self.i64_type.const_int(1, false), "next")
+            .map_err(|e| e.to_string())?;
+        self.builder.build_store(loop_var_ptr, next).map_err(|e| e.to_string())?;
+        self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
 
         self.builder.position_at_end(after_block);
         Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
