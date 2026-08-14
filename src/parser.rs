@@ -23,6 +23,7 @@ pub struct Parser {
 #[derive(Debug, PartialEq, PartialOrd)]
 pub enum Precedence {
     Lowest,
+    Logical,     // && or ||
     Assign,      // =
     Equals,      // == or !=
     LessGreater, // > or < or <= or >=
@@ -548,8 +549,8 @@ impl Parser {
         match t {
             TokenType::Eq => Precedence::Equals,
             TokenType::NotEq => Precedence::Equals,
-            TokenType::And => Precedence::Equals,
-            TokenType::Or => Precedence::Equals,
+            TokenType::And => Precedence::Logical,
+            TokenType::Or => Precedence::Logical,
             TokenType::LT => Precedence::LessGreater,
             TokenType::GT => Precedence::LessGreater,
             TokenType::LtEq => Precedence::LessGreater,

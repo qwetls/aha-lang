@@ -201,10 +201,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         })
                         .collect();
-                    let fn_type = self.i64_type.fn_type(&param_types, false);
+                    let return_type = self.infer_function_return_type(func, &func_name);
+                    let fn_type = match return_type {
+                        AhaType::String => self.string_type.fn_type(&param_types, false),
+                        _ => self.i64_type.fn_type(&param_types, false),
+                    };
                     let function = self.module.add_function(&func_name, fn_type, None);
                     self.functions.insert(func_name.clone(), function);
-                    self.fn_types.insert(func_name, AhaType::Int);
+                    self.fn_types.insert(func_name, return_type);
                 }
             }
         }
@@ -252,6 +256,112 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             _ => AhaType::Int,
         }
+    }
+
+    /// Infer a function's return type for the pre-declaration pass.
+    /// Walks the body looking for the last expression value or an
+    /// explicit `return` statement, then types that expression with
+    /// the function's own params in scope (so `a + b` is String when
+    /// a and b are string params).
+    fn infer_function_return_type(&self, func: &ast::FunctionLiteral, func_name: &str) -> AhaType {
+        let param_types = self.infer_param_types_immutable(func_name, &func.parameters);
+
+        // Build a synthetic scope so infer_expr_type_with_scope can resolve params.
+        let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
+            .map(|(i, p)| (p.value.clone(), param_types.get(i).cloned().unwrap_or(AhaType::Int)))
+            .collect();
+
+        for stmt in &func.body.statements {
+            if let ast::Statement::Return(ret) = stmt {
+                return self.infer_expr_type_with_scope(&ret.return_value, &scope);
+            }
+        }
+        // No explicit return — type the last expression statement.
+        for stmt in func.body.statements.iter().rev() {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                return self.infer_expr_type_with_scope(&expr_stmt.expression, &scope);
+            }
+        }
+        AhaType::Int
+    }
+
+    /// Immutable variant of infer_param_types for the pre-pass (when we
+    /// cannot call the &mut self version). Reads from param_type_map.
+    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+        let mut types = vec![AhaType::Int; params.len()];
+        if let Some(inferred) = self.param_type_map.get(func_name) {
+            for (i, t) in inferred.iter().enumerate() {
+                if i < types.len() {
+                    types[i] = t.clone();
+                }
+            }
+        }
+        types
+    }
+
+    /// Like infer_expr_type, but with a synthetic local scope (used by
+    /// the pre-declaration pass to resolve function params).
+    fn infer_expr_type_with_scope(&self, expr: &ast::Expression, scope: &HashMap<String, AhaType>) -> AhaType {
+        match expr {
+            ast::Expression::String(_) => AhaType::String,
+            ast::Expression::Integer(_) => AhaType::Int,
+            ast::Expression::Boolean(_) => AhaType::Bool,
+            ast::Expression::Identifier(id) => {
+                scope.get(&id.value).cloned().unwrap_or(AhaType::Int)
+            }
+            ast::Expression::Infix(infix) => {
+                let lt = self.infer_expr_type_with_scope(&infix.left, scope);
+                let rt = self.infer_expr_type_with_scope(&infix.right, scope);
+                match infix.operator.as_str() {
+                    "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Bool,
+                    _ => AhaType::Int,
+                }
+            }
+            ast::Expression::Prefix(prefix) => {
+                if prefix.operator == "!" {
+                    AhaType::Bool
+                } else {
+                    AhaType::Int
+                }
+            }
+            ast::Expression::Call(call) => {
+                if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    if id.value == "len" {
+                        return AhaType::Int;
+                    }
+                    if let Some(rt) = self.fn_types.get(&id.value) {
+                        return rt.clone();
+                    }
+                }
+                AhaType::Int
+            }
+            ast::Expression::If(if_expr) => {
+                let cons = self.infer_block_return_type(&if_expr.consequence, scope);
+                if let Some(alt) = &if_expr.alternative {
+                    let alt_t = self.infer_block_return_type(alt, scope);
+                    if alt_t == AhaType::String || cons == AhaType::String {
+                        return AhaType::String;
+                    }
+                }
+                cons
+            }
+            _ => AhaType::Int,
+        }
+    }
+
+    fn infer_block_return_type(&self, block: &ast::BlockStatement, scope: &HashMap<String, AhaType>) -> AhaType {
+        for stmt in &block.statements {
+            if let ast::Statement::Return(ret) = stmt {
+                return self.infer_expr_type_with_scope(&ret.return_value, scope);
+            }
+        }
+        for stmt in block.statements.iter().rev() {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                return self.infer_expr_type_with_scope(&expr_stmt.expression, scope);
+            }
+        }
+        AhaType::Int
     }
 
     /// Get i8* pointer type (used frequently for strings)
@@ -823,6 +933,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         // in already-compiled code for this function name
         let param_aha_types = self.infer_param_types(&func_name, &func.parameters);
 
+        // Determine return type — reuse the pre-declared type if present
+        // (set by predeclare_functions), otherwise infer it now.
+        let return_type = self.fn_types.get(&func_name)
+            .cloned()
+            .unwrap_or_else(|| self.infer_function_return_type(func, &func_name));
+
         // Reuse pre-declared function if it exists (for forward references)
         let function = if let Some(f) = self.functions.get(&func_name) {
             *f
@@ -833,12 +949,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                     _ => self.i64_type.into(),
                 })
                 .collect();
-            let fn_type = self.i64_type.fn_type(&param_types, false);
+            let fn_type = match return_type {
+                AhaType::String => self.string_type.fn_type(&param_types, false),
+                _ => self.i64_type.fn_type(&param_types, false),
+            };
             let function = self.module.add_function(&func_name, fn_type, None);
             self.functions.insert(func_name.clone(), function);
             function
         };
-        self.fn_types.insert(func_name.clone(), AhaType::Int);
+        self.fn_types.insert(func_name.clone(), return_type.clone());
 
         let saved_block = self.builder.get_insert_block();
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
@@ -863,9 +982,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(|e| e.to_string())?;
                 self.insert_variable(param.value.clone(), alloca, aha_type.clone());
             }
-            
+
             let mut has_return = false;
-            let mut last_value: BasicValueEnum<'ctx> = self.i64_type.const_int(0, false).into();
+            let mut last_value: BasicValueEnum<'ctx> = match &return_type {
+                AhaType::String => self.string_type.const_zero().into(),
+                _ => self.i64_type.const_int(0, false).into(),
+            };
             
             for stmt in &func.body.statements {
                 if let ast::Statement::Return(_) = stmt {
