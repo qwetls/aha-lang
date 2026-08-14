@@ -692,7 +692,7 @@ fn test_string_concat_in_function() {
         let full = first + space + last;
         len(full)
     "#;
-    assert_eq!(run(src), 13); // "al khwarizmi" = 13
+    assert_eq!(run(src), 12); // "al khwarizmi" = 12 chars
 }
 
 // =====================================================================
