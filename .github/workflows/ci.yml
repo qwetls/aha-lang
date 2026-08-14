@@ -40,8 +40,10 @@ jobs:
         run: cargo check --verbose
 
       # Step 4: Jalankan semua test yang ada
+      # LLVM JIT tidak thread-safe — multiple Context::create() + JIT
+      # secara paralel bisa SIGSEGV. Run single-threaded.
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose -- --test-threads=1
 
       # Step 5: Build aplikasi dalam mode release
       - name: Build project
