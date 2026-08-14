@@ -65,9 +65,11 @@ impl AhaType {
             // Bool comparison: bool == bool → bool
             (AhaType::Bool, "==" | "!=", AhaType::Bool) => Ok(AhaType::Bool),
 
-            // Logical AND/OR: int/bool op int/bool → bool
-            (AhaType::Int, "&&" | "||", AhaType::Int) => Ok(AhaType::Bool),
-            (AhaType::Bool, "&&" | "||", AhaType::Bool) => Ok(AhaType::Bool),
+            // Logical AND/OR: int/bool op int/bool → int (0 or 1)
+            // Returns Int (not Bool) so logical results compose with
+            // arithmetic like in C: (a && b) * weight.
+            (AhaType::Int, "&&" | "||", AhaType::Int) => Ok(AhaType::Int),
+            (AhaType::Bool, "&&" | "||", AhaType::Bool) => Ok(AhaType::Int),
 
             // Everything else is a type error
             _ => Err(format!(

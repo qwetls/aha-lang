@@ -230,7 +230,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rt = self.infer_expr_type(&infix.right);
                 match infix.operator.as_str() {
                     "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Bool,
+                    "&&" | "||" => AhaType::Int,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" => AhaType::Bool,
                     _ => AhaType::Int,
                 }
             }
@@ -314,7 +315,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rt = self.infer_expr_type_with_scope(&infix.right, scope);
                 match infix.operator.as_str() {
                     "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Bool,
+                    "&&" | "||" => AhaType::Int,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" => AhaType::Bool,
                     _ => AhaType::Int,
                 }
             }
@@ -889,7 +891,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| e.to_string())?;
         let ext = self.builder.build_int_z_extend(result, self.i64_type, "and_ext")
             .map_err(|e| e.to_string())?;
-        Ok(TypedValue::bool_val(ext.into()))
+        Ok(TypedValue::int(ext.into()))
     }
 
     /// Logical OR: both operands are already evaluated by compile_infix.
@@ -906,7 +908,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| e.to_string())?;
         let ext = self.builder.build_int_z_extend(result, self.i64_type, "or_ext")
             .map_err(|e| e.to_string())?;
-        Ok(TypedValue::bool_val(ext.into()))
+        Ok(TypedValue::int(ext.into()))
     }
 
     /// Infer parameter types by scanning call expressions in the program.
