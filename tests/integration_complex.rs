@@ -1320,3 +1320,344 @@ fn test_largest_prime_factor_check() {
     "#;
     assert_eq!(run(src), 1); // 2^17 - 1 = 131071 is prime
 }
+
+// =====================================================================
+// NEW: Modulo Operator (%)
+// =====================================================================
+
+#[test]
+fn test_modulo_basic() {
+    assert_eq!(run("10 % 3"), 1);
+}
+
+#[test]
+fn test_modulo_exact() {
+    assert_eq!(run("12 % 4"), 0);
+}
+
+#[test]
+fn test_modulo_expression() {
+    assert_eq!(run("(17 % 5) + 3"), 5); // 2 + 3 = 5
+}
+
+#[test]
+fn test_modulo_precedence() {
+    // % same precedence as * and /: 10 + 17 % 5 * 2 = 10 + (17%5)*2 = 10 + 4 = 14
+    assert_eq!(run("10 + 17 % 5 * 2"), 14);
+}
+
+#[test]
+fn test_modulo_in_loop() {
+    // Sum of even numbers 1..10 = 2+4+6+8+10 = 30
+    let src = r#"
+        let total = 0;
+        let i = 1;
+        while i <= 10 {
+            if i % 2 == 0 {
+                total = total + i;
+            }
+            i = i + 1;
+        }
+        total
+    "#;
+    assert_eq!(run(src), 30);
+}
+
+#[test]
+fn test_modulo_in_function() {
+    let src = r#"
+        fn is_even(n) {
+            n % 2 == 0
+        }
+        is_even(42) * 100 + is_even(7)
+    "#;
+    assert_eq!(run(src), 100); // 1*100 + 0 = 100
+}
+
+#[test]
+fn test_modulo_gcd_clean() {
+    // Now GCD can use % directly instead of a - (a/b)*b
+    let src = r#"
+        fn gcd(a, b) {
+            while b > 0 {
+                let r = a % b;
+                a = b;
+                b = r;
+            }
+            return a;
+        }
+        gcd(252, 105)
+    "#;
+    assert_eq!(run(src), 21); // gcd(252,105) = 21
+}
+
+#[test]
+fn test_modulo_negative() {
+    // Rust/LLVM srem: -7 % 3 = -1
+    assert_eq!(run("-7 % 3"), -1);
+}
+
+// =====================================================================
+// NEW: Logical AND (&&) and OR (||)
+// =====================================================================
+
+#[test]
+fn test_logical_and_true() {
+    assert_eq!(run("true && true"), 1);
+}
+
+#[test]
+fn test_logical_and_false() {
+    assert_eq!(run("true && false"), 0);
+}
+
+#[test]
+fn test_logical_or_true() {
+    assert_eq!(run("false || true"), 1);
+}
+
+#[test]
+fn test_logical_or_false() {
+    assert_eq!(run("false || false"), 0);
+}
+
+#[test]
+fn test_logical_int_operands() {
+    // Non-zero is truthy
+    assert_eq!(run("5 && 0"), 0);
+    assert_eq!(run("5 && 3"), 1);
+    assert_eq!(run("0 || 7"), 1);
+}
+
+#[test]
+fn test_logical_combined_conditions() {
+    // Check if a number is in [10, 20] or exactly 30
+    let src = r#"
+        fn in_range(n) {
+            (n >= 10 && n <= 20) || n == 30
+        }
+        in_range(15) * 100 + in_range(25) * 10 + in_range(30)
+    "#;
+    // 1*100 + 0*10 + 1 = 101
+    assert_eq!(run(src), 101);
+}
+
+#[test]
+fn test_logical_in_loop() {
+    // Count numbers 1..20 that are divisible by 3 AND 5 (i.e., 15)
+    let src = r#"
+        let count = 0;
+        let i = 1;
+        while i <= 20 {
+            if i % 3 == 0 && i % 5 == 0 {
+                count = count + 1;
+            }
+            i = i + 1;
+        }
+        count
+    "#;
+    assert_eq!(run(src), 1); // only 15
+}
+
+#[test]
+fn test_logical_priority_over_comparison() {
+    // && should bind tighter than comparison:
+    // (5 > 3) && (2 < 4) = true && true = 1
+    assert_eq!(run("5 > 3 && 2 < 4"), 1);
+    // (5 > 3) && (2 > 4) = true && false = 0
+    assert_eq!(run("5 > 3 && 2 > 4"), 0);
+}
+
+// =====================================================================
+// NEW: break/continue
+// =====================================================================
+
+#[test]
+fn test_break_while_loop() {
+    let src = r#"
+        let i = 0;
+        while i < 100 {
+            if i == 5 {
+                break;
+            }
+            i = i + 1;
+        }
+        i
+    "#;
+    assert_eq!(run(src), 5); // breaks at 5
+}
+
+#[test]
+fn test_break_for_loop() {
+    let src = r#"
+        let total = 0;
+        for i in 0..100 {
+            if i == 10 {
+                break;
+            }
+            total = total + i;
+        }
+        total
+    "#;
+    assert_eq!(run(src), 45); // 0+1+...+9 = 45
+}
+
+#[test]
+fn test_continue_while_loop() {
+    // Sum of numbers 1..10 skipping evens: 1+3+5+7+9 = 25
+    let src = r#"
+        let total = 0;
+        let i = 0;
+        while i < 10 {
+            i = i + 1;
+            if i % 2 == 0 {
+                continue;
+            }
+            total = total + i;
+        }
+        total
+    "#;
+    assert_eq!(run(src), 25);
+}
+
+#[test]
+fn test_continue_for_loop() {
+    // Sum of squares of odds 1..10: 1+9+25+49+81 = 165
+    let src = r#"
+        let total = 0;
+        for i in 1..11 {
+            if i % 2 == 0 {
+                continue;
+            }
+            total = total + i * i;
+        }
+        total
+    "#;
+    assert_eq!(run(src), 165);
+}
+
+#[test]
+fn test_break_nested_loop() {
+    // Break only exits the inner loop
+    let src = r#"
+        let count = 0;
+        let i = 0;
+        while i < 3 {
+            let j = 0;
+            while j < 100 {
+                if j == 2 {
+                    break;
+                }
+                count = count + 1;
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        count
+    "#;
+    assert_eq!(run(src), 6); // 3 outer iterations × 2 inner before break
+}
+
+#[test]
+fn test_break_and_continue_combined() {
+    // Collatz-like: find first power of 2 above 100 via continue/break
+    let src = r#"
+        let n = 1;
+        let found = 0;
+        while true {
+            if n < 100 {
+                n = n * 2;
+                continue;
+            }
+            found = n;
+            break;
+        }
+        found
+    "#;
+    // 1→2→4→8→16→32→64→128 → found = 128
+    assert_eq!(run(src), 128);
+}
+
+// =====================================================================
+// NEW: Mutual recursion (forward references)
+// =====================================================================
+
+#[test]
+fn test_mutual_recursion_even_odd() {
+    let src = r#"
+        fn is_even(n) {
+            if n == 0 {
+                return 1;
+            }
+            return is_odd(n - 1);
+        }
+        fn is_odd(n) {
+            if n == 0 {
+                return 0;
+            }
+            return is_even(n - 1);
+        }
+        is_even(10) * 100 + is_odd(7) * 10 + is_even(3)
+    "#;
+    // is_even(10)=1, is_odd(7)=1, is_even(3)=0 → 110
+    assert_eq!(run(src), 110);
+}
+
+#[test]
+fn test_mutual_recursion_small() {
+    let src = r#"
+        fn is_even(n) {
+            if n == 0 {
+                return 1;
+            }
+            return is_odd(n - 1);
+        }
+        fn is_odd(n) {
+            if n == 0 {
+                return 0;
+            }
+            return is_even(n - 1);
+        }
+        is_even(0)
+    "#;
+    assert_eq!(run(src), 1);
+}
+
+// =====================================================================
+// NEW: String function parameters
+// =====================================================================
+
+#[test]
+fn test_string_param_greet() {
+    let src = r#"
+        fn greet(name) {
+            let full = "Hello, " + name;
+            len(full)
+        }
+        greet("world")
+    "#;
+    assert_eq!(run(src), 12); // "Hello, world" = 12
+}
+
+#[test]
+fn test_string_param_concat() {
+    let src = r#"
+        fn join(a, b) {
+            a + b
+        }
+        len(join("foo", "bar"))
+    "#;
+    assert_eq!(run(src), 6); // "foobar" = 6
+}
+
+#[test]
+fn test_string_param_compare() {
+    let src = r#"
+        fn same(a, b) {
+            a == b
+        }
+        same("hello", "hello") * 100 + same("a", "b")
+    "#;
+    // 1*100 + 0 = 100
+    assert_eq!(run(src), 100);
+}

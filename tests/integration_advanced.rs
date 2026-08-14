@@ -190,7 +190,6 @@ fn test_if_inside_while() {
 }
 
 #[test]
-#[ignore = "break/continue not implemented in codegen (returns void, no branch to after_block)"]
 fn test_while_with_break() {
     // Note: break is parsed but may not be fully implemented in codegen
     // This test verifies the parser handles it; codegen may need work
@@ -519,7 +518,6 @@ fn test_fibonacci_15() {
 // =====================================================================
 
 #[test]
-#[ignore = "mutual recursion needs forward-reference support in codegen (Phase 2)"]
 fn test_function_with_loops_and_conditionals() {
     let src = r#"
         fn is_even(n) {

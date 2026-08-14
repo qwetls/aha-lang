@@ -548,6 +548,8 @@ impl Parser {
         match t {
             TokenType::Eq => Precedence::Equals,
             TokenType::NotEq => Precedence::Equals,
+            TokenType::And => Precedence::Equals,
+            TokenType::Or => Precedence::Equals,
             TokenType::LT => Precedence::LessGreater,
             TokenType::GT => Precedence::LessGreater,
             TokenType::LtEq => Precedence::LessGreater,
@@ -557,6 +559,7 @@ impl Parser {
             TokenType::Minus => Precedence::Sum,
             TokenType::Slash => Precedence::Product,
             TokenType::Asterisk => Precedence::Product,
+            TokenType::Percent => Precedence::Product,
             TokenType::LeftParen => Precedence::Call,
             TokenType::LeftBracket => Precedence::Index,
             TokenType::Dot => Precedence::Index,

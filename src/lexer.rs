@@ -175,6 +175,23 @@ impl Lexer {
             '+' => tok = Token::new(TokenType::Plus, self.ch.to_string(), line, column),
             '-' => tok = Token::new(TokenType::Minus, self.ch.to_string(), line, column),
             '*' => tok = Token::new(TokenType::Asterisk, self.ch.to_string(), line, column),
+            '%' => tok = Token::new(TokenType::Percent, self.ch.to_string(), line, column),
+            '&' => {
+                if self.peek_char() == '&' {
+                    self.read_char();
+                    tok = Token::new(TokenType::And, "&&".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::Illegal, self.ch.to_string(), line, column);
+                }
+            }
+            '|' => {
+                if self.peek_char() == '|' {
+                    self.read_char();
+                    tok = Token::new(TokenType::Or, "||".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::Illegal, self.ch.to_string(), line, column);
+                }
+            }
             '/' => {
                 if self.peek_char() == '/' {
                     // Single-line comment: skip until end of line

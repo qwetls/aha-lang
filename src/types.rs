@@ -51,7 +51,7 @@ impl AhaType {
     pub fn check_binary_op(&self, op: &str, other: &AhaType) -> Result<AhaType, String> {
         match (self, op, other) {
             // Arithmetic: int op int → int
-            (AhaType::Int, "+" | "-" | "*" | "/", AhaType::Int) => Ok(AhaType::Int),
+            (AhaType::Int, "+" | "-" | "*" | "/" | "%", AhaType::Int) => Ok(AhaType::Int),
 
             // String concatenation: string + string → string
             (AhaType::String, "+", AhaType::String) => Ok(AhaType::String),
@@ -64,6 +64,10 @@ impl AhaType {
 
             // Bool comparison: bool == bool → bool
             (AhaType::Bool, "==" | "!=", AhaType::Bool) => Ok(AhaType::Bool),
+
+            // Logical AND/OR: int/bool op int/bool → bool
+            (AhaType::Int, "&&" | "||", AhaType::Int) => Ok(AhaType::Bool),
+            (AhaType::Bool, "&&" | "||", AhaType::Bool) => Ok(AhaType::Bool),
 
             // Everything else is a type error
             _ => Err(format!(
