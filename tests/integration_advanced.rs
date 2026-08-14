@@ -57,14 +57,8 @@ fn test_arithmetic_deep_nesting() {
 
 #[test]
 fn test_arithmetic_mixed_ops() {
-    assert_eq!(run("2 * 3 + 4 * 5 - 6 / 2"), 19); // 6 + 20 - 3 = 23... wait
     // 2*3=6, 4*5=20, 6/2=3 → 6 + 20 - 3 = 23
-    // Actually: 2*3 + 4*5 - 6/2 = 6 + 20 - 3 = 23
-}
-
-#[test]
-fn test_arithmetic_precedence_full() {
-    assert_eq!(run("2 * 3 + 4 * 5 - 6 / 2"), 23); // 6 + 20 - 3 = 23
+    assert_eq!(run("2 * 3 + 4 * 5 - 6 / 2"), 23);
 }
 
 #[test]

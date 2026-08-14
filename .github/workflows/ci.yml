@@ -49,10 +49,7 @@ jobs:
 
       # Step 6: Kirim notifikasi ke Discord
       - name: Notify Discord on success or failure
-        # Gunakan 'always()' agar step ini selalu dijalankan,
-        # baik build-nya sukses maupun gagal.
-        if: always()
-        # Gunakan action dari marketplace untuk mempermudah
+        if: always() && ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
         uses: sarisia/actions-status-discord@v1
         with:
           # Ambil URL webhook dari secret yang kita buat tadi
