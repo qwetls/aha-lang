@@ -1012,21 +1012,22 @@ fn test_alternating_series_sum() {
 
 #[test]
 fn test_bouncing_ball_simulation() {
-    // height = height - height/5, count until height <= 0
-    // 100→80→64→51→40→32→25→20→16→12→9→7→5→4→3→2→1→0 = 17 bounces
+    // Bouncing ball: each bounce halves height (integer division)
+    // 100→50→25→12→6→3→1→0 = 7 bounces until height == 0
     let src = r#"
         fn bounce_count(start) {
             let height = start;
             let count = 0;
             while height > 0 {
-                height = height - (height / 5);
+                height = height / 2;
                 count = count + 1;
             }
             return count;
         }
         bounce_count(100)
     "#;
-    assert_eq!(run(src), 17);
+    // 100/2=50, 50/2=25, 25/2=12, 12/2=6, 6/2=3, 3/2=1, 1/2=0 → 7 bounces
+    assert_eq!(run(src), 7);
 }
 
 #[test]
