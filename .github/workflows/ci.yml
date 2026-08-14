@@ -47,9 +47,11 @@ jobs:
       - name: Build project
         run: cargo build --release --verbose
 
-      # Step 6: Kirim notifikasi ke Discord
+      # Step 6: Kirim notifikasi ke Discord (opsional, butuh DISCORD_WEBHOOK_URL secret)
       - name: Notify Discord on success or failure
-        if: always() && ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         uses: sarisia/actions-status-discord@v1
         with:
           # Ambil URL webhook dari secret yang kita buat tadi
