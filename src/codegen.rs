@@ -230,8 +230,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rt = self.infer_expr_type(&infix.right);
                 match infix.operator.as_str() {
                     "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
-                    "&&" | "||" => AhaType::Int,
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" => AhaType::Bool,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Int,
                     _ => AhaType::Int,
                 }
             }
@@ -315,8 +314,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rt = self.infer_expr_type_with_scope(&infix.right, scope);
                 match infix.operator.as_str() {
                     "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
-                    "&&" | "||" => AhaType::Int,
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" => AhaType::Bool,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Int,
                     _ => AhaType::Int,
                 }
             }
