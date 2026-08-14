@@ -6,9 +6,8 @@
 // algorithm implementations (GCD, prime, power), string manipulation,
 // function composition, and large combined programs.
 //
-// Golden Islamic Age inspiration: algorithms like al-Khwarizmi's
-// algebra methods, algorithms for arithmetic that powered the
-// House of Wisdom. These programs are small but meaningful.
+// These programs are small but meaningful: they exercise the whole
+// compiler pipeline together at once.
 
 use aha_lang::lexer::Lexer;
 use aha_lang::parser::Parser;
@@ -46,7 +45,7 @@ fn expect_compile_error(source: &str) -> String {
 /// Inlined in test source as: n - (n / d) * d
 
 // =====================================================================
-// Classical Algorithms (al-Khwarizmi inspired)
+// Classical Algorithms
 // =====================================================================
 
 #[test]
@@ -671,14 +670,14 @@ fn test_len_on_empty_string() {
 #[test]
 fn test_len_in_condition() {
     let src = r#"
-        let name = "al-khwarizmi";
+        let name = "hello people";
         if len(name) > 10 {
             100
         } else {
             0
         }
     "#;
-    assert_eq!(run(src), 100); // "al-khwarizmi" = 12 chars > 10
+    assert_eq!(run(src), 100); // "hello people" = 12 chars > 10
 }
 
 #[test]
@@ -686,13 +685,13 @@ fn test_string_concat_in_function() {
     // String concat at top level (not in function — function params
     // are typed as i64 in codegen, so string params don't work yet)
     let src = r#"
-        let first = "al";
+        let first = "hello";
         let space = " ";
-        let last = "khwarizmi";
+        let last = "people";
         let full = first + space + last;
         len(full)
     "#;
-    assert_eq!(run(src), 12); // "al khwarizmi" = 12 chars
+    assert_eq!(run(src), 12); // "hello people" = 12 chars
 }
 
 // =====================================================================
