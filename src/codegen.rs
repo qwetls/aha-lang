@@ -696,7 +696,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(consequence_block);
         let consequence_tv = self.compile_block_statement(&if_expr.consequence)?;
         let consequence_end_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        let consequence_terminated = consequence_end_block.get_terminator().is_some();
+        if !consequence_terminated {
+            self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        }
 
         self.builder.position_at_end(alternative_block);
         let alternative_tv = if let Some(alt_block) = &if_expr.alternative {
@@ -705,15 +708,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             TypedValue::int(self.i64_type.const_int(0, false).into())
         };
         let alternative_end_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        let alternative_terminated = alternative_end_block.get_terminator().is_some();
+        if !alternative_terminated {
+            self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        }
 
         self.builder.position_at_end(merge_block);
+
+        if consequence_terminated && alternative_terminated {
+            return Ok(TypedValue::int(self.i64_type.const_int(0, false).into()));
+        }
+
         let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
             .map_err(|e| e.to_string())?;
-        phi_node.add_incoming(&[
-            (&consequence_tv.value, consequence_end_block),
-            (&alternative_tv.value, alternative_end_block),
-        ]);
+        let mut incoming = Vec::new();
+        if !consequence_terminated {
+            incoming.push((&consequence_tv.value, consequence_end_block));
+        }
+        if !alternative_terminated {
+            incoming.push((&alternative_tv.value, alternative_end_block));
+        }
+        phi_node.add_incoming(&incoming);
         Ok(TypedValue::new(phi_node.as_basic_value(), consequence_tv.aha_type))
     }
     

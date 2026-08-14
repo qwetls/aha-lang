@@ -487,7 +487,6 @@ fn test_many_variables() {
 }
 
 #[test]
-#[ignore = "LLVM JIT stack overflow at depth 50+; needs tail-call optimization (Phase 2)"]
 fn test_deep_function_recursion() {
     let src = r#"
         fn sum(n) {
@@ -502,7 +501,6 @@ fn test_deep_function_recursion() {
 }
 
 #[test]
-#[ignore = "LLVM JIT crashes on fib(15): 610 recursive calls exceed JIT stack limits; needs tail-call optimization (Phase 2)"]
 fn test_fibonacci_15() {
     let src = r#"
         fn fib(n) {
