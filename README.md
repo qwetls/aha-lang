@@ -13,7 +13,7 @@ A modern programming language with an LLVM backend — designed to be understood
 [![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-305%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
+[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -28,7 +28,7 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **🔢 Boolean Algebra That Composes:** All boolean-producing operators (`==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`) return `Int` `0`/`1` — so logic results flow straight into arithmetic: `is_even(n) * 100` just works.
 - **📦 Strings Done Right:** Strings are a real `{pointer, length}` struct — safe concatenation, `==`/`!=` comparison, and an O(1) `len()` builtin.
 - **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
-- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 305+ tests on every commit.
+- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 336+ tests on every commit.
 
 ---
 
@@ -217,7 +217,7 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 - [x] JIT execution via LLVM
 - [x] CLI (`--file`, `--emit-ir`, `--version`)
 - [x] VS Code syntax-highlighting extension (`editors/vscode`)
-- [x] CI: `cargo check`, 305+ tests, `cargo build --release`
+- [x] CI: `cargo check`, 336+ tests, `cargo build --release`
 
 ### 🚧 Planned (Phase 2)
 
