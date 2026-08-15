@@ -107,6 +107,18 @@ impl AhaType {
             _ => None,
         }
     }
+
+    /// Merge a newly inferred type into an existing one when multiple
+    /// call sites disagree. Used by scan_expr_for_calls to narrow a
+    /// param's type: String and named structs are kept when observed,
+    /// Int stays as the default. Two different struct names never meet
+    /// (each call site's arg type wins for its position).
+    pub fn unify_with(&self, other: &AhaType) -> AhaType {
+        match (self, other) {
+            (AhaType::Int, t) => t.clone(),
+            (_, _) => self.clone(),
+        }
+    }
 }
 
 impl fmt::Display for AhaType {

@@ -35,6 +35,12 @@ pub struct CodeGenerator<'ctx> {
     /// Registered struct definitions: struct name → ordered (field name,
     /// declared AhaType) pairs. Field order defines the LLVM layout.
     struct_defs: HashMap<String, Vec<(String, AhaType)>>,
+    /// Pre-scanned variable bindings: var_name → AhaType (for struct
+    /// variables, so scan_expr_for_calls can resolve param types).
+    struct_var_types: HashMap<String, AhaType>,
+    /// Synthetic param scope used while scanning a function body, so
+    /// calls inside resolve their args against the function's own params.
+    scan_scope: Vec<HashMap<String, AhaType>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -59,6 +65,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             loop_stack: Vec::new(),
             param_type_map: HashMap::new(),
             struct_defs: HashMap::new(),
+            struct_var_types: HashMap::new(),
+            scan_scope: Vec::new(),
         }
     }
 
@@ -97,6 +105,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&expr_stmt.expression);
                 }
                 ast::Statement::Let(let_stmt) => {
+                    // Track struct variable bindings so infer_expr_type
+                    // can resolve them when the variable is passed as a
+                    // function argument.
+                    if let ast::Expression::StructLiteral(sl) = &let_stmt.value {
+                        self.struct_var_types.insert(
+                            let_stmt.name.value.clone(),
+                            AhaType::Struct(sl.name.value.clone()),
+                        );
+                    }
                     self.scan_expr_for_calls(&let_stmt.value);
                 }
                 ast::Statement::Return(ret_stmt) => {
@@ -117,8 +134,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.param_type_map.entry(id.value.clone())
                         .and_modify(|existing| {
                             for (i, t) in types.iter().enumerate() {
-                                if i < existing.len() && matches!(t, AhaType::String) {
-                                    existing[i] = AhaType::String;
+                                if i < existing.len() {
+                                    existing[i] = existing[i].unify_with(t);
                                 }
                             }
                         })
@@ -155,7 +172,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.scan_expr_for_calls(&assign.value);
             }
             ast::Expression::Function(func) => {
-                self.scan_block_for_calls(&func.body);
+                // Push function params into scan_scope so body calls can
+                // resolve param types (e.g., `x2(p)` inside `total(p) { ... }`).
+                if let Some(name) = &func.name {
+                    let params: HashMap<String, AhaType> = func.parameters.iter().enumerate()
+                        .map(|(i, p)| {
+                            let t = self.param_type_map.get(&name.value)
+                                .and_then(|types| types.get(i).cloned())
+                                .unwrap_or(AhaType::Int);
+                            (p.value.clone(), t)
+                        })
+                        .collect();
+                    self.scan_scope.push(params);
+                    self.scan_block_for_calls(&func.body);
+                    self.scan_scope.pop();
+                } else {
+                    self.scan_block_for_calls(&func.body);
+                }
             }
             ast::Expression::Array(arr) => {
                 for elem in &arr.elements {
@@ -181,6 +214,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// LLVM type for an AhaType (function params, returns, allocas).
+    /// String → {i8*, i64}, named structs → their registered layout,
+    /// everything else → i64.
+    fn aha_type_to_llvm_type(&self, t: &AhaType) -> Result<inkwell::types::BasicTypeEnum<'ctx>, String> {
+        match t {
+            AhaType::String => Ok(self.string_type.into()),
+            AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
+            _ => Ok(self.i64_type.into()),
+        }
+    }
+
     /// Pre-declare all user functions so forward references work.
     /// Creates the LLVM function value with correct param types but
     /// does NOT compile the body — bodies are compiled later.
@@ -195,27 +239,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if self.functions.contains_key(&func_name) {
                         continue;
                     }
-                    let param_types: Vec<_> = func.parameters.iter()
-                        .map(|p| {
-                            let inferred = self.param_type_map.get(&func_name);
-                            match inferred {
-                                Some(types) => {
-                                    let idx = func.parameters.iter().position(|param| param.value == p.value).unwrap_or(0);
-                                    if idx < types.len() && matches!(types[idx], AhaType::String) {
-                                        self.string_type.into()
-                                    } else {
-                                        self.i64_type.into()
-                                    }
-                                }
-                                None => self.i64_type.into(),
-                            }
+                    let param_types: Vec<_> = func.parameters.iter().enumerate()
+                        .map(|(i, _)| {
+                            let t = self.param_type_map.get(&func_name)
+                                .and_then(|types| types.get(i).cloned())
+                                .unwrap_or(AhaType::Int);
+                            self.aha_type_to_llvm_type(&t)
                         })
-                        .collect();
+                        .collect::<Result<_, _>>();
+                    let Ok(param_types) = param_types else { continue; };
                     let return_type = self.infer_function_return_type(func, &func_name);
-                    let fn_type = match return_type {
-                        AhaType::String => self.string_type.fn_type(&param_types, false),
-                        _ => self.i64_type.fn_type(&param_types, false),
-                    };
+                    let Ok(ret_llvm) = self.aha_type_to_llvm_type(&return_type) else { continue; };
+                    let fn_type = ret_llvm.fn_type(&param_types, false);
                     let function = self.module.add_function(&func_name, fn_type, None);
                     self.functions.insert(func_name.clone(), function);
                     self.fn_types.insert(func_name, return_type);
@@ -231,9 +266,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Integer(_) => AhaType::Int,
             ast::Expression::Boolean(_) => AhaType::Bool,
             ast::Expression::Identifier(id) => {
-                self.lookup_variable(&id.value)
-                    .map(|info| info.var_type.clone())
-                    .unwrap_or(AhaType::Int)
+                // Check scan_scope first (for param types inside function bodies
+                // during the pre-pass scan), then live variables, then struct_var_types.
+                let from_scan = self.scan_scope.last()
+                    .and_then(|scope| scope.get(&id.value).cloned());
+                let from_var = self.lookup_variable(&id.value)
+                    .map(|info| info.var_type.clone());
+                let from_struct = self.struct_var_types.get(&id.value).cloned();
+                from_scan.or(from_var).or(from_struct).unwrap_or(AhaType::Int)
             }
             ast::Expression::Infix(infix) => {
                 let lt = self.infer_expr_type(&infix.left);
@@ -253,13 +293,31 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Call(call) => {
                 if let ast::Expression::Identifier(id) = call.function.as_ref() {
-                    if let Some(types) = self.param_type_map.get(&id.value) {
-                        if let Some(rt) = types.last() {
-                            return rt.clone();
-                        }
+                    // Prefer a known return type (fn_types), then fall back
+                    // to the builtin len() = Int.
+                    if let Some(rt) = self.fn_types.get(&id.value) {
+                        return rt.clone();
                     }
                     if id.value == "len" {
                         return AhaType::Int;
+                    }
+                }
+                AhaType::Int
+            }
+            ast::Expression::StructLiteral(sl) => {
+                AhaType::Struct(sl.name.value.clone())
+            }
+            ast::Expression::FieldAccess(fa) => {
+                // Infer the struct type from the object, then look up
+                // the field type. For pre-pass, return Int if unknown.
+                let obj_type = self.infer_expr_type(&fa.object);
+                if let AhaType::Struct(name) = &obj_type {
+                    if let Some(fields) = self.struct_defs.get(name) {
+                        for (fn, ft) in fields {
+                            if fn == &fa.field.value {
+                                return ft.clone();
+                            }
+                        }
                     }
                 }
                 AhaType::Int
@@ -356,6 +414,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 cons
             }
+            ast::Expression::StructLiteral(sl) => {
+                AhaType::Struct(sl.name.value.clone())
+            }
+            ast::Expression::FieldAccess(fa) => {
+                let obj_type = self.infer_expr_type_with_scope(&fa.object, scope);
+                if let AhaType::Struct(name) = &obj_type {
+                    if let Some(fields) = self.struct_defs.get(name) {
+                        for (fn, ft) in fields {
+                            if fn == &fa.field.value {
+                                return ft.clone();
+                            }
+                        }
+                    }
+                }
+                AhaType::Int
+            }
+            ast::Expression::Assignment(assign) => {
+                self.infer_expr_type_with_scope(&assign.value, scope)
+            }
             _ => AhaType::Int,
         }
     }
@@ -387,10 +464,32 @@ impl<'ctx> CodeGenerator<'ctx> {
         // access can resolve field layout during codegen.
         self.register_structs(&program.statements);
 
-        // Pre-pass: scan all statements for call expressions to infer
-        // parameter types. This lets us type function params as String
-        // when a string is passed at a call site.
-        self.scan_call_sites(&program.statements);
+        // Pre-pass: iterate scanning until param types and return types
+        // stabilize. A single pass is insufficient: a struct param's
+        // type is only known after its call site is scanned, and chained
+        // calls like sum(make(20, 22)) need return types to type the
+        // inner call's argument. Each iteration only upgrades types
+        // (Int → String/Struct), so this terminates quickly.
+        for _ in 0..32 {
+            let before_params = self.param_type_map.clone();
+            let before_fns = self.fn_types.clone();
+            self.scan_call_sites(&program.statements);
+            // Recompute return types now that param types may have changed.
+            for stmt in &program.statements {
+                if let ast::Statement::Expression(ast::ExpressionStatement {
+                    expression: ast::Expression::Function(func),
+                }) = stmt
+                {
+                    if let Some(name) = &func.name {
+                        let rt = self.infer_function_return_type(func, &name.value);
+                        self.fn_types.insert(name.value.clone(), rt);
+                    }
+                }
+            }
+            if self.param_type_map == before_params && self.fn_types == before_fns {
+                break;
+            }
+        }
 
         // Pre-declare all user functions so mutual recursion works:
         // is_even can call is_odd before is_odd's body is compiled.
@@ -586,11 +685,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         match statement {
             ast::Statement::Let(let_stmt) => {
                 let typed_val = self.compile_expression(&let_stmt.value)?;
-                let alloc_type: inkwell::types::BasicTypeEnum<'ctx> = match &typed_val.aha_type {
-                    AhaType::String => self.string_type.into(),
-                    AhaType::Struct(name) => self.struct_llvm_type(name)?.into(),
-                    _ => self.i64_type.into(),
-                };
+                let alloc_type = self.aha_type_to_llvm_type(&typed_val.aha_type)?;
                 let pointer = self.builder.build_alloca(alloc_type, &let_stmt.name.value)
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(pointer, typed_val.value)
@@ -961,15 +1056,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             *f
         } else {
             let param_types: Vec<_> = param_aha_types.iter()
-                .map(|t| match t {
-                    AhaType::String => self.string_type.into(),
-                    _ => self.i64_type.into(),
-                })
-                .collect();
-            let fn_type = match return_type {
-                AhaType::String => self.string_type.fn_type(&param_types, false),
-                _ => self.i64_type.fn_type(&param_types, false),
-            };
+                .map(|t| self.aha_type_to_llvm_type(t))
+                .collect::<Result<_, _>>()?;
+            let ret_llvm = self.aha_type_to_llvm_type(&return_type)?;
+            let fn_type = ret_llvm.fn_type(&param_types, false);
             let function = self.module.add_function(&func_name, fn_type, None);
             self.functions.insert(func_name.clone(), function);
             function
@@ -989,10 +1079,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let param_value = function.get_nth_param(i as u32)
                     .ok_or("Failed to get parameter")?;
                 let aha_type = &param_aha_types[i];
-                let alloc_type: inkwell::types::BasicTypeEnum<'ctx> = match aha_type {
-                    AhaType::String => self.string_type.into(),
-                    _ => self.i64_type.into(),
-                };
+                let alloc_type = self.aha_type_to_llvm_type(aha_type)?;
                 let alloca = self.builder.build_alloca(alloc_type, &param.value)
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(alloca, param_value)
@@ -1003,6 +1090,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let mut has_return = false;
             let mut last_value: BasicValueEnum<'ctx> = match &return_type {
                 AhaType::String => self.string_type.const_zero().into(),
+                AhaType::Struct(name) => {
+                    self.struct_llvm_type(name)?.const_zero().into()
+                }
                 _ => self.i64_type.const_int(0, false).into(),
             };
             

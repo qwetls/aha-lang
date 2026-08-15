@@ -384,3 +384,103 @@ fn test_plain_variable_mutate_in_loop() {
     let result = run("let total = 0; for i in 0..5 { total = total + i; } total");
     assert_eq!(result, 10);
 }
+
+// =====================================================================
+// Struct as function parameter & return value (F1)
+// =====================================================================
+
+#[test]
+fn test_struct_param_field_read() {
+    // A struct passed by value into a function; fields read via the
+    // parameter's alloca.
+    let result = run(
+        "struct Point { x, y } fn sum(p) { p.x + p.y } let p = Point { x: 3, y: 4 }; sum(p)"
+    );
+    assert_eq!(result, 7);
+}
+
+#[test]
+fn test_struct_param_mutated_inside_function() {
+    // Mutating a struct parameter inside a function writes back to the
+    // function-local copy (by value), so the caller's copy is untouched.
+    let result = run(
+        "struct Point { x, y } fn bump(p) { p.x = p.x + 1; p.x } let p = Point { x: 5, y: 0 }; bump(p) + p.x"
+    );
+    assert_eq!(result, 11);
+}
+
+#[test]
+fn test_struct_param_with_typed_string_field() {
+    let result = run(
+        "struct Person { name: string, age: int } fn describe(p) { len(p.name) + p.age } let p = Person { name: \"AHA\", age: 4 }; describe(p)"
+    );
+    assert_eq!(result, 7);
+}
+
+#[test]
+fn test_struct_param_passed_to_another_function() {
+    let result = run(
+        "struct Point { x, y } fn x2(p) { p.x * 2 } fn total(p) { x2(p) + p.y } let p = Point { x: 10, y: 1 }; total(p)"
+    );
+    assert_eq!(result, 21);
+}
+
+#[test]
+fn test_struct_literal_passed_directly_as_argument() {
+    let result = run(
+        "struct Point { x, y } fn sum(p) { p.x + p.y } sum(Point { x: 40, y: 2 })"
+    );
+    assert_eq!(result, 42);
+}
+
+#[test]
+fn test_struct_return_value() {
+    // Function returns a struct literal; caller stores it and reads fields.
+    let result = run(
+        "struct Point { x, y } fn make(x, y) { Point { x: x, y: y } } let p = make(5, 6); p.x + p.y"
+    );
+    assert_eq!(result, 11);
+}
+
+#[test]
+fn test_struct_returned_directly_from_param() {
+    let result = run(
+        "struct Point { x, y } fn identity(p) { p } let p = Point { x: 7, y: 8 }; let q = identity(p); q.x"
+    );
+    assert_eq!(result, 7);
+}
+
+#[test]
+fn test_struct_return_with_mutation_inside() {
+    let result = run(
+        "struct Point { x, y } fn shifted(p) { p.x = p.x + 100; p } let p = Point { x: 1, y: 2 }; let q = shifted(p); q.x - p.x"
+    );
+    assert_eq!(result, 100);
+}
+
+#[test]
+fn test_struct_return_then_field_mutation() {
+    // The returned struct is stored in a let binding, then mutated.
+    let result = run(
+        "struct Point { x, y } fn make(x, y) { Point { x: x, y: y } } let p = make(1, 2); p.x = 9; p.x + p.y"
+    );
+    assert_eq!(result, 11);
+}
+
+#[test]
+fn test_struct_return_chained_call() {
+    // A function's return value feeds directly into another function
+    // that takes a struct param.
+    let result = run(
+        "struct Point { x, y } fn make(x, y) { Point { x: x, y: y } } fn sum(p) { p.x + p.y } sum(make(20, 22))"
+    );
+    assert_eq!(result, 42);
+}
+
+#[test]
+fn test_struct_return_typed_string_fields() {
+    let result = run(
+        "struct Person { name: string } fn greet(name) { Person { name: name } } let g = greet(\"world\"); len(g.name)"
+    );
+    assert_eq!(result, 5);
+}

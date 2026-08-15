@@ -2,7 +2,31 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
-## [1.6.0] — 2026-08-16
+## [1.4.3] — 2026-08-16
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/types.rs` | 🔧 ENHANCED | +14 | `unify_with()` — merge param types from multiple call sites (String, struct names) |
+| `src/codegen.rs` | 🔧 ENHANCED | +100 | `aha_type_to_llvm_type()` helper; `predeclare_functions` & `compile_function` support struct params/returns; `infer_expr_type` handles StructLiteral/FieldAccess; `scan_call_sites` tracks struct var bindings |
+| `tests/struct_codegen.rs` | 🔧 ENHANCED | +90 | 12 test struct sebagai param & return value |
+
+### Added
+
+- **Struct sebagai parameter fungsi (F1):** Struct dapat dioper by-value ke fungsi. Parameter dialokasikan dengan tipe LLVM struct yang benar; field access di dalam fungsi bekerja normal.
+- **Struct sebagai return value fungsi (F1):** Fungsi dapat mengembalikan struct literal. Caller menyimpan hasilnya ke variabel `let` dan membaca field-nya.
+- **Struct literal langsung sebagai argumen:** `sum(Point { x: 1, y: 2 })` — tanpa variabel perantara.
+- **Rantai fungsi struct:** `sum(make(20, 22))` — return value struct langsung dioper ke fungsi lain.
+- **`unify_with()` pada AhaType:** Menyatukan tipe parameter dari beberapa call site (String, struct name meng-override Int default).
+- **Rangkaian Pengujian:** 385 tests passing (sebelumnya 373; +12 test struct param/return).
+
+### Diubah
+
+- `infer_expr_type` & `infer_expr_type_with_scope` kini mengenali `StructLiteral` dan `FieldAccess` untuk inferensi tipe yang akurat saat pre-pass.
+- `scan_call_sites` melacak binding variabel struct (`struct_var_types`) agar inferensi tipe bisa resolve struct variable sebagai argumen fungsi.
+
+## [1.4.2] — 2026-08-16
 
 ### File-by-File Change Summary
 
@@ -31,7 +55,7 @@ All notable changes to AHA! Lang are documented in this file.
 
 - Assigning a value of the wrong type to a typed field produces a compile-time error.
 
-## [1.5.0] — 2026-08-16
+## [1.4.1] — 2026-08-16
 
 ### File-by-File Change Summary
 
