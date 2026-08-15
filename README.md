@@ -6,11 +6,14 @@
 
 **A**dvanced **H**ybrid **A**rchitecture
 
-A fast, expressive, and modern programming language designed for building anything from web backends to game engines.
+**Easy to read. Powerful to wield.**
 
-[![CI/CD](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/ahalang-dev/aha-lang/actions/workflows/ci.yml)
+A modern programming language with an LLVM backend — designed to be understood at a glance, yet strong enough to build real software.
+
+[![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+[![Tests](https://img.shields.io/badge/tests-305%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -18,13 +21,14 @@ A fast, expressive, and modern programming language designed for building anythi
 
 ## ✨ Key Features
 
-AHA! is designed from the ground up to deliver an outstanding developer experience:
+AHA! is built on a simple belief: a language should feel **obvious** when you read it, and **effortless** when you run it. No magic, no surprises — just tools that work the way you expect.
 
-- **🚀 High Performance:** Compiles to LLVM IR for maximum machine code optimization, on par with C++.
-- **🧠 Smart Type System:** Static typing with automatic type inference. Safe from bugs, yet concise to write.
-- **🔀 Safe Concurrency:** Built-in Actor model for writing parallel code free from race conditions.
-- **🛠️ Full Resource Control:** Safe manual memory management with "Resource Lifetimes", without Garbage Collector overhead.
-- **📦 Modern Ecosystem:** Built on Rust, leveraging the powerful `Cargo` toolchain.
+- **⚡ LLVM-Powered:** Compiles source to LLVM IR and executes it through a built-in JIT — native-level performance from day one.
+- **🧠 Expressive Type Discipline:** First-class `Int`, `Bool`, and `String` types with a real type-checking pass. Type errors are caught at compile time, not at runtime.
+- **🔢 Boolean Algebra That Composes:** All boolean-producing operators (`==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`) return `Int` `0`/`1` — so logic results flow straight into arithmetic: `is_even(n) * 100` just works.
+- **📦 Strings Done Right:** Strings are a real `{pointer, length}` struct — safe concatenation, `==`/`!=` comparison, and an O(1) `len()` builtin.
+- **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
+- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 305+ tests on every commit.
 
 ---
 
@@ -32,38 +36,47 @@ AHA! is designed from the ground up to deliver an outstanding developer experien
 
 ### Prerequisites
 
-- **Rust** (version 1.75 or later)
-- **LLVM 14** and supporting libraries
-- **Clang 14**
+- **Rust** (stable toolchain)
+- **LLVM 14** with Clang 14 and Polly
 
-#### Installation on Ubuntu/Debian
+#### Ubuntu / Debian
 
 ```bash
-# Update package list
 sudo apt-get update
-
-# Install LLVM, Clang, and development libraries
-sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev zlib1g-dev
+sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev
 ```
 
 ### Building from Source
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/ahalang-dev/aha-lang.git
-    cd aha-lang
-    ```
+```bash
+git clone https://github.com/qwetls/aha-lang.git
+cd aha-lang
+cargo build --release
+```
 
-2.  **Run the Compiler:**
-    ```bash
-    cargo run -- --file <filename>.aha
-    ```
+### Running the Compiler
 
-### Code Example
+```bash
+cargo run --release -- --file example.aha
+```
 
-Create a file called `example.aha`:
+**CLI options:**
+
+| Option | Description |
+|--------|-------------|
+| `--file <path>` | Source file to compile and execute |
+| `--emit-ir <path>` | Save the generated LLVM IR to a file |
+| `--version` | Print the compiler version |
+| `--help` | Show usage information |
+
+---
+
+## 🧪 Code Example
+
+Create `example.aha`:
 
 ```aha
+// AHA! is expression-oriented — the last expression is the result
 let x = 10;
 let y = 20;
 
@@ -75,13 +88,15 @@ if x > y {
 ```
 
 Run it:
+
 ```bash
-cargo run -- --file example.aha
+cargo run --release -- --file example.aha
 ```
 
-**Expected Output:**
+**Expected output:**
+
 ```
---- AHA! COMPILER v1.3 ---
+--- AHA! COMPILER ---
 Reading file: example.aha
 
 [1] LEXING...
@@ -100,92 +115,125 @@ LLVM IR generated successfully!
 Program executed successfully. Result: 20
 ```
 
+### More Examples
+
+**Functions & mutual recursion:**
+
+```aha
+fn is_even(n) {
+    n % 2 == 0
+}
+
+fn is_odd(n) {
+    if is_even(n) { 0 } else { 1 }
+}
+
+let count = 0;
+for i 0..10 {
+    if is_odd(i) {
+        count = count + 1;
+    }
+}
+count  // 5
+```
+
+**Strings:**
+
+```aha
+let name = "world";
+let greeting = "Hello, " + name;
+print_str(greeting);   // Hello, world
+print(len(name));      // 5
+```
+
 ---
 
 ## 🧠 Compiler Architecture
 
-The AHA! compiler is built with a modern, modular architecture:
-
 ```
-Source Code → Lexer → Parser → Code Generator → LLVM Backend → Native Binary
+Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR → JIT Execution
 ```
 
-1.  **Lexer:** Breaks source code into tokens.
-2.  **Parser:** Transforms tokens into an Abstract Syntax Tree (AST) using a Pratt Parser.
-3.  **Code Generator:** Translates the AST into LLVM Intermediate Representation (IR).
-4.  **LLVM Backend:** Optimizes and compiles IR into native machine code.
+| Stage | Module | What it does |
+|-------|--------|--------------|
+| **Lexer** | `src/lexer.rs` | Tokenizes source: identifiers, integers, strings (with escapes), operators, line & block comments |
+| **Parser** | `src/parser.rs` | Pratt parser producing the AST — expression-oriented, with correct operator precedence |
+| **Type System** | `src/types.rs` | `AhaType` + `TypedValue`; compile-time checks for binary/prefix operators |
+| **Codegen** | `src/codegen.rs` | LLVM IR generation via `inkwell`: functions (with return-type inference), loops, strings, arrays, C-runtime linkage (`malloc`, `memcpy`, `strcmp`) |
+| **Driver** | `src/main.rs` | CLI: lex → parse → codegen → print IR → JIT execute |
 
 ---
 
-## 🛣️ Roadmap
+## 🌍 Language Tour
 
-AHA! is still in early development. Here is our plan:
+### Types
 
-- [x] **Milestone 1: Compiler Foundation**
-    - [x] Lexer & Parser
-    - [x] Integer data type
-    - [x] Arithmetic & Comparison expressions
-    - [x] Conditional statements `if/else`
-- [x] **Milestone 2: Fundamental Features** ✅
-    - [x] `Boolean` data type (codegen)
-    - [x] Operators `<=`, `>=`, `!=` (fixed)
-    - [x] `while` loop ✅
-    - [x] `for` loop (parser + codegen) ✅
-    - [x] Functions with parameters ✅
-    - [x] `return` statement ✅
-    - [x] Prefix expressions `-x`, `!x` ✅
-    - [x] Assignment `x = value` ✅
-    - [x] Break & Continue ✅
-    - [x] Variable scoping (block-level) ✅
-- [x] **Milestone 3: Advanced Data Structures** ✅
-    - [x] String type (pointer-as-int, limited)
-    - [x] Array (parser + codegen)
-    - [x] Struct definitions (parser only)
-    - [x] Field access (parser only)
-- [x] **Milestone 4: Standard Library** ✅
-    - [x] print(int) — print integers
-    - [x] print_str(string) — print strings
-    - [x] abs(x) — absolute value
-    - [x] min(a, b) — minimum
-    - [x] max(a, b) — maximum
-- [x] **Milestone 5: Tooling & Ecosystem** ✅
-    - [x] VS Code Extension (syntax highlighting)
-    - [x] CLI improvements (--emit-ir, --version)
-    - [x] Better error messages
-    - [x] Multi-line comments `/* */` ✅
+| Type | Notes |
+|------|-------|
+| `Int` | 64-bit integer — the universal numeric type |
+| `Bool` | `true` / `false` literals; produced by `!` |
+| `String` | `"..."` with escape sequences (`\n`, `\t`, `\\`, `\"`, `\r`, `\0`) |
 
-### 🚀 Phase 2: Advanced Features
+### Operators
 
-- [ ] **Milestone 6: Type System**
-    - [ ] Type inference
-    - [ ] Type annotations
-    - [ ] Generics / Parametric types
+| Category | Operators |
+|----------|-----------|
+| Arithmetic | `+` `-` `*` `/` `%` |
+| Comparison | `==` `!=` `<` `>` `<=` `>=` (→ `Int` 0/1) |
+| Logical | `&&` `\|\|` (→ `Int` 0/1) |
+| Prefix | `-x`, `!x` |
+| Assignment | `x = value` |
 
-- [ ] **Milestone 7: Resource Lifetimes** ⭐
-    - [ ] Ownership semantics
-    - [ ] Borrow checking
-    - [ ] Automatic resource cleanup
+### Control Flow
 
-- [ ] **Milestone 8: Concurrency**
-    - [ ] Actor model
-    - [ ] Message passing
-    - [ ] Async/await
+- `if cond { ... } else { ... }` — an *expression*; the last expression of each branch is the value
+- `while cond { ... }`
+- `for x a..b { ... }` — range loop with `break` / `continue`
 
-- [ ] **Milestone 9: Package Ecosystem**
-    - [ ] Package manager (`aha install`)
-    - [ ] Module system
-    - [ ] Dependency resolution
+### Builtins
 
-- [ ] **Milestone 10: Self-Hosting** 🏆
-    - [ ] AHA! compiler written in AHA!
-    - [ ] Bootstrap process
-    - [ ] Production ready
+| Builtin | Description |
+|---------|-------------|
+| `print(int)` | Print an integer |
+| `print_str(string)` | Print a string |
+| `len(string)` | Length in O(1) |
+| `abs(x)`, `min(a, b)`, `max(a, b)` | Numeric helpers |
+
+---
+
+## 🗺️ Roadmap
+
+### ✅ Implemented (v1.x)
+
+- [x] Lexer & Pratt parser with full error reporting
+- [x] `Int`, `Bool`, `String` types
+- [x] Arithmetic, comparison, `&&`/`||`, prefix, assignment
+- [x] `if`/`else`, `while`, `for` (with `break`/`continue`)
+- [x] Functions: parameters, `return`, forward references, mutual recursion, string params & returns
+- [x] String struct, concatenation, comparison, `len()`
+- [x] Array literals & indexing (codegen)
+- [x] Block comments, string escapes, `!=` fix, type-checking pass
+- [x] Builtins: `print`, `print_str`, `abs`, `min`, `max`, `len`
+- [x] JIT execution via LLVM
+- [x] CLI (`--file`, `--emit-ir`, `--version`)
+- [x] VS Code syntax-highlighting extension (`editors/vscode`)
+- [x] CI: `cargo check`, 305+ tests, `cargo build --release`
+
+### 🚧 Planned (Phase 2)
+
+- [ ] Struct codegen & field access at runtime (currently parsed only)
+- [ ] Type inference & annotations
+- [ ] Generics / parametric types
+- [ ] Module system & package manager (`aha install`)
+- [ ] Resource lifetimes — safe manual memory management, no GC overhead
+- [ ] Actor-model concurrency (message passing, async/await)
+- [ ] Self-hosting — the AHA! compiler written in AHA!
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions of all kinds! Whether it's reporting bugs, suggesting new features, or contributing code.
+We welcome contributions of all kinds — bug reports, feature ideas, or code.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -199,6 +247,6 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## 💡 Why AHA!?
 
-We believe programming should be closer to the way humans think. AHA! aims to eliminate unnecessary boilerplate and complexity, allowing you to focus on the logic and solutions you're building.
+Great tools don't add complexity — they remove it. AHA! was built on one simple principle: **a language easy enough to read like prose, powerful enough to write like a system.** No ceremony, no boilerplate — just clear code that runs at native speed.
 
-**Join us in creating the next generation of programming languages!**
+**Join us in writing the next chapter of computing.**

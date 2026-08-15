@@ -7,9 +7,9 @@ use aha_lang::parser::Parser as AhaParser;
 use aha_lang::codegen::CodeGenerator;
 use inkwell::context::Context;
 
-/// AHA! Lang Compiler v1.3
+/// AHA! Lang Compiler v1.4
 #[derive(Parser, Debug)]
-#[command(author = "AHA! Lang Team", version = "1.3.0", about = "AHA! Lang Compiler", long_about = None)]
+#[command(author = "AHA! Lang Team", version = "1.4.0", about = "AHA! Lang Compiler", long_about = None)]
 struct Args {
     /// Source file to compile
     #[arg(short, long)]
@@ -22,7 +22,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    println!("--- AHA! COMPILER v1.3 ---");
+    println!("--- AHA! COMPILER v1.4 ---");
     println!("Reading file: {}", args.file);
 
     let contents = fs::read_to_string(&args.file)

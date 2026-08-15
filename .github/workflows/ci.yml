@@ -40,19 +40,20 @@ jobs:
         run: cargo check --verbose
 
       # Step 4: Jalankan semua test yang ada
+      # LLVM JIT tidak thread-safe — multiple Context::create() + JIT
+      # secara paralel bisa SIGSEGV. Run single-threaded.
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose -- --test-threads=1
 
       # Step 5: Build aplikasi dalam mode release
       - name: Build project
         run: cargo build --release --verbose
 
-      # Step 6: Kirim notifikasi ke Discord
+      # Step 6: Kirim notifikasi ke Discord (opsional, butuh DISCORD_WEBHOOK_URL secret)
       - name: Notify Discord on success or failure
-        # Gunakan 'always()' agar step ini selalu dijalankan,
-        # baik build-nya sukses maupun gagal.
-        if: always()
-        # Gunakan action dari marketplace untuk mempermudah
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         uses: sarisia/actions-status-discord@v1
         with:
           # Ambil URL webhook dari secret yang kita buat tadi

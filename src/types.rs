@@ -51,19 +51,27 @@ impl AhaType {
     pub fn check_binary_op(&self, op: &str, other: &AhaType) -> Result<AhaType, String> {
         match (self, op, other) {
             // Arithmetic: int op int → int
-            (AhaType::Int, "+" | "-" | "*" | "/", AhaType::Int) => Ok(AhaType::Int),
+            (AhaType::Int, "+" | "-" | "*" | "/" | "%", AhaType::Int) => Ok(AhaType::Int),
 
             // String concatenation: string + string → string
             (AhaType::String, "+", AhaType::String) => Ok(AhaType::String),
 
-            // Comparison: int op int → bool
-            (AhaType::Int, "==" | "!=" | "<" | ">" | "<=" | ">=", AhaType::Int) => Ok(AhaType::Bool),
+            // Comparison: int op int → int (0 or 1)
+            // Returns Int (not Bool) so comparison results compose with
+            // arithmetic like in C: (a == b) * weight.
+            (AhaType::Int, "==" | "!=" | "<" | ">" | "<=" | ">=", AhaType::Int) => Ok(AhaType::Int),
 
-            // String comparison: string == string → bool
-            (AhaType::String, "==" | "!=", AhaType::String) => Ok(AhaType::Bool),
+            // String comparison: string == string → int (0 or 1)
+            (AhaType::String, "==" | "!=", AhaType::String) => Ok(AhaType::Int),
 
-            // Bool comparison: bool == bool → bool
-            (AhaType::Bool, "==" | "!=", AhaType::Bool) => Ok(AhaType::Bool),
+            // Bool comparison: bool == bool → int (0 or 1)
+            (AhaType::Bool, "==" | "!=", AhaType::Bool) => Ok(AhaType::Int),
+
+            // Logical AND/OR: int/bool op int/bool → int (0 or 1)
+            // Returns Int (not Bool) so logical results compose with
+            // arithmetic like in C: (a && b) * weight.
+            (AhaType::Int, "&&" | "||", AhaType::Int) => Ok(AhaType::Int),
+            (AhaType::Bool, "&&" | "||", AhaType::Bool) => Ok(AhaType::Int),
 
             // Everything else is a type error
             _ => Err(format!(

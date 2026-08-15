@@ -29,6 +29,7 @@ pub enum TokenType {
     Minus,        // -
     Asterisk,     // *
     Slash,        // /
+    Percent,      // %
     Eq,           // ==
     NotEq,        // !=
     LT,           // <
@@ -36,6 +37,8 @@ pub enum TokenType {
     LtEq,        // <=
     GtEq,        // >=
     Bang,         // !
+    And,          // &&
+    Or,           // ||
     // Delimiters
     Comma,        // ,
     Semicolon,    // ;

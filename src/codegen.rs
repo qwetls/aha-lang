@@ -28,6 +28,10 @@ pub struct CodeGenerator<'ctx> {
     /// String struct type: {i8*, i64} (pointer + length)
     string_type: StructType<'ctx>,
     current_function: Option<FunctionValue<'ctx>>,
+    /// Stack of (continue_block, break_block) for nested loops
+    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    /// Inferred parameter types per function: func_name → vec of AhaType
+    param_type_map: HashMap<String, Vec<AhaType>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -49,6 +53,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             i64_type,
             string_type,
             current_function: None,
+            loop_stack: Vec::new(),
+            param_type_map: HashMap::new(),
         }
     }
 
@@ -77,6 +83,287 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Pre-pass: walk all statements to find call expressions and infer
+    /// parameter types. If a string literal is passed as argument N,
+    /// param N is marked as String.
+    fn scan_call_sites(&mut self, statements: &[ast::Statement]) {
+        for stmt in statements {
+            match stmt {
+                ast::Statement::Expression(expr_stmt) => {
+                    self.scan_expr_for_calls(&expr_stmt.expression);
+                }
+                ast::Statement::Let(let_stmt) => {
+                    self.scan_expr_for_calls(&let_stmt.value);
+                }
+                ast::Statement::Return(ret_stmt) => {
+                    self.scan_expr_for_calls(&ret_stmt.return_value);
+                }
+                ast::Statement::Struct(_) => {}
+            }
+        }
+    }
+
+    fn scan_expr_for_calls(&mut self, expr: &ast::Expression) {
+        match expr {
+            ast::Expression::Call(call) => {
+                if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    let types: Vec<AhaType> = call.arguments.iter()
+                        .map(|arg| self.infer_expr_type(arg))
+                        .collect();
+                    self.param_type_map.entry(id.value.clone())
+                        .and_modify(|existing| {
+                            for (i, t) in types.iter().enumerate() {
+                                if i < existing.len() && matches!(t, AhaType::String) {
+                                    existing[i] = AhaType::String;
+                                }
+                            }
+                        })
+                        .or_insert_with(|| types.clone());
+                }
+                for arg in &call.arguments {
+                    self.scan_expr_for_calls(arg);
+                }
+            }
+            ast::Expression::Infix(infix) => {
+                self.scan_expr_for_calls(&infix.left);
+                self.scan_expr_for_calls(&infix.right);
+            }
+            ast::Expression::Prefix(prefix) => {
+                self.scan_expr_for_calls(&prefix.right);
+            }
+            ast::Expression::If(if_expr) => {
+                self.scan_expr_for_calls(&if_expr.condition);
+                self.scan_block_for_calls(&if_expr.consequence);
+                if let Some(alt) = &if_expr.alternative {
+                    self.scan_block_for_calls(alt);
+                }
+            }
+            ast::Expression::While(while_expr) => {
+                self.scan_expr_for_calls(&while_expr.condition);
+                self.scan_block_for_calls(&while_expr.body);
+            }
+            ast::Expression::For(for_expr) => {
+                self.scan_expr_for_calls(&for_expr.iterable);
+                self.scan_block_for_calls(&for_expr.body);
+            }
+            ast::Expression::Assignment(assign) => {
+                self.scan_expr_for_calls(&assign.value);
+            }
+            ast::Expression::Function(func) => {
+                self.scan_block_for_calls(&func.body);
+            }
+            ast::Expression::Array(arr) => {
+                for elem in &arr.elements {
+                    self.scan_expr_for_calls(elem);
+                }
+            }
+            ast::Expression::Index(idx) => {
+                self.scan_expr_for_calls(&idx.left);
+                self.scan_expr_for_calls(&idx.index);
+            }
+            _ => {}
+        }
+    }
+
+    fn scan_block_for_calls(&mut self, block: &ast::BlockStatement) {
+        for stmt in &block.statements {
+            self.scan_call_sites(std::slice::from_ref(stmt));
+        }
+    }
+
+    /// Pre-declare all user functions so forward references work.
+    /// Creates the LLVM function value with correct param types but
+    /// does NOT compile the body — bodies are compiled later.
+    fn predeclare_functions(&mut self, statements: &[ast::Statement]) {
+        for stmt in statements {
+            if let ast::Statement::Expression(ast::ExpressionStatement {
+                expression: ast::Expression::Function(func),
+            }) = stmt
+            {
+                if let Some(name) = &func.name {
+                    let func_name = name.value.clone();
+                    if self.functions.contains_key(&func_name) {
+                        continue;
+                    }
+                    let param_types: Vec<_> = func.parameters.iter()
+                        .map(|p| {
+                            let inferred = self.param_type_map.get(&func_name);
+                            match inferred {
+                                Some(types) => {
+                                    let idx = func.parameters.iter().position(|param| param.value == p.value).unwrap_or(0);
+                                    if idx < types.len() && matches!(types[idx], AhaType::String) {
+                                        self.string_type.into()
+                                    } else {
+                                        self.i64_type.into()
+                                    }
+                                }
+                                None => self.i64_type.into(),
+                            }
+                        })
+                        .collect();
+                    let return_type = self.infer_function_return_type(func, &func_name);
+                    let fn_type = match return_type {
+                        AhaType::String => self.string_type.fn_type(&param_types, false),
+                        _ => self.i64_type.fn_type(&param_types, false),
+                    };
+                    let function = self.module.add_function(&func_name, fn_type, None);
+                    self.functions.insert(func_name.clone(), function);
+                    self.fn_types.insert(func_name, return_type);
+                }
+            }
+        }
+    }
+
+    /// Infer the AhaType of an expression for the pre-pass.
+    fn infer_expr_type(&self, expr: &ast::Expression) -> AhaType {
+        match expr {
+            ast::Expression::String(_) => AhaType::String,
+            ast::Expression::Integer(_) => AhaType::Int,
+            ast::Expression::Boolean(_) => AhaType::Bool,
+            ast::Expression::Identifier(id) => {
+                self.lookup_variable(&id.value)
+                    .map(|info| info.var_type.clone())
+                    .unwrap_or(AhaType::Int)
+            }
+            ast::Expression::Infix(infix) => {
+                let lt = self.infer_expr_type(&infix.left);
+                let rt = self.infer_expr_type(&infix.right);
+                match infix.operator.as_str() {
+                    "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Int,
+                    _ => AhaType::Int,
+                }
+            }
+            ast::Expression::Prefix(prefix) => {
+                if prefix.operator == "!" {
+                    AhaType::Bool
+                } else {
+                    AhaType::Int
+                }
+            }
+            ast::Expression::Call(call) => {
+                if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    if let Some(types) = self.param_type_map.get(&id.value) {
+                        if let Some(rt) = types.last() {
+                            return rt.clone();
+                        }
+                    }
+                    if id.value == "len" {
+                        return AhaType::Int;
+                    }
+                }
+                AhaType::Int
+            }
+            _ => AhaType::Int,
+        }
+    }
+
+    /// Infer a function's return type for the pre-declaration pass.
+    /// Walks the body looking for the last expression value or an
+    /// explicit `return` statement, then types that expression with
+    /// the function's own params in scope (so `a + b` is String when
+    /// a and b are string params).
+    fn infer_function_return_type(&self, func: &ast::FunctionLiteral, func_name: &str) -> AhaType {
+        let param_types = self.infer_param_types_immutable(func_name, &func.parameters);
+
+        // Build a synthetic scope so infer_expr_type_with_scope can resolve params.
+        let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
+            .map(|(i, p)| (p.value.clone(), param_types.get(i).cloned().unwrap_or(AhaType::Int)))
+            .collect();
+
+        for stmt in &func.body.statements {
+            if let ast::Statement::Return(ret) = stmt {
+                return self.infer_expr_type_with_scope(&ret.return_value, &scope);
+            }
+        }
+        // No explicit return — type the last expression statement.
+        for stmt in func.body.statements.iter().rev() {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                return self.infer_expr_type_with_scope(&expr_stmt.expression, &scope);
+            }
+        }
+        AhaType::Int
+    }
+
+    /// Immutable variant of infer_param_types for the pre-pass (when we
+    /// cannot call the &mut self version). Reads from param_type_map.
+    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+        let mut types = vec![AhaType::Int; params.len()];
+        if let Some(inferred) = self.param_type_map.get(func_name) {
+            for (i, t) in inferred.iter().enumerate() {
+                if i < types.len() {
+                    types[i] = t.clone();
+                }
+            }
+        }
+        types
+    }
+
+    /// Like infer_expr_type, but with a synthetic local scope (used by
+    /// the pre-declaration pass to resolve function params).
+    fn infer_expr_type_with_scope(&self, expr: &ast::Expression, scope: &HashMap<String, AhaType>) -> AhaType {
+        match expr {
+            ast::Expression::String(_) => AhaType::String,
+            ast::Expression::Integer(_) => AhaType::Int,
+            ast::Expression::Boolean(_) => AhaType::Bool,
+            ast::Expression::Identifier(id) => {
+                scope.get(&id.value).cloned().unwrap_or(AhaType::Int)
+            }
+            ast::Expression::Infix(infix) => {
+                let lt = self.infer_expr_type_with_scope(&infix.left, scope);
+                let rt = self.infer_expr_type_with_scope(&infix.right, scope);
+                match infix.operator.as_str() {
+                    "+" if lt == AhaType::String || rt == AhaType::String => AhaType::String,
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" => AhaType::Int,
+                    _ => AhaType::Int,
+                }
+            }
+            ast::Expression::Prefix(prefix) => {
+                if prefix.operator == "!" {
+                    AhaType::Bool
+                } else {
+                    AhaType::Int
+                }
+            }
+            ast::Expression::Call(call) => {
+                if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    if id.value == "len" {
+                        return AhaType::Int;
+                    }
+                    if let Some(rt) = self.fn_types.get(&id.value) {
+                        return rt.clone();
+                    }
+                }
+                AhaType::Int
+            }
+            ast::Expression::If(if_expr) => {
+                let cons = self.infer_block_return_type(&if_expr.consequence, scope);
+                if let Some(alt) = &if_expr.alternative {
+                    let alt_t = self.infer_block_return_type(alt, scope);
+                    if alt_t == AhaType::String || cons == AhaType::String {
+                        return AhaType::String;
+                    }
+                }
+                cons
+            }
+            _ => AhaType::Int,
+        }
+    }
+
+    fn infer_block_return_type(&self, block: &ast::BlockStatement, scope: &HashMap<String, AhaType>) -> AhaType {
+        for stmt in &block.statements {
+            if let ast::Statement::Return(ret) = stmt {
+                return self.infer_expr_type_with_scope(&ret.return_value, scope);
+            }
+        }
+        for stmt in block.statements.iter().rev() {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                return self.infer_expr_type_with_scope(&expr_stmt.expression, scope);
+            }
+        }
+        AhaType::Int
+    }
+
     /// Get i8* pointer type (used frequently for strings)
     fn i8_ptr_type(&self) -> inkwell::types::PointerType<'ctx> {
         self.context.i8_type().ptr_type(inkwell::AddressSpace::default())
@@ -85,7 +372,16 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
         self.declare_printf();
         self.declare_c_runtime();
-        
+
+        // Pre-pass: scan all statements for call expressions to infer
+        // parameter types. This lets us type function params as String
+        // when a string is passed at a call site.
+        self.scan_call_sites(&program.statements);
+
+        // Pre-declare all user functions so mutual recursion works:
+        // is_even can call is_odd before is_odd's body is compiled.
+        self.predeclare_functions(&program.statements);
+
         let fn_type = self.i64_type.fn_type(&[], false);
         let function = self.module.add_function("main", fn_type, None);
         let basic_block = self.context.append_basic_block(function, "entry");
@@ -335,9 +631,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Range(range_expr) => self.compile_range_expression(range_expr),
             ast::Expression::Assignment(assign) => self.compile_assignment(assign),
             ast::Expression::Break => {
+                if let Some(&(_, break_block)) = self.loop_stack.last() {
+                    self.builder.build_unconditional_branch(break_block)
+                        .map_err(|e| e.to_string())?;
+                }
                 Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
             },
             ast::Expression::Continue => {
+                if let Some(&(continue_block, _)) = self.loop_stack.last() {
+                    self.builder.build_unconditional_branch(continue_block)
+                        .map_err(|e| e.to_string())?;
+                }
                 Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
             },
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
@@ -453,6 +757,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .map_err(|e| e.to_string())?;
                 Ok(TypedValue::int(r.into()))
             },
+            (AhaType::Int, "%", AhaType::Int) => {
+                let r = self.builder.build_int_signed_rem(left.value.into_int_value(), right.value.into_int_value(), "modtmp")
+                    .map_err(|e| e.to_string())?;
+                Ok(TypedValue::int(r.into()))
+            },
             // Int comparison
             (AhaType::Int, "==" | "!=" | "<" | ">" | "<=" | ">=", AhaType::Int) => {
                 let pred = match op {
@@ -486,6 +795,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             // String comparison
             (AhaType::String, "==" | "!=", AhaType::String) => {
                 self.compile_string_compare(&left, &right, op)
+            },
+            // Logical AND (short-circuit): if left is false, skip right
+            (AhaType::Int, "&&", AhaType::Int) | (AhaType::Bool, "&&", AhaType::Bool) => {
+                self.compile_logical_and(&left, &right)
+            },
+            // Logical OR (short-circuit): if left is true, skip right
+            (AhaType::Int, "||", AhaType::Int) | (AhaType::Bool, "||", AhaType::Bool) => {
+                self.compile_logical_or(&left, &right)
             },
             _ => Err(format!("Cannot apply '{}' to {} and {}", op, left.aha_type, right.aha_type)),
         }
@@ -558,40 +875,119 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(TypedValue::new(ext.into(), AhaType::Bool))
     }
 
+    /// Logical AND: both operands are already evaluated by compile_infix.
+    /// Result = (left != 0) && (right != 0)
+    fn compile_logical_and(&mut self, left: &TypedValue<'ctx>, right: &TypedValue<'ctx>) -> Result<TypedValue<'ctx>, String> {
+        let zero = self.i64_type.const_int(0, false);
+        let left_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE, left.value.into_int_value(), zero, "and_left_bool"
+        ).map_err(|e| e.to_string())?;
+        let right_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE, right.value.into_int_value(), zero, "and_right_bool"
+        ).map_err(|e| e.to_string())?;
+        let result = self.builder.build_and(left_bool, right_bool, "and_tmp")
+            .map_err(|e| e.to_string())?;
+        let ext = self.builder.build_int_z_extend(result, self.i64_type, "and_ext")
+            .map_err(|e| e.to_string())?;
+        Ok(TypedValue::int(ext.into()))
+    }
+
+    /// Logical OR: both operands are already evaluated by compile_infix.
+    /// Result = (left != 0) || (right != 0)
+    fn compile_logical_or(&mut self, left: &TypedValue<'ctx>, right: &TypedValue<'ctx>) -> Result<TypedValue<'ctx>, String> {
+        let zero = self.i64_type.const_int(0, false);
+        let left_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE, left.value.into_int_value(), zero, "or_left_bool"
+        ).map_err(|e| e.to_string())?;
+        let right_bool = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE, right.value.into_int_value(), zero, "or_right_bool"
+        ).map_err(|e| e.to_string())?;
+        let result = self.builder.build_or(left_bool, right_bool, "or_tmp")
+            .map_err(|e| e.to_string())?;
+        let ext = self.builder.build_int_z_extend(result, self.i64_type, "or_ext")
+            .map_err(|e| e.to_string())?;
+        Ok(TypedValue::int(ext.into()))
+    }
+
+    /// Infer parameter types by scanning call expressions in the program.
+    /// If a call passes a string arg, that param is String. Otherwise Int.
+    fn infer_param_types(&mut self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+        let mut types = vec![AhaType::Int; params.len()];
+        if let Some(inferred) = self.param_type_map.get(func_name) {
+            for (i, t) in inferred.iter().enumerate() {
+                if i < types.len() {
+                    types[i] = t.clone();
+                }
+            }
+        }
+        types
+    }
+
     // Compile function definition — FIX C-05 (double return) and C-06 (variable restore safety)
     fn compile_function(&mut self, func: &ast::FunctionLiteral) -> Result<TypedValue<'ctx>, String> {
         let func_name = func.name.as_ref()
             .map(|id| id.value.clone())
             .unwrap_or_else(|| format!("anonymous_{}", self.functions.len()));
-        let param_types: Vec<_> = func.parameters.iter()
-            .map(|_| self.i64_type.into())
-            .collect();
-        let fn_type = self.i64_type.fn_type(&param_types, false);
-        let function = self.module.add_function(&func_name, fn_type, None);
-        self.functions.insert(func_name.clone(), function);
-        self.fn_types.insert(func_name.clone(), AhaType::Int);
-        
+
+        // Infer param types from call sites: scan all call expressions
+        // in already-compiled code for this function name
+        let param_aha_types = self.infer_param_types(&func_name, &func.parameters);
+
+        // Determine return type — reuse the pre-declared type if present
+        // (set by predeclare_functions), otherwise infer it now.
+        let return_type = self.fn_types.get(&func_name)
+            .cloned()
+            .unwrap_or_else(|| self.infer_function_return_type(func, &func_name));
+
+        // Reuse pre-declared function if it exists (for forward references)
+        let function = if let Some(f) = self.functions.get(&func_name) {
+            *f
+        } else {
+            let param_types: Vec<_> = param_aha_types.iter()
+                .map(|t| match t {
+                    AhaType::String => self.string_type.into(),
+                    _ => self.i64_type.into(),
+                })
+                .collect();
+            let fn_type = match return_type {
+                AhaType::String => self.string_type.fn_type(&param_types, false),
+                _ => self.i64_type.fn_type(&param_types, false),
+            };
+            let function = self.module.add_function(&func_name, fn_type, None);
+            self.functions.insert(func_name.clone(), function);
+            function
+        };
+        self.fn_types.insert(func_name.clone(), return_type.clone());
+
         let saved_block = self.builder.get_insert_block();
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
         let saved_function = self.current_function;
-        
+
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
-        
+
         let result = (|| -> Result<(), String> {
             for (i, param) in func.parameters.iter().enumerate() {
                 let param_value = function.get_nth_param(i as u32)
                     .ok_or("Failed to get parameter")?;
-                let alloca = self.builder.build_alloca(self.i64_type, &param.value)
+                let aha_type = &param_aha_types[i];
+                let alloc_type: inkwell::types::BasicTypeEnum<'ctx> = match aha_type {
+                    AhaType::String => self.string_type.into(),
+                    _ => self.i64_type.into(),
+                };
+                let alloca = self.builder.build_alloca(alloc_type, &param.value)
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(alloca, param_value)
                     .map_err(|e| e.to_string())?;
-                self.insert_variable(param.value.clone(), alloca, AhaType::Int);
+                self.insert_variable(param.value.clone(), alloca, aha_type.clone());
             }
-            
+
             let mut has_return = false;
-            let mut last_value: BasicValueEnum<'ctx> = self.i64_type.const_int(0, false).into();
+            let mut last_value: BasicValueEnum<'ctx> = match &return_type {
+                AhaType::String => self.string_type.const_zero().into(),
+                _ => self.i64_type.const_int(0, false).into(),
+            };
             
             for stmt in &func.body.statements {
                 if let ast::Statement::Return(_) = stmt {
@@ -658,7 +1054,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let body_block = self.context.append_basic_block(function, "while_body");
         let after_block = self.context.append_basic_block(function, "while_after");
         self.builder.build_unconditional_branch(condition_block).map_err(|e| e.to_string())?;
-        
+
         self.builder.position_at_end(condition_block);
         let condition_val = self.compile_expression(&while_expr.condition)?;
         let condition_bool = self.builder.build_int_compare(
@@ -668,11 +1064,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             "while_cond_bool"
         ).map_err(|e| e.to_string())?;
         self.builder.build_conditional_branch(condition_bool, body_block, after_block).map_err(|e| e.to_string())?;
-        
+
         self.builder.position_at_end(body_block);
+        self.loop_stack.push((condition_block, after_block));
         self.compile_block_statement(&while_expr.body)?;
-        self.builder.build_unconditional_branch(condition_block).map_err(|e| e.to_string())?;
-        
+        self.loop_stack.pop();
+
+        let body_end = self.builder.get_insert_block().unwrap();
+        if body_end.get_terminator().is_none() {
+            self.builder.build_unconditional_branch(condition_block).map_err(|e| e.to_string())?;
+        }
+
         self.builder.position_at_end(after_block);
         Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
     }
@@ -696,7 +1098,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.position_at_end(consequence_block);
         let consequence_tv = self.compile_block_statement(&if_expr.consequence)?;
         let consequence_end_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        let consequence_terminated = consequence_end_block.get_terminator().is_some();
+        if !consequence_terminated {
+            self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        }
 
         self.builder.position_at_end(alternative_block);
         let alternative_tv = if let Some(alt_block) = &if_expr.alternative {
@@ -705,15 +1110,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             TypedValue::int(self.i64_type.const_int(0, false).into())
         };
         let alternative_end_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        let alternative_terminated = alternative_end_block.get_terminator().is_some();
+        if !alternative_terminated {
+            self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+        }
 
         self.builder.position_at_end(merge_block);
+
+        if consequence_terminated && alternative_terminated {
+            return Ok(TypedValue::int(self.i64_type.const_int(0, false).into()));
+        }
+
         let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
             .map_err(|e| e.to_string())?;
-        phi_node.add_incoming(&[
-            (&consequence_tv.value, consequence_end_block),
-            (&alternative_tv.value, alternative_end_block),
-        ]);
+        if !consequence_terminated {
+            phi_node.add_incoming(&[(&consequence_tv.value as &dyn inkwell::values::BasicValue, consequence_end_block)]);
+        }
+        if !alternative_terminated {
+            phi_node.add_incoming(&[(&alternative_tv.value as &dyn inkwell::values::BasicValue, alternative_end_block)]);
+        }
         Ok(TypedValue::new(phi_node.as_basic_value(), consequence_tv.aha_type))
     }
     
@@ -782,6 +1197,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let cond_block = self.context.append_basic_block(function, "for_cond");
         let body_block = self.context.append_basic_block(function, "for_body");
+        let increment_block = self.context.append_basic_block(function, "for_incr");
         let after_block = self.context.append_basic_block(function, "for_after");
         self.builder.build_unconditional_branch(cond_block).map_err(|e| e.to_string())?;
 
@@ -793,8 +1209,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         ).map_err(|e| e.to_string())?;
         self.builder.build_conditional_branch(cond, body_block, after_block).map_err(|e| e.to_string())?;
 
+        // 'continue' must jump to the increment block, not the condition
+        // block, otherwise the loop variable never advances (infinite loop).
         self.builder.position_at_end(body_block);
+        self.loop_stack.push((increment_block, after_block));
         self.compile_block_statement(&for_expr.body)?;
+        self.loop_stack.pop();
+
+        let body_end = self.builder.get_insert_block().unwrap();
+        if body_end.get_terminator().is_none() {
+            self.builder.build_unconditional_branch(increment_block).map_err(|e| e.to_string())?;
+        }
+
+        self.builder.position_at_end(increment_block);
         let current = self.builder.build_load(loop_var_ptr, "cur").map_err(|e| e.to_string())?;
         let next = self.builder.build_int_add(current.into_int_value(), self.i64_type.const_int(1, false), "next")
             .map_err(|e| e.to_string())?;

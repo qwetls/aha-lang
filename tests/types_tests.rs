@@ -47,12 +47,12 @@ fn test_int_arithmetic_valid() {
 
 #[test]
 fn test_int_comparison_valid() {
-    assert_eq!(AhaType::Int.check_binary_op("==", &AhaType::Int).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Int.check_binary_op("!=", &AhaType::Int).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Int.check_binary_op("<", &AhaType::Int).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Int.check_binary_op(">", &AhaType::Int).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Int.check_binary_op("<=", &AhaType::Int).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Int.check_binary_op(">=", &AhaType::Int).unwrap(), AhaType::Bool);
+    assert_eq!(AhaType::Int.check_binary_op("==", &AhaType::Int).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Int.check_binary_op("!=", &AhaType::Int).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Int.check_binary_op("<", &AhaType::Int).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Int.check_binary_op(">", &AhaType::Int).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Int.check_binary_op("<=", &AhaType::Int).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Int.check_binary_op(">=", &AhaType::Int).unwrap(), AhaType::Int);
 }
 
 #[test]
@@ -62,14 +62,14 @@ fn test_string_concat_valid() {
 
 #[test]
 fn test_string_comparison_valid() {
-    assert_eq!(AhaType::String.check_binary_op("==", &AhaType::String).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::String.check_binary_op("!=", &AhaType::String).unwrap(), AhaType::Bool);
+    assert_eq!(AhaType::String.check_binary_op("==", &AhaType::String).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::String.check_binary_op("!=", &AhaType::String).unwrap(), AhaType::Int);
 }
 
 #[test]
 fn test_bool_comparison_valid() {
-    assert_eq!(AhaType::Bool.check_binary_op("==", &AhaType::Bool).unwrap(), AhaType::Bool);
-    assert_eq!(AhaType::Bool.check_binary_op("!=", &AhaType::Bool).unwrap(), AhaType::Bool);
+    assert_eq!(AhaType::Bool.check_binary_op("==", &AhaType::Bool).unwrap(), AhaType::Int);
+    assert_eq!(AhaType::Bool.check_binary_op("!=", &AhaType::Bool).unwrap(), AhaType::Int);
 }
 
 // =====================================================================
