@@ -2,6 +2,35 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.0] — 2026-08-16
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/ast.rs` | 🔧 ENHANCED | +3 | `AssignmentExpression.name` → `target: Box<Expression>` (generic) |
+| `src/parser.rs` | 🔧 ENHANCED | +12 | `=` sebagai infix operator; `Assign` precedence; target bisa Identifier atau FieldAccess |
+| `src/codegen.rs` | 🔧 ENHANCED | +60 | `compile_assignment` handle FieldAccess target (load → insertvalue → store); type-check; scan target |
+| `tests/struct_codegen.rs` | 🔧 ENHANCED | +70 | 10 test mutasi field (int/string, loop, error paths, regresi) |
+
+### Added
+
+- **Field mutation (F1):** `p.x = value` — struct field assignment at runtime. `p.x` is now an lvalue: load the struct, `insertvalue` the new field, store back. Type-checked against the field's declared type (`string` field rejects int values and vice versa).
+- **Generic assignment target:** The parser now treats `=` as an infix operator, so both `x = 5` (identifier) and `p.x = 5` (field access) parse to `AssignmentExpression` with a generic `target` expression.
+- **Test suite:** 373 tests passing (was 363; +10 field-mutation tests, including mutation inside loops and string field reassignment).
+
+### Changed
+
+- `AssignmentExpression.name: Identifier` → `AssignmentExpression.target: Box<Expression>` — enables future lvalue forms (e.g. array element assignment `arr[0] = x`).
+
+### Fixed
+
+- `TokenType::Assign` was missing from `precedence()`, so `=` fell through to `parse_prefix` as an unexpected token. Added `Precedence::Assign`.
+
+### Security
+
+- Assigning a value of the wrong type to a typed field produces a compile-time error.
+
 ## [1.5.0] — 2026-08-16
 
 ### File-by-File Change Summary
