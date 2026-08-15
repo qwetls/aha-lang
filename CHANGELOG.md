@@ -2,9 +2,45 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
-## [1.4.0] - 2026-05-17
+## [1.5.0] — 2026-08-16
 
-## File-by-File Change Summary
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/types.rs` | 🔧 ENHANCED | +5 | `AhaType::Struct(name)` variant, `Display`, `TypedValue::struct_val()` |
+| `src/parser.rs` | 🔧 ENHANCED | +60 | `struct_names` registry, `parse_struct_literal()`, `StructLiteral` import |
+| `src/codegen.rs` | 🔧 ENHANCED | +130 | `struct_defs` registry, `struct_llvm_type()`, `field_index()`, `field_type()`, literal type-check, typed field access, `scan_expr_for_calls` descends into struct literals |
+| `tests/struct_codegen.rs` | ✨ NEW | ~320 | 28 backend tests: JIT semantics, IR shape, typed fields, error paths |
+| `PRD.md` | ✨ NEW | 225 | Product Requirements Document v0.2 |
+
+### Added
+
+- **Struct codegen (Roadmap Phase 2 #1):** `struct Point { x, y }` definitions now produce LLVM struct types. Literals `Point { x: 1, y: 2 }` build the aggregate via `insertvalue`; field access `p.x` reads via `extractvalue`.
+- **Typed struct fields:** Field type hints (`name: string, age: int`) are honored at runtime — `string` fields use `{i8*, i64}` layout, `int` fields use `i64`. Literals are type-checked against declarations. Field access preserves the declared type, so `len(p.name)`, `p.name == "..."`, and `p.first + p.last` work correctly.
+- **Struct literal parsing:** `TypeName { field: value, ... }` syntax, gated by a struct-name registry so ordinary block conditions `if x { ... }` are unaffected.
+- **PRD v0.2:** Visi besar: web → aerospace; "Advanced Hybrid Architecture" dijelaskan; F5 (Resource lifetimes) di-freeze sampai F1-F4 stabil.
+- **Test suite (struct):** 28 backend tests covering:
+  - Single/multiple field read, field order independence, missing field defaults to zero
+  - Field values from variables, expressions, arithmetic chains
+  - Structs interacting with control flow (if conditions, loops)
+  - Multiple instances and distinct struct types
+  - Typed string fields (len, concat, equality, default empty string)
+  - IR shape verification (insertvalue, extractvalue)
+  - Error paths (unknown field, non-struct field access, wrong type)
+
+### Changed
+
+- **Branch workflow:** All development now happens on `development` branch; `main` only receives PRs with green CI. This is enforced as a project-wide rule.
+- **PRD replaces ad-hoc planning:** All future features must originate from the roadmap in PRD.md.
+
+### Security
+
+- Struct field types are checked at compile time: assigning a string literal to an `int` field (or vice versa) produces a compile-time error instead of undefined behavior.
+
+## [1.4.0] — 2026-05-17
+
+### File-by-File Change Summary
 
 | File | Status | Lines | What Changed |
 |------|--------|------:|-------------|
