@@ -217,8 +217,77 @@ fn test_field_access_emits_extractvalue() {
 }
 
 // =====================================================================
+// Typed struct fields (type hints honored at runtime)
+// =====================================================================
+
+#[test]
+fn test_typed_string_field_len() {
+    // A field declared `string` stores a real {i8*, i64} struct, so
+    // len() works on it.
+    let result = run("struct Person { name: string, age: int } let p = Person { name: \"AHA\", age: 3 }; len(p.name)");
+    assert_eq!(result, 3);
+}
+
+#[test]
+fn test_typed_int_field_arithmetic() {
+    let result = run("struct Person { name: string, age: int } let p = Person { name: \"x\", age: 30 }; p.age * 2");
+    assert_eq!(result, 60);
+}
+
+#[test]
+fn test_typed_string_field_string_concat() {
+    // The field carries a real string, so + on it concatenates.
+    let result = run("struct P { first: string, last: string } let p = P { first: \"A\", last: \"B\" }; len(p.first + p.last)");
+    assert_eq!(result, 2);
+}
+
+#[test]
+fn test_typed_string_field_equality() {
+    let result = run("struct P { name: string } let p = P { name: \"hello\" }; p.name == \"hello\"");
+    assert_eq!(result, 1);
+}
+
+#[test]
+fn test_missing_typed_string_field_defaults() {
+    // An omitted string field still zeroes out; reading it back yields
+    // an empty string (len 0).
+    let result = run("struct P { name: string, age: int } let p = P { age: 5 }; len(p.name)");
+    assert_eq!(result, 0);
+}
+
+#[test]
+fn test_typed_string_field_from_string_var() {
+    let result = run("struct P { name: string } let n = \"world\"; let p = P { name: n }; len(p.name)");
+    assert_eq!(result, 5);
+}
+
+// =====================================================================
 // Error paths
 // =====================================================================
+
+#[test]
+fn test_wrong_type_string_field_is_error() {
+    let err = expect_codegen_error(
+        "struct Person { name: string } let p = Person { name: 123 }; p.name"
+    );
+    assert!(
+        err.contains("expects a string"),
+        "expected a string-typed field error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_wrong_type_int_field_is_error() {
+    let err = expect_codegen_error(
+        "struct Person { name: string, age: int } let p = Person { name: \"x\", age: \"old\" }; p.age"
+    );
+    assert!(
+        err.contains("expects") && err.contains("got string"),
+        "expected an int-typed field error, got: {}",
+        err
+    );
+}
 
 #[test]
 fn test_unknown_field_is_error() {

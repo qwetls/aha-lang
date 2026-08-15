@@ -32,9 +32,9 @@ pub struct CodeGenerator<'ctx> {
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
     /// Inferred parameter types per function: func_name → vec of AhaType
     param_type_map: HashMap<String, Vec<AhaType>>,
-    /// Registered struct definitions: struct name → ordered field names.
-    /// Field order defines the LLVM struct layout (all fields are i64).
-    struct_defs: HashMap<String, Vec<String>>,
+    /// Registered struct definitions: struct name → ordered (field name,
+    /// declared AhaType) pairs. Field order defines the LLVM layout.
+    struct_defs: HashMap<String, Vec<(String, AhaType)>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -164,6 +164,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Index(idx) => {
                 self.scan_expr_for_calls(&idx.left);
                 self.scan_expr_for_calls(&idx.index);
+            }
+            ast::Expression::StructLiteral(struct_lit) => {
+                for (_, value_expr) in &struct_lit.fields {
+                    self.scan_expr_for_calls(value_expr);
+                }
             }
             _ => {}
         }
@@ -1250,24 +1255,45 @@ impl<'ctx> CodeGenerator<'ctx> {
     // --- Struct support ---
 
     /// Walk top-level statements and record every struct definition's
-    /// field order so literals and field access can resolve layout.
+    /// field order + declared type so literals and field access can
+    /// resolve layout and check types.
     fn register_structs(&mut self, statements: &[ast::Statement]) {
         for stmt in statements {
             if let ast::Statement::Struct(def) = stmt {
-                let field_names: Vec<String> = def.fields.iter()
-                    .map(|f| f.name.value.clone())
+                let fields: Vec<(String, AhaType)> = def.fields.iter()
+                    .map(|f| {
+                        let t = f.type_hint.as_deref()
+                            .and_then(AhaType::from_hint)
+                            .unwrap_or(AhaType::Int);
+                        (f.name.value.clone(), t)
+                    })
                     .collect();
-                self.struct_defs.insert(def.name.value.clone(), field_names);
+                self.struct_defs.insert(def.name.value.clone(), fields);
             }
         }
     }
 
-    /// LLVM type for a registered struct: all fields are i64.
+    /// Declared type of a struct field.
+    fn field_type(&self, struct_name: &str, field: &str) -> Result<AhaType, String> {
+        let fields = self.struct_defs.get(struct_name)
+            .ok_or_else(|| format!("Unknown struct type '{}'", struct_name))?;
+        fields.iter()
+            .find(|(f, _)| f == field)
+            .map(|(_, t)| t.clone())
+            .ok_or_else(|| format!("Struct '{}' has no field '{}'", struct_name, field))
+    }
+
+    /// LLVM type for a registered struct. Each field uses its declared
+    /// type: String → {i8*, i64}, everything else → i64.
     fn struct_llvm_type(&self, name: &str) -> Result<inkwell::types::StructType<'ctx>, String> {
         let fields = self.struct_defs.get(name)
             .ok_or_else(|| format!("Unknown struct type '{}'", name))?;
-        let field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
-            vec![self.i64_type.into(); fields.len()];
+        let field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> = fields.iter()
+            .map(|(_, t)| match t {
+                AhaType::String => self.string_type.into(),
+                _ => self.i64_type.into(),
+            })
+            .collect();
         Ok(self.context.struct_type(&field_types, false))
     }
 
@@ -1275,7 +1301,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn field_index(&self, struct_name: &str, field: &str) -> Result<u32, String> {
         let fields = self.struct_defs.get(struct_name)
             .ok_or_else(|| format!("Unknown struct type '{}'", struct_name))?;
-        fields.iter().position(|f| f == field)
+        fields.iter().position(|(f, _)| f == field)
             .map(|i| i as u32)
             .ok_or_else(|| format!("Struct '{}' has no field '{}'", struct_name, field))
     }
@@ -1290,7 +1316,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut struct_val = struct_type.const_zero();
         for (field_ident, value_expr) in &lit.fields {
             let idx = self.field_index(&struct_name, &field_ident.value)?;
+            let declared = self.field_type(&struct_name, &field_ident.value)?;
             let value = self.compile_expression(value_expr)?;
+            // Type-check: a field declared `string` must be given a string
+            // literal/variable; everything else is stored as i64.
+            if declared == AhaType::String && !value.aha_type.is_string() {
+                return Err(format!(
+                    "Field '{}' of '{}' expects a string, got {}",
+                    field_ident.value, struct_name, value.aha_type
+                ));
+            }
+            if declared != AhaType::String && value.aha_type.is_string() {
+                return Err(format!(
+                    "Field '{}' of '{}' expects {}, got string",
+                    field_ident.value, struct_name, declared
+                ));
+            }
             struct_val = self.builder
                 .build_insert_value(struct_val, value.value, idx, "structfield")
                 .map_err(|e| e.to_string())?
@@ -1309,11 +1350,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             )),
         };
         let idx = self.field_index(&struct_name, &access.field.value)?;
+        let declared = self.field_type(&struct_name, &access.field.value)?;
         let struct_val = object.value.into_struct_value();
         let field_val = self.builder
             .build_extract_value(struct_val, idx, "fieldval")
             .map_err(|e| e.to_string())?;
-        Ok(TypedValue::int(field_val))
+        match declared {
+            AhaType::String => Ok(TypedValue::string(field_val)),
+            _ => Ok(TypedValue::int(field_val)),
+        }
     }
 
 
