@@ -603,6 +603,7 @@ impl Parser {
 
     fn precedence(&self, t: &TokenType) -> Precedence {
         match t {
+            TokenType::Assign => Precedence::Assign,
             TokenType::Eq => Precedence::Equals,
             TokenType::NotEq => Precedence::Equals,
             TokenType::And => Precedence::Logical,
