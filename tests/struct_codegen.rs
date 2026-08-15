@@ -195,7 +195,10 @@ fn test_two_distinct_struct_types() {
 
 #[test]
 fn test_struct_literal_emits_insertvalue() {
-    let ir = emit_ir("struct Point { x, y } let p = Point { x: 1, y: 2 }; p.x");
+    // Field values come from variables so the IR builder cannot
+    // constant-fold the aggregate into a constant (which would elide
+    // the insertvalue instructions).
+    let ir = emit_ir("struct Point { x, y } let a = 1; let b = 2; let p = Point { x: a, y: b }; p.x");
     assert!(
         ir.contains("insertvalue"),
         "struct literal should emit insertvalue, got:\n{}",
