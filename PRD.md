@@ -9,44 +9,41 @@
 
 ## 1. Ringkasan Eksekutif
 
-AHA! Lang adalah bahasa pemrograman modern yang ingin menggabungkan tiga hal
-yang selama ini sulit didapat sekaligus:
+AHA! Lang adalah bahasa pemrograman dengan tiga karakter inti yang
+didefinisikan oleh dirinya sendiri — bukan tiruan bahasa lain:
 
-1. **Cepat seperti C/C++** — kompilasi ke LLVM IR, eksekusi native (JIT
-   sekarang, AOT menyusul). Zero-cost abstraction: tidak ada runtime yang
-   memperlambat.
-2. **Sederhana seperti Python** — sintaks ringkas dan ekspresif, "mudah dibaca
-   seperti prosa". Sedikit kata kunci, tanpa boilerplate.
-3. **Bebas memory leak TANPA garbage collector** — keamanan memori dijamin di
-   compile-time lewat model *ownership & lifetimes* (seperti komitmen roadmap:
+1. **Cepat.** Setiap program AHA! dikompilasi ke LLVM IR dan dieksekusi
+   sebagai machine code (JIT sekarang, AOT menyusul). Tidak ada interpreter,
+   tidak ada runtime yang memperlambat.
+2. **Sederhana.** Sintaks ringkas dan ekspresif — "mudah dibaca seperti
+   prosa". Sedikit kata kunci, tanpa boilerplate, tanpa kurva belajar curam.
+3. **Bebas memory leak tanpa garbage collector.** Keamanan memori dijamin di
+   compile-time lewat model *ownership & lifetimes* (komitmen roadmap:
    "Resource lifetimes — safe manual memory management, no GC overhead").
-   Tidak ada GC pause, tidak ada leak yang lolos ke production.
+   Pembebasan memori otomatis, deterministik, tanpa GC pause.
 
-> **Posisi:** AHA! menempati celah antara Python (mudah tapi lambat + GC) dan
-> C/Rust (cepat tapi keras/berat). Keamanan memori *tanpa GC* adalah
-> diferensiator inti — bukan fitur tambahan.
+> **Posisi:** AHA! tidak mengikuti aturan bahasa lain dan tidak berusaha
+> menjadi "versi lebih baik dari X". AHA! punya keputusan desainnya sendiri,
+> dan tiga karakter di atas adalah komitmennya — bukan pembanding.
 
 ---
 
 ## 2. Masalah & Motivasi
 
-| Bahasa | Kecepatan | Kesederhanaan | Keamanan memori |
-|--------|-----------|---------------|-----------------|
-| C / C++ | ✅ native | ❌ manual management, rawan leak/UAF | ❌ tanggung jawab penuh programmer |
-| Python | ❌ interpreter + GIL | ✅ | ⚠️ GC, tapi lambat & ada pause |
-| Rust | ✅ native | ❌ kurva belajar curam (borrow checker) | ✅ tanpa GC |
-| **AHA! (target)** | ✅ native (LLVM) | ✅ sesederhana Python | ✅ tanpa GC, dijamin compile-time |
+Bahasa pemrograman yang ada umumnya memaksa pilihan: cepat tapi rumit,
+sederhana tapi lambat, atau aman tapi kaku. AHA! menolak pilihan itu — ketiga
+karakter inti (cepat, sederhana, aman memori tanpa GC) adalah hak AHA! untuk
+menentukan caranya sendiri, bukan meniru solusi yang sudah ada.
 
-Pasar target: developer yang mau kecepatan native tanpa harus berhadapan
-dengan manual `malloc`/`free` (C) atau kurva belajar ownership Rust yang curam.
+Target pengguna: siapa pun yang menginginkan kecepatan native dan keamanan
+memori tanpa harus menerima kompleksitas berlebihan.
 
 ---
 
 ## 3. Tujuan (Goals)
 
 - **G1 — Performa native:** program AHA! dieksekusi sebagai machine code
-  (LLVM). Target benchmark: rasio ≤ 1.5× terhadap C (`clang -O2`) pada
-  workload komputasi & string.
+  (LLVM) dengan overhead serendah mungkin pada workload komputasi & string.
 - **G2 — Kesederhanaan:** waktu dari instal sampai "hello world" < 10 menit;
   kode AHA! terbaca tanpa komentar (self-documenting).
 - **G3 — Aman memori tanpa GC:** setiap alokasi punya tepat satu *owner*;
@@ -74,8 +71,11 @@ dengan manual `malloc`/`free` (C) atau kurva belajar ownership Rust yang curam.
 
 ## 5. Target Pengguna (Persona)
 
-1. **Programmer Python** yang butuh kecepatan tanpa pindah total ke C/Rust.
-2. **Developer sistem** yang ingin alternatif lebih ringan dari C++/Rust.
+1. **Developer yang ingin bahasa cepat tanpa kerumitan** — mereka yang
+   menulis program yang butuh kecepatan, tapi tidak ingin tenggelam dalam
+   detail manajemen memori.
+2. **Developer yang ingin bahasa sederhana tanpa kompromi kecepatan** —
+   sintaks ringkas, tapi tetap native.
 3. **Pelajar & komunitas compiler** — AHA! terbuka sebagai bahasa untuk
    belajar kompilator (LLVM, Pratt parser, JIT).
 4. **Kontributor awal** — proyek ini butuh komunitas untuk tumbuh.
@@ -180,8 +180,7 @@ Prioritas mengikuti urutan roadmap Phase 2. Setiap item wajib: sesuai roadmap
 
 | Metrik | Target |
 |--------|--------|
-| Performa komputasi vs C (`clang -O2`) | ≤ 1.5× lebih lambat |
-| Performa vs Python (loop/string) | ≥ 20× lebih cepat |
+| Performa komputasi (benchmark AHA! sendiri) | Overhead serendah mungkin; tidak ada interpreter |
 | Memory leak di test suite (Valgrind/ASan) | **0** |
 | Time-to-hello-world | < 10 menit (release binary/playground) |
 | Test suite | ≥ 500 test hijau di CI, 0 gagal |
@@ -191,9 +190,9 @@ Prioritas mengikuti urutan roadmap Phase 2. Setiap item wajib: sesuai roadmap
 
 ## 10. Keputusan Desain Terbuka (Butuh Diskusi)
 
-1. **Ekspresi lifetime di sintaks:** implisit (scope-based, seperti C++ RAII)
-   atau anotasi eksplisit (mis. `~`/borrow seperti Rust)? Rekomendasi awal:
-   implisit dulu — demi "sederhana seperti Python".
+1. **Ekspresi lifetime di sintaks:** implisit (scope-based — free otomatis
+   saat keluar scope) atau anotasi eksplisit? Rekomendasi awal: implisit
+   dulu — demi kesederhanaan.
 2. **Parameter fungsi:** by-value atau by-reference? (menghindari copy struct
    besar; butuh definisi ownership untuk param).
 3. **Mutasi struct:** kapan `p.x = 5` didukung? (butuh lvalue field access di
