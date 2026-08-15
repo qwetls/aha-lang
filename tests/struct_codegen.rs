@@ -310,3 +310,77 @@ fn test_field_access_on_non_struct_is_error() {
         err
     );
 }
+
+// =====================================================================
+// Field mutation (p.x = value)
+// =====================================================================
+
+#[test]
+fn test_mutate_int_field() {
+    let result = run("struct P { x, y } let p = P { x: 1, y: 2 }; p.x = 99; p.x");
+    assert_eq!(result, 99);
+}
+
+#[test]
+fn test_mutate_int_field_and_read_other() {
+    let result = run("struct P { x, y } let p = P { x: 1, y: 2 }; p.x = 99; p.y");
+    assert_eq!(result, 2);
+}
+
+#[test]
+fn test_mutate_then_arithmetic() {
+    let result = run("struct P { x, y } let p = P { x: 10, y: 20 }; p.x = 30; p.x + p.y");
+    assert_eq!(result, 50);
+}
+
+#[test]
+fn test_double_mutation() {
+    let result = run("struct P { x, y } let p = P { x: 1, y: 2 }; p.x = 5; p.y = 6; p.x * p.y");
+    assert_eq!(result, 30);
+}
+
+#[test]
+fn test_mutate_string_field() {
+    let result = run("struct P { name: string } let p = P { name: \"hello\" }; p.name = \"world\"; len(p.name)");
+    assert_eq!(result, 5);
+}
+
+#[test]
+fn test_mutate_string_field_equality() {
+    let result = run("struct P { name: string } let p = P { name: \"hello\" }; p.name = \"world\"; p.name == \"world\"");
+    assert_eq!(result, 1);
+}
+
+#[test]
+fn test_mutate_field_in_loop() {
+    let result = run(
+        "struct P { x } let p = P { x: 0 }; for i in 0..3 { p.x = p.x + 1; } p.x"
+    );
+    assert_eq!(result, 3);
+}
+
+#[test]
+fn test_mutate_field_wrong_type_is_error() {
+    let err = expect_codegen_error(
+        "struct P { name: string } let p = P { name: \"x\" }; p.name = 42; p.name"
+    );
+    assert!(
+        err.contains("expects a string"),
+        "expected a string-typed field error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_plain_variable_assignment_still_works() {
+    // Ensure the change to generic assignment target didn't break
+    // plain x = value assignments.
+    let result = run("let x = 5; x = 10; x");
+    assert_eq!(result, 10);
+}
+
+#[test]
+fn test_plain_variable_mutate_in_loop() {
+    let result = run("let total = 0; for i in 0..5 { total = total + i; } total");
+    assert_eq!(result, 10);
+}

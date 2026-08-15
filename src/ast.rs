@@ -105,7 +105,7 @@ pub enum Expression {
 // Assignment expression: name = value
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssignmentExpression {
-    pub name: Identifier,
+    pub target: Box<Expression>,
     pub value: Box<Expression>,
 }
 

@@ -298,7 +298,11 @@ fn test_assignment() {
     let program = parse("x = 42");
     if let Statement::Expression(expr_stmt) = &program.statements[0] {
         if let Expression::Assignment(assign) = &expr_stmt.expression {
-            assert_eq!(assign.name.value, "x");
+            if let Expression::Identifier(id) = &*assign.target {
+                assert_eq!(id.value, "x");
+            } else {
+                panic!("Expected Identifier as assignment target");
+            }
             if let Expression::Integer(i) = &*assign.value {
                 assert_eq!(i.value, 42);
             }

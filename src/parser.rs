@@ -271,6 +271,19 @@ impl Parser {
                 });
                 continue;
             }
+
+            // Handle assignment: left = expr
+            // Left can be an identifier (x = 5) or a field access (p.x = 5)
+            if self.peek_token_is(TokenType::Assign) {
+                self.next_token(); // consume '='
+                self.next_token(); // consume '='
+                let value = self.parse_expression(Precedence::Lowest);
+                left = Expression::Assignment(AssignmentExpression {
+                    target: Box::new(left),
+                    value: Box::new(value),
+                });
+                continue;
+            }
             
             // Handle function call: expr(args)
             if self.peek_token_is(TokenType::LeftParen) {
@@ -317,19 +330,7 @@ impl Parser {
         match self.current_token.kind {
             TokenType::Identifier => {
                 let ident = Identifier { value: self.current_token.literal.clone() };
-                // Check if this is an assignment: x = expr
-                if self.peek_token_is(TokenType::Assign) {
-                    self.next_token(); // Skip identifier
-                    self.next_token(); // Skip '='
-                    let value = self.parse_expression(Precedence::Lowest);
-                    return Expression::Assignment(AssignmentExpression {
-                        name: ident,
-                        value: Box::new(value),
-                    });
-                }
                 // Struct literal: TypeName { field: value, ... }
-                // Only treated as such when the identifier is a known struct
-                // name, so ordinary `if x { ... }` conditions are unaffected.
                 if self.peek_token_is(TokenType::LeftBrace)
                     && self.struct_names.contains(&ident.value)
                 {

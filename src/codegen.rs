@@ -151,6 +151,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.scan_block_for_calls(&for_expr.body);
             }
             ast::Expression::Assignment(assign) => {
+                self.scan_expr_for_calls(&assign.target);
                 self.scan_expr_for_calls(&assign.value);
             }
             ast::Expression::Function(func) => {
@@ -1186,14 +1187,69 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn compile_assignment(&mut self, assign: &ast::AssignmentExpression) -> Result<TypedValue<'ctx>, String> {
         let typed_val = self.compile_expression(&assign.value)?;
-        if let Some(info) = self.lookup_variable(&assign.name.value) {
-            let ptr = info.ptr;
-            self.builder.build_store(ptr, typed_val.value)
-                .map_err(|e| e.to_string())?;
-            Ok(typed_val)
-        } else {
-            Err(format!("Cannot assign to undefined variable: '{}'", assign.name.value))
+
+        // Handle field access: p.x = value
+        if let ast::Expression::FieldAccess(fa) = &*assign.target {
+            // Compile the object expression to get the struct value
+            let object = self.compile_expression(&fa.object)?;
+            let struct_name = match &object.aha_type {
+                AhaType::Struct(name) => name.clone(),
+                other => return Err(format!(
+                    "Field access '.{}' on non-struct type {}", fa.field.value, other
+                )),
+            };
+            let idx = self.field_index(&struct_name, &fa.field.value)?;
+            let declared = self.field_type(&struct_name, &fa.field.value)?;
+
+            // Type-check: the assigned value must match the field's declared type
+            if declared == AhaType::String && !typed_val.aha_type.is_string() {
+                return Err(format!(
+                    "Field '{}' of '{}' expects a string, got {}",
+                    fa.field.value, struct_name, typed_val.aha_type
+                ));
+            }
+            if declared != AhaType::String && typed_val.aha_type.is_string() {
+                return Err(format!(
+                    "Field '{}' of '{}' expects {}, got string",
+                    fa.field.value, struct_name, declared
+                ));
+            }
+
+            // Load the struct from the variable, update the field, store back
+            let struct_name_for_var = struct_name.clone();
+            let struct_val = object.value.into_struct_value();
+            let new_struct = self.builder
+                .build_insert_value(struct_val, typed_val.value, idx, "mutfield")
+                .map_err(|e| e.to_string())?
+                .into_struct_value();
+
+            // If the object expression is a variable, store the updated struct back
+            if let ast::Expression::Identifier(id) = &*fa.object {
+                if let Some(info) = self.lookup_variable(&id.value) {
+                    self.builder.build_store(info.ptr, new_struct)
+                        .map_err(|e| e.to_string())?;
+                }
+                // else: it's a temporary, no store needed
+            }
+
+            return Ok(TypedValue::struct_val(new_struct.into(), struct_name_for_var));
         }
+
+        // Handle plain variable: x = value
+        if let ast::Expression::Identifier(id) = &*assign.target {
+            if let Some(info) = self.lookup_variable(&id.value) {
+                let ptr = info.ptr;
+                self.builder.build_store(ptr, typed_val.value)
+                    .map_err(|e| e.to_string())?;
+                return Ok(typed_val);
+            }
+            return Err(format!("Cannot assign to undefined variable: '{}'", id.value));
+        }
+
+        Err(format!(
+            "Cannot assign to expression of type {:?}",
+            assign.target
+        ))
     }
 
     fn compile_for_expression(&mut self, for_expr: &ast::ForExpression) -> Result<TypedValue<'ctx>, String> {
