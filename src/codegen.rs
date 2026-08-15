@@ -32,6 +32,9 @@ pub struct CodeGenerator<'ctx> {
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
     /// Inferred parameter types per function: func_name → vec of AhaType
     param_type_map: HashMap<String, Vec<AhaType>>,
+    /// Registered struct definitions: struct name → ordered field names.
+    /// Field order defines the LLVM struct layout (all fields are i64).
+    struct_defs: HashMap<String, Vec<String>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -55,6 +58,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             current_function: None,
             loop_stack: Vec::new(),
             param_type_map: HashMap::new(),
+            struct_defs: HashMap::new(),
         }
     }
 
@@ -373,6 +377,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
 
+        // Register struct definitions first so struct literals and field
+        // access can resolve field layout during codegen.
+        self.register_structs(&program.statements);
+
         // Pre-pass: scan all statements for call expressions to infer
         // parameter types. This lets us type function params as String
         // when a string is passed at a call site.
@@ -574,6 +582,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let typed_val = self.compile_expression(&let_stmt.value)?;
                 let alloc_type: inkwell::types::BasicTypeEnum<'ctx> = match &typed_val.aha_type {
                     AhaType::String => self.string_type.into(),
+                    AhaType::Struct(name) => self.struct_llvm_type(name)?.into(),
                     _ => self.i64_type.into(),
                 };
                 let pointer = self.builder.build_alloca(alloc_type, &let_stmt.name.value)
@@ -630,6 +639,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Index(idx_expr) => self.compile_index_expression(idx_expr),
             ast::Expression::Range(range_expr) => self.compile_range_expression(range_expr),
             ast::Expression::Assignment(assign) => self.compile_assignment(assign),
+            ast::Expression::StructLiteral(struct_lit) => self.compile_struct_literal(struct_lit),
+            ast::Expression::FieldAccess(field_access) => self.compile_field_access(field_access),
             ast::Expression::Break => {
                 if let Some(&(_, break_block)) = self.loop_stack.last() {
                     self.builder.build_unconditional_branch(break_block)
@@ -1235,6 +1246,76 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_range_expression(&mut self, range: &ast::RangeExpression) -> Result<TypedValue<'ctx>, String> {
         self.compile_expression(&range.start)
     }
+
+    // --- Struct support ---
+
+    /// Walk top-level statements and record every struct definition's
+    /// field order so literals and field access can resolve layout.
+    fn register_structs(&mut self, statements: &[ast::Statement]) {
+        for stmt in statements {
+            if let ast::Statement::Struct(def) = stmt {
+                let field_names: Vec<String> = def.fields.iter()
+                    .map(|f| f.name.value.clone())
+                    .collect();
+                self.struct_defs.insert(def.name.value.clone(), field_names);
+            }
+        }
+    }
+
+    /// LLVM type for a registered struct: all fields are i64.
+    fn struct_llvm_type(&self, name: &str) -> Result<inkwell::types::StructType<'ctx>, String> {
+        let fields = self.struct_defs.get(name)
+            .ok_or_else(|| format!("Unknown struct type '{}'", name))?;
+        let field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
+            vec![self.i64_type.into(); fields.len()];
+        Ok(self.context.struct_type(&field_types, false))
+    }
+
+    /// Index of a field within a struct's layout.
+    fn field_index(&self, struct_name: &str, field: &str) -> Result<u32, String> {
+        let fields = self.struct_defs.get(struct_name)
+            .ok_or_else(|| format!("Unknown struct type '{}'", struct_name))?;
+        fields.iter().position(|f| f == field)
+            .map(|i| i as u32)
+            .ok_or_else(|| format!("Struct '{}' has no field '{}'", struct_name, field))
+    }
+
+    fn compile_struct_literal(&mut self, lit: &ast::StructLiteral) -> Result<TypedValue<'ctx>, String> {
+        let struct_name = lit.name.value.clone();
+        let struct_type = self.struct_llvm_type(&struct_name)?;
+
+        // Compile each provided field's value and place it at the correct
+        // index defined by the struct declaration order. Missing fields
+        // default to 0. field_index() rejects unknown fields.
+        let mut struct_val = struct_type.const_zero();
+        for (field_ident, value_expr) in &lit.fields {
+            let idx = self.field_index(&struct_name, &field_ident.value)?;
+            let value = self.compile_expression(value_expr)?;
+            struct_val = self.builder
+                .build_insert_value(struct_val, value.value, idx, "structfield")
+                .map_err(|e| e.to_string())?
+                .into_struct_value();
+        }
+
+        Ok(TypedValue::struct_val(struct_val.into(), struct_name))
+    }
+
+    fn compile_field_access(&mut self, access: &ast::FieldAccess) -> Result<TypedValue<'ctx>, String> {
+        let object = self.compile_expression(&access.object)?;
+        let struct_name = match &object.aha_type {
+            AhaType::Struct(name) => name.clone(),
+            other => return Err(format!(
+                "Field access '.{}' on non-struct type {}", access.field.value, other
+            )),
+        };
+        let idx = self.field_index(&struct_name, &access.field.value)?;
+        let struct_val = object.value.into_struct_value();
+        let field_val = self.builder
+            .build_extract_value(struct_val, idx, "fieldval")
+            .map_err(|e| e.to_string())?;
+        Ok(TypedValue::int(field_val))
+    }
+
 
     pub fn print_llvm_ir(&self) {
         self.module.print_to_stderr();

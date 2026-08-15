@@ -6,7 +6,7 @@ use crate::ast::{
     Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral,
     StringLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement,
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
-    IndexExpression, StructDefinition, StructField, FieldAccess,
+    IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess,
     AssignmentExpression, FunctionLiteral,
 };
 use crate::ast::Token;
@@ -17,6 +17,9 @@ pub struct Parser {
     current_token: Token,
     peek_token: Token,
     pub errors: Vec<String>,
+    /// Names of structs declared so far, so `Point { ... }` is parsed as a
+    /// struct literal instead of an identifier followed by a block.
+    struct_names: std::collections::HashSet<String>,
 }
 
 // Operator precedence levels (lowest to highest)
@@ -45,6 +48,7 @@ impl Parser {
             current_token,
             peek_token,
             errors: Vec::new(),
+            struct_names: std::collections::HashSet::new(),
         }
     }
 
@@ -106,7 +110,8 @@ impl Parser {
             return None;
         }
         let name = Identifier { value: self.current_token.literal.clone() };
-        
+        self.struct_names.insert(name.value.clone());
+
         if !self.expect_peek(TokenType::LeftBrace) {
             return None;
         }
@@ -140,6 +145,48 @@ impl Parser {
         }
         
         Some(Statement::Struct(StructDefinition { name, fields }))
+    }
+
+    // Parse a struct literal: TypeName { field: value, field2: value2 }
+    // The caller has already consumed the type name; current token is it.
+    fn parse_struct_literal(&mut self, name: Identifier) -> Expression {
+        // current token is the type name; peek is '{'
+        self.next_token(); // move to '{'
+
+        let mut fields: Vec<(Identifier, Expression)> = Vec::new();
+        self.next_token(); // move past '{'
+
+        while !self.current_token_is(TokenType::RightBrace)
+            && !self.current_token_is(TokenType::Eof)
+        {
+            if !self.current_token_is(TokenType::Identifier) {
+                self.errors.push("Expected field name in struct literal".to_string());
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            if !self.expect_peek(TokenType::Colon) {
+                self.errors.push("Expected ':' after field name in struct literal".to_string());
+                break;
+            }
+            self.next_token(); // move to value expression
+
+            let value = self.parse_expression(Precedence::Lowest);
+            fields.push((field_name, value));
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // move to ','
+                self.next_token(); // move to next field name
+            } else {
+                self.next_token(); // move to '}' (or whatever ends the literal)
+            }
+        }
+
+        if !self.current_token_is(TokenType::RightBrace) {
+            self.errors.push("Expected '}' to close struct literal".to_string());
+        }
+
+        Expression::StructLiteral(StructLiteral { name, fields })
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {
@@ -279,6 +326,14 @@ impl Parser {
                         name: ident,
                         value: Box::new(value),
                     });
+                }
+                // Struct literal: TypeName { field: value, ... }
+                // Only treated as such when the identifier is a known struct
+                // name, so ordinary `if x { ... }` conditions are unaffected.
+                if self.peek_token_is(TokenType::LeftBrace)
+                    && self.struct_names.contains(&ident.value)
+                {
+                    return self.parse_struct_literal(ident);
                 }
                 Expression::Identifier(ident)
             },

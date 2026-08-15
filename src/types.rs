@@ -19,6 +19,9 @@ pub enum AhaType {
     Void,
     /// Homogeneous array of elements
     Array(Box<AhaType>),
+    /// Named struct — carries the struct's declared name so codegen can
+    /// look up its field layout and LLVM struct type.
+    Struct(String),
     /// Function type with parameter types and return type
     Function {
         params: Vec<AhaType>,
@@ -114,6 +117,7 @@ impl fmt::Display for AhaType {
             AhaType::String => write!(f, "String"),
             AhaType::Void => write!(f, "Void"),
             AhaType::Array(inner) => write!(f, "[{}]", inner),
+            AhaType::Struct(name) => write!(f, "{}", name),
             AhaType::Function { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -154,6 +158,10 @@ impl<'ctx> TypedValue<'ctx> {
 
     pub fn string(value: BasicValueEnum<'ctx>) -> Self {
         TypedValue { value, aha_type: AhaType::String }
+    }
+
+    pub fn struct_val(value: BasicValueEnum<'ctx>, name: String) -> Self {
+        TypedValue { value, aha_type: AhaType::Struct(name) }
     }
 
     pub fn void(value: BasicValueEnum<'ctx>) -> Self {
