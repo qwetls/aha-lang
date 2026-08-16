@@ -10,7 +10,7 @@ All notable changes to AHA! Lang are documented in this file.
 |------|--------|------:|-------------|
 | `src/types.rs` | 🔧 ENHANCED | +14 | `unify_with()` — merge param types from multiple call sites (String, struct names) |
 | `src/codegen.rs` | 🔧 ENHANCED | +100 | `aha_type_to_llvm_type()` helper; `predeclare_functions` & `compile_function` support struct params/returns; `infer_expr_type` handles StructLiteral/FieldAccess; `scan_call_sites` tracks struct var bindings |
-| `tests/struct_codegen.rs` | 🔧 ENHANCED | +90 | 12 test struct sebagai param & return value |
+| `tests/struct_codegen.rs` | 🔧 ENHANCED | +80 | 11 test struct sebagai param & return value |
 
 ### Added
 
@@ -19,7 +19,7 @@ All notable changes to AHA! Lang are documented in this file.
 - **Struct literal langsung sebagai argumen:** `sum(Point { x: 1, y: 2 })` — tanpa variabel perantara.
 - **Rantai fungsi struct:** `sum(make(20, 22))` — return value struct langsung dioper ke fungsi lain.
 - **`unify_with()` pada AhaType:** Menyatukan tipe parameter dari beberapa call site (String, struct name meng-override Int default).
-- **Rangkaian Pengujian:** 385 tests passing (sebelumnya 373; +12 test struct param/return).
+- **Rangkaian Pengujian:** 384 tests passing (sebelumnya 373; +11 test struct param/return).
 
 ### Diubah
 
