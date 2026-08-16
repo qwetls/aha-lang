@@ -888,22 +888,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .expect("bitcast failed").into_pointer_value();
             Self::diag_mark("3c6: bitcast ok");
             Self::diag_mark("3c6a: before gep");
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
             Self::diag_mark("3c6b: gep ok");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
             Self::diag_mark("3c7: data store ok");
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
             self.builder.build_store(len_ptr, zero).expect("store failed");
             Self::diag_mark("3c8: len store ok");
-            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(2, false)], "cap_ptr") }
+            let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
             self.builder.build_store(cap_ptr, zero).expect("store failed");
             Self::diag_mark("3c9: cap store ok");
 
             // elem_size = 8 (Int)
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
             self.builder.build_store(es_ptr, i64_type.const_int(8, false)).expect("store failed");
             Self::diag_mark("3c10: es store ok");
@@ -935,16 +935,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Zero the whole header explicitly.
             let zero = i64_type.const_int(0, false);
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed").expect("bitcast failed").into_pointer_value();
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
             self.builder.build_store(len_ptr, zero).expect("store failed");
-            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(2, false)], "cap_ptr") }
+            let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
             self.builder.build_store(cap_ptr, zero).expect("store failed");
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
             self.builder.build_store(es_ptr, i64_type.const_int(16, false)).expect("store failed");
             let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle").expect("ptr_to_int failed");
@@ -965,13 +965,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             let hdr_ptr = header_from_handle(&self.builder, handle);
 
             // Load len and cap.
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
-            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(2, false)], "cap_ptr") }
+            let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
 
             let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
@@ -1050,13 +1050,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             let str_len = function.get_nth_param(2).expect("push_s: param 2").into_int_value();
             let hdr_ptr = header_from_handle(&self.builder, handle);
 
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
-            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(2, false)], "cap_ptr") }
+            let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
 
             let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
@@ -1132,11 +1132,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             let index = function.get_nth_param(1).expect("get: param 1").into_int_value();
             let hdr_ptr = header_from_handle(&self.builder, handle);
 
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
 
             let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
@@ -1188,11 +1188,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             let index = function.get_nth_param(1).expect("get_s: param 1").into_int_value();
             let hdr_ptr = header_from_handle(&self.builder, handle);
 
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
 
             let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
@@ -1240,7 +1240,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             let handle = function.get_nth_param(0).expect("list_len: param 0").into_int_value();
             let hdr_ptr = header_from_handle(&self.builder, handle);
-            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+            let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
             let len = self.builder.build_load(len_ptr, "len").expect("load failed");
             let _ = self.builder.build_return(Some(&len));
@@ -1257,7 +1257,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             let handle = function.get_nth_param(0).expect("list_free: param 0").into_int_value();
             let hdr_ptr = header_from_handle(&self.builder, handle);
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
             let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
             let free_fn = *self.functions.get("free").expect("free not declared");
@@ -2319,9 +2319,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.list_header_type.ptr_type(inkwell::AddressSpace::default()),
                     "list_hdr"
                 ).map_err(|e| e.to_string())?;
-                let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(3, false)], "es_ptr") }
+                let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                     .map_err(|e| e.to_string())?;
-                let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(0, false)], "data_ptr") }
+                let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                     .map_err(|e| e.to_string())?;
                 let elem_size = self.builder.build_load(es_ptr, "es").map_err(|e| e.to_string())?.into_int_value();
                 let data = self.builder.build_load(data_ptr, "data").map_err(|e| e.to_string())?.into_pointer_value();
@@ -2349,9 +2349,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.list_header_type.ptr_type(inkwell::AddressSpace::default()),
                 "list_hdr"
             ).map_err(|e| e.to_string())?;
-            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(3, false)], "es_ptr") }
+            let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .map_err(|e| e.to_string())?;
-            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(0, false)], "data_ptr") }
+            let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .map_err(|e| e.to_string())?;
             let elem_size = self.builder.build_load(es_ptr, "es").map_err(|e| e.to_string())?.into_int_value();
             let data = self.builder.build_load(data_ptr, "data").map_err(|e| e.to_string())?.into_pointer_value();
