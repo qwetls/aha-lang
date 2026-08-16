@@ -132,7 +132,7 @@ kompromi.
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Sebagian, lanjut |
 | **F2** | Type inference & annotations | 🔜 Berikutnya |
-| **F3** | Generics / parametric types | ⏳ Nanti |
+| **F3** | Generics / parametric types | 🔄 Fungsi generik & monomorphization ✅ di `development`; List<T> di `experimental/list` |
 | **F4** | Module system & package manager | ⏳ Nanti |
 | **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
@@ -163,6 +163,20 @@ ke main. Tidak ada loncatan.
 - Struct codegen & field access at runtime
 - Struct field type hints dihormati di runtime (`name: string` → layout
   `{i8*, i64}`; type-check literal; akses field bertipe benar)
+- **Generic functions (F3):** `fn max<T>(a: T, b: T) -> T` — monomorphization
+  per call site (`max_Int`, `max_String`, ...), 417+ test hijau
+
+### 🆕 Di branch `experimental/list` (fitur List<T>, belum di-merge ke `development`)
+- **List<T> (F3e):** heap-allocated dynamic array (malloc/realloc/free) dengan
+  builtins `list_new`, `list_new_string`, `list_push`, `list_get`,
+  `list_get_string`, `list_len`, `list_free` + index read/write `xs[i]`
+- List<String> didukung penuh (elem struct `{i8*, i64}`)
+- **Fungsi generik atas List:** `fn first<T>(xs: List<T>) -> T` — binding
+  type param T dari hint `List<T>`; monomorphization `first_Int`/`first_String`
+- Fix scan pass: binding `let xs = list_new()`/`list_new_string()` ter-track
+  sebagai `List<Int>`/`List<String>` (param fungsi ter-infer dengan benar)
+- Main entry point return i64 (String/struct sebagai last expression → main
+  return 0) — menyelesaikan verify abort `ret { i8*, i64 } %listidx / i64`
 
 ### ❌ Belum ada (target setelah stabilisasi)
 - Mutasi field struct (`p.x = 5`)
@@ -189,10 +203,12 @@ ke main. Tidak ada loncatan.
 - [ ] Inferensi tipe return fungsi (sudah parsial untuk String)
 - [ ] Anotasi tipe eksplisit `let x: int = 5`
 
-### F3. Generics / parametric types
-- [ ] Fungsi generik `fn max<T>(a: T, b: T) -> T`
-- [ ] Struktur data generik (List<T>, Map<K,V>)
-- [ ] Monomorphization via LLVM (tanpa runtime cost)
+### F3. Generics / parametric types — 🔄 SEBAGIAN SELESAI
+- [x] Fungsi generik `fn max<T>(a: T, b: T) -> T` (di `development`, 417 test)
+- [x] Monomorphization via LLVM (tanpa runtime cost)
+- [x] List<T> (F3e) — heap-allocated dynamic array + builtins + index read/write (di `experimental/list`)
+- [x] `fn first<T>(xs: List<T>) -> T` — type param T ter-bind dari hint `List<T>`
+- [ ] Map<K,V> — belum dimulai
 
 ### F4. Module system & package manager
 - [ ] `import "file.aha"` — modularitas antar file

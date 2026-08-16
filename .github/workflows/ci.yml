@@ -41,8 +41,16 @@ jobs:
       # Step 4: Jalankan semua test yang ada
       # LLVM JIT tidak thread-safe — multiple Context::create() + JIT
       # secara paralel bisa SIGSEGV. Run single-threaded.
+      # RUST_BACKTRACE=full to capture LLVM-level segfaults.
       - name: Run tests
+        env:
+          RUST_BACKTRACE: "full"
         run: cargo test --verbose -- --test-threads=1
+
+      # Step 4b: Print compiler diag log if it exists (survives SIGSEGV)
+      - name: Print diag log
+        if: always()
+        run: cat /tmp/aha_diag.log 2>/dev/null || true
 
       # Step 5: Build aplikasi dalam mode release
       - name: Build project
