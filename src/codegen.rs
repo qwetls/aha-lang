@@ -1279,7 +1279,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(TypedValue::int(self.i64_type.const_int(0, false).into()));
         }
 
-        let phi_node = self.builder.build_phi(self.i64_type, "iftmp")
+        // Pick the phi LLVM type based on the branch types — i64 for Int/Bool,
+        // string_type for String, struct type for Struct.
+        let phi_type = match (&consequence_tv.aha_type, &alternative_tv.aha_type) {
+            (AhaType::String, _) | (_, AhaType::String) => self.string_type.into(),
+            (AhaType::Struct(name), _) => self.struct_llvm_type(name)?.into(),
+            (_, AhaType::Struct(name)) => self.struct_llvm_type(name)?.into(),
+            _ => self.i64_type.into(),
+        };
+        let phi_node = self.builder.build_phi(phi_type, "iftmp")
             .map_err(|e| e.to_string())?;
         if !consequence_terminated {
             phi_node.add_incoming(&[(&consequence_tv.value as &dyn inkwell::values::BasicValue, consequence_end_block)]);
