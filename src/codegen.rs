@@ -866,9 +866,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         {
             Self::diag_mark("3c: list_new start");
             let fn_type = i64_type.fn_type(&[], false);
+            Self::diag_mark("3c1: fn_type ok");
             let function = self.module.add_function("list_new", fn_type, None);
+            Self::diag_mark("3c2: add_function ok");
             let entry = self.context.append_basic_block(function, "entry");
+            Self::diag_mark("3c3: append_basic_block ok");
             self.builder.position_at_end(entry);
+            Self::diag_mark("3c4: position ok");
 
             let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
             let hdr_size = i64_type.const_int(32, false); // 4 x i64 header
@@ -876,31 +880,40 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .expect("malloc failed")
                 .try_as_basic_value().left().expect("malloc void")
                 .into_pointer_value();
+            Self::diag_mark("3c5: malloc call ok");
 
             // Zero the whole header explicitly — malloc memory is garbage.
             let zero = i64_type.const_int(0, false);
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
                 .expect("bitcast failed").into_pointer_value();
+            Self::diag_mark("3c6: bitcast ok");
             let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
                 .expect("gep failed");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
+            Self::diag_mark("3c7: data store ok");
             let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
                 .expect("gep failed");
             self.builder.build_store(len_ptr, zero).expect("store failed");
+            Self::diag_mark("3c8: len store ok");
             let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(2, false)], "cap_ptr") }
                 .expect("gep failed");
             self.builder.build_store(cap_ptr, zero).expect("store failed");
+            Self::diag_mark("3c9: cap store ok");
 
             // elem_size = 8 (Int)
             let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(3, false)], "es_ptr") }
                 .expect("gep failed");
             self.builder.build_store(es_ptr, i64_type.const_int(8, false)).expect("store failed");
+            Self::diag_mark("3c10: es store ok");
 
             // Return handle as i64 (header address).
             let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle")
                 .expect("ptr_to_int failed");
+            Self::diag_mark("3c11: ptr_to_int ok");
             let _ = self.builder.build_return(Some(&handle));
+            Self::diag_mark("3c12: return ok");
             self.functions.insert("list_new".to_string(), function);
+            Self::diag_mark("3c13: list_new done");
         }
 
         // --- list_new_string() -> List<String> (elem_size 16) ---
