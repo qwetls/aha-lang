@@ -2,7 +2,7 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
-## [Unreleased] — branch `experimental/list`
+## [1.4.6] — 2026-08-17
 
 ### File-by-File Change Summary
 
