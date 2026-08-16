@@ -2,6 +2,37 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.4.5] — 2026-08-16
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/ast.rs` | 🔧 ENHANCED | +8 | `TokenType::Arrow`; `FunctionLiteral` + `type_params`, `param_type_hints`, `return_type_hint` |
+| `src/lexer.rs` | 🔧 ENHANCED | +7 | Lex `->` sebagai `Arrow` |
+| `src/parser.rs` | 🔧 ENHANCED | +50 | Parse `<T, U>` type params, `a: T` param hints, `-> T` return hint |
+| `src/codegen.rs` | 🔧 ENHANCED | +160 | Monomorphization: `generic_defs`, `type_param_map`, `resolve_hint_type`, `compile_generic_call`, `infer_generic_return_type` |
+| `tests/generics.rs` | ✨ NEW | 170 | 13 test fungsi generik & monomorphization |
+
+### Added
+
+- **Generic functions (F3):** `fn pick<T>(a: T, b: T) -> T { if a > b { a } else { b } }` — fungsi dengan tipe parameter generik.
+- **Monomorphization via LLVM:** Setiap kombinasi unik (nama generik, tipe konkret) menghasilkan fungsi LLVM terpisah (`pick_Int`, `pick_String`, ...), dikompilasi lazy di call site pertama dan di-cache. Tidak ada runtime cost — generics sepenuhnya resolve di compile time.
+- **Type params:** `fn first<A, B>(a: A, b: B) -> A` — banyak tipe parameter; binding konkret di-infer dari argumen call site.
+- **Return type annotation:** `-> T` dan `-> int` — return type generik atau konkret.
+- **Nested monomorphization:** Fungsi generik bisa memanggil fungsi generik lain (`fn twice<U>(x: U) -> U { id(x) }`).
+- **Rangkaian Pengujian:** 417 tests passing (sebelumnya 404; +13 test generics: identity int/string/bool/struct, pick, dua type params, nested call, IR shape).
+
+### Diubah
+
+- `predeclare_functions` menyimpan fungsi generik di `generic_defs` (bukan pre-declare langsung); body dikompilasi saat monomorphization.
+- `compile_function` me-skip body fungsi generik di top-level (hanya dipanggil via instantiation).
+- Fixpoint loop me-skip fungsi generik (return type hanya ada per instantiation).
+
+### Security
+
+- Generics tidak menambah jalur unsafe: semua tipe masih diverifikasi compile-time; monomorphization murni penyalinan codegen per tipe.
+
 ## [1.4.4] — 2026-08-16
 
 ### File-by-File Change Summary
