@@ -555,18 +555,38 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.context.i8_type().ptr_type(inkwell::AddressSpace::default())
     }
 
+    /// DIAGNOSTIC: append a marker to /tmp/aha_diag.log (survives SIGSEGV
+    /// where stderr capture is lost). Remove once List<T> lands.
+    fn diag_mark(msg: &str) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/aha_diag.log")
+        {
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
+        let _ = std::fs::remove_file("/tmp/aha_diag.log");
+        Self::diag_mark("1: compile start");
         self.declare_printf();
         self.declare_c_runtime();
+        Self::diag_mark("2: c runtime declared");
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
+        Self::diag_mark("3: list builtins created");
 
         // DIAGNOSTIC: verify the module is valid before proceeding, so an
         // invalid-IR bug surfaces as a message instead of a SIGSEGV in
         // print_to_string. Remove once List<T> lands.
-        if let Err(e) = self.module.verify() {
-            eprintln!("MODULE VERIFY FAILED: {}", e);
-            std::process::abort();
+        match self.module.verify() {
+            Ok(()) => Self::diag_mark("4: verify ok"),
+            Err(e) => {
+                Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
+                std::process::abort();
+            }
         }
 
         // Register struct definitions first so struct literals and field
@@ -635,7 +655,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map(|tv| tv.value)
             .unwrap_or_else(|| self.i64_type.const_int(0, false).into());
         let _ = self.builder.build_return(Some(&return_val));
-        
+
+        Self::diag_mark("5: main compiled");
+
+        // DIAGNOSTIC: second verify after main compilation, before
+        // returning to the caller (print_to_string / JIT).
+        match self.module.verify() {
+            Ok(()) => Self::diag_mark("6: verify after main ok"),
+            Err(e) => {
+                Self::diag_mark(&format!("6: VERIFY AFTER MAIN FAILED: {}", e));
+                std::process::abort();
+            }
+        }
+
         Ok(())
     }
 

@@ -47,6 +47,11 @@ jobs:
           RUST_BACKTRACE: "full"
         run: cargo test --verbose -- --test-threads=1
 
+      # Step 4b: Print compiler diag log if it exists (survives SIGSEGV)
+      - name: Print diag log
+        if: always()
+        run: cat /tmp/aha_diag.log 2>/dev/null || true
+
       # Step 5: Build aplikasi dalam mode release
       - name: Build project
         run: cargo build --release --verbose
