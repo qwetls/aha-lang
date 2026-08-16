@@ -887,8 +887,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
                 .expect("bitcast failed").into_pointer_value();
             Self::diag_mark("3c6: bitcast ok");
+            Self::diag_mark("3c6a: before gep");
             let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
                 .expect("gep failed");
+            Self::diag_mark("3c6b: gep ok");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
             Self::diag_mark("3c7: data store ok");
             let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
