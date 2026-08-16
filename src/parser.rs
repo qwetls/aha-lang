@@ -72,6 +72,29 @@ impl Parser {
         self.current_token = self.peek_token.clone();
         self.peek_token = self.lexer.next_token();
     }
+
+    /// Parse a type hint, supporting compound types like `List<int>`.
+    /// Caller has already consumed the leading identifier (current_token is
+    /// the first identifier of the hint). Consumes the full hint and returns
+    /// the canonical hint string ("List<int>", "int", "string", ...).
+    fn parse_type_hint(&mut self) -> Option<String> {
+        if !self.current_token_is(TokenType::Identifier) {
+            return None;
+        }
+        let hint = self.current_token.literal.clone();
+        // List<T>: identifier followed by '<' then an inner hint then '>'.
+        if self.peek_token_is(TokenType::LT) {
+            self.next_token(); // current = '<', peek = first token of inner
+            self.next_token(); // current = inner hint start, peek = '>' or '<'
+            let inner_hint = self.parse_type_hint()?;
+            if !self.expect_peek(TokenType::GT) {
+                self.errors.push("Expected '>' to close List<T> type hint".to_string());
+                return None;
+            }
+            return Some(format!("List<{}>", inner_hint));
+        }
+        Some(hint)
+    }
     
     fn current_token_is(&self, t: TokenType) -> bool {
         self.current_token.kind == t
@@ -129,7 +152,7 @@ impl Parser {
             let type_hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // Skip field name
                 self.next_token(); // Skip ':'
-                Some(self.current_token.literal.clone())
+                self.parse_type_hint()
             } else {
                 None
             };
@@ -208,7 +231,7 @@ impl Parser {
             if !self.expect_peek(TokenType::Identifier) {
                 return None;
             }
-            type_annotation = Some(self.current_token.literal.clone());
+            type_annotation = self.parse_type_hint();
         }
 
         if !self.expect_peek(TokenType::Assign) {
@@ -430,7 +453,7 @@ impl Parser {
             if !self.expect_peek(TokenType::Identifier) {
                 self.errors.push("Expected type after '->' in function return".to_string());
             }
-            Some(self.current_token.literal.clone())
+            self.parse_type_hint()
         } else {
             None
         };
@@ -464,7 +487,7 @@ impl Parser {
             if !self.expect_peek(TokenType::Identifier) {
                 self.errors.push("Expected type after ':' in parameter".to_string());
             }
-            Some(self.current_token.literal.clone())
+            self.parse_type_hint()
         } else {
             None
         };
@@ -479,7 +502,7 @@ impl Parser {
                 if !self.expect_peek(TokenType::Identifier) {
                     self.errors.push("Expected type after ':' in parameter".to_string());
                 }
-                Some(self.current_token.literal.clone())
+                self.parse_type_hint()
             } else {
                 None
             };

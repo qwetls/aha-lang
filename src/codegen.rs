@@ -27,6 +27,8 @@ pub struct CodeGenerator<'ctx> {
     i64_type: IntType<'ctx>,
     /// String struct type: {i8*, i64} (pointer + length)
     string_type: StructType<'ctx>,
+    /// List header struct type: {i8*, i64, i64, i64} (data, len, cap, elem_size)
+    list_header_type: StructType<'ctx>,
     current_function: Option<FunctionValue<'ctx>>,
     /// Stack of (continue_block, break_block) for nested loops
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
@@ -58,6 +60,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i8_ptr_type = context.i8_type().ptr_type(inkwell::AddressSpace::default());
         // String = {i8*, i64}
         let string_type = context.struct_type(&[i8_ptr_type.into(), i64_type.into()], false);
+        // List header = {data: i8*, len: i64, cap: i64, elem_size: i64}
+        let list_header_type = context.struct_type(
+            &[i8_ptr_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
+            false,
+        );
 
         CodeGenerator {
             context,
@@ -68,6 +75,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             fn_types: HashMap::new(),
             i64_type,
             string_type,
+            list_header_type,
             current_function: None,
             loop_stack: Vec::new(),
             param_type_map: HashMap::new(),
@@ -246,6 +254,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(t) = self.type_param_map.get(hint) {
             return t.clone();
         }
+        // List<T> with a bound type param inside (e.g. List<T> where T=Int):
+        // resolve the inner hint recursively, then wrap.
+        if let Some(inner) = hint.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
+            let inner_type = self.resolve_hint_type(inner);
+            return AhaType::List(Box::new(inner_type));
+        }
         if let Some(t) = AhaType::from_hint(hint) {
             return t;
         }
@@ -347,6 +361,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Call(call) => {
                 if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    // List builtins: preserve the element type of the first
+                    // argument so `let xs = list_new(); list_push(xs, ...)`
+                    // keeps xs as List<Int> and list_get(xs, i) is Int.
+                    if id.value == "list_push" || id.value == "list_push_string" {
+                        if let Some(first) = call.arguments.first() {
+                            return self.infer_expr_type(first);
+                        }
+                    }
+                    if id.value == "list_get" || id.value == "list_get_string" {
+                        if let Some(first) = call.arguments.first() {
+                            let list_type = self.infer_expr_type(first);
+                            if let AhaType::List(inner) = list_type {
+                                return *inner;
+                            }
+                        }
+                        return AhaType::Int;
+                    }
                     // Prefer a known return type (fn_types), then fall back
                     // to the builtin len() = Int.
                     if let Some(rt) = self.fn_types.get(&id.value) {
@@ -449,6 +480,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Call(call) => {
                 if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    if id.value == "list_push" || id.value == "list_push_string" {
+                        if let Some(first) = call.arguments.first() {
+                            return self.infer_expr_type_with_scope(first, scope);
+                        }
+                    }
+                    if id.value == "list_get" || id.value == "list_get_string" {
+                        if let Some(first) = call.arguments.first() {
+                            let list_type = self.infer_expr_type_with_scope(first, scope);
+                            if let AhaType::List(inner) = list_type {
+                                return *inner;
+                            }
+                        }
+                        return AhaType::Int;
+                    }
                     if id.value == "len" {
                         return AhaType::Int;
                     }
@@ -513,6 +558,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
         self.declare_printf();
         self.declare_c_runtime();
+        // List builtins depend on malloc/realloc/free from the C runtime.
+        self.create_list_builtins();
 
         // Register struct definitions first so struct literals and field
         // access can resolve field layout during codegen.
@@ -741,6 +788,417 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.functions.insert("len".to_string(), function);
     }
 
+    // =====================================================================
+    // List<T> builtins — dynamic array with heap allocation.
+    //
+    // A list is an opaque i64 handle = pointer to a heap header struct:
+    //   struct ListHeader { data: i8*, len: i64, cap: i64, elem_size: i64 }
+    // The handle is the header address itself (an i64), so it fits the
+    // existing i64 variable model. Element storage is a raw malloc'd
+    // buffer of `elem_size`-byte records. list_* builtins take/return
+    // the handle as i64, so no AhaType::List plumbing is needed at the
+    // LLVM level — types are tracked purely in the type system.
+    //
+    // Builtin list (always declared, like print/len):
+    //   list_new()                    -> List<Int>  (elem_size 8)
+    //   list_new_string()             -> List<String> (elem_size 16)
+    //   list_push(list, value)        -> list (realloc if needed)
+    //   list_get(list, index)         -> element (Int or String)
+    //   list_len(list)                -> Int
+    //   list_free(list)               -> Int (0) — frees data + header
+    // =====================================================================
+
+    fn create_list_builtins(&mut self) {
+        let i64_type = self.i64_type;
+        let i8_ptr = self.i8_ptr_type();
+        let header = self.list_header_type;
+        let header_ptr = header.ptr_type(inkwell::AddressSpace::default());
+
+        // Helper: header pointer from a list handle (i64).
+        // Used by every list_* builtin after the first.
+        let header_from_handle = |builder: &Builder<'ctx>, handle: inkwell::values::IntValue<'ctx>| {
+            builder.build_int_to_ptr(handle, header_ptr, "list_hdr")
+        };
+
+        // --- list_new() -> List<Int> ---
+        {
+            let fn_type = i64_type.fn_type(&[], false);
+            let function = self.module.add_function("list_new", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+            let hdr_size = i64_type.const_int(32, false); // 4 x i64 header
+            let hdr = self.builder.build_call(malloc_fn, &[hdr_size.into()], "list_hdr")
+                .expect("malloc failed")
+                .try_as_basic_value().left().expect("malloc void")
+                .into_pointer_value();
+
+            // Zero the whole header explicitly — malloc memory is garbage.
+            let zero = i64_type.const_int(0, false);
+            let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
+                .expect("bitcast failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(len_ptr, zero).expect("store failed");
+            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(2, false)], "cap_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(cap_ptr, zero).expect("store failed");
+
+            // elem_size = 8 (Int)
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(es_ptr, i64_type.const_int(8, false)).expect("store failed");
+
+            // Return handle as i64 (header address).
+            let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle")
+                .expect("ptr_to_int failed");
+            let _ = self.builder.build_return(Some(&handle));
+            self.functions.insert("list_new".to_string(), function);
+        }
+
+        // --- list_new_string() -> List<String> (elem_size 16) ---
+        {
+            let fn_type = i64_type.fn_type(&[], false);
+            let function = self.module.add_function("list_new_string", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+            let hdr_size = i64_type.const_int(32, false);
+            let hdr = self.builder.build_call(malloc_fn, &[hdr_size.into()], "list_hdr")
+                .expect("malloc failed")
+                .try_as_basic_value().left().expect("malloc void")
+                .into_pointer_value();
+            // Zero the whole header explicitly.
+            let zero = i64_type.const_int(0, false);
+            let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed").expect("bitcast failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(len_ptr, zero).expect("store failed");
+            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(2, false)], "cap_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(cap_ptr, zero).expect("store failed");
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(es_ptr, i64_type.const_int(16, false)).expect("store failed");
+            let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle").expect("ptr_to_int failed");
+            let _ = self.builder.build_return(Some(&handle));
+            self.functions.insert("list_new_string".to_string(), function);
+        }
+
+        // --- list_push(list, value) -> list ---
+        {
+            let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+            let function = self.module.add_function("list_push", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("push: param 0").into_int_value();
+            let value = function.get_nth_param(1).expect("push: param 1").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+
+            // Load len and cap.
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(2, false)], "cap_ptr") }
+                .expect("gep failed");
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+                .expect("gep failed");
+
+            let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
+            let cap = self.builder.build_load(cap_ptr, "cap").expect("load failed").into_int_value();
+            let elem_size = self.builder.build_load(es_ptr, "elem_size").expect("load failed").into_int_value();
+            let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
+
+            // If len == cap, grow: new_cap = cap == 0 ? 4 : cap * 2.
+            let zero = i64_type.const_int(0, false);
+            let four = i64_type.const_int(4, false);
+            let two = i64_type.const_int(2, false);
+            let needs_grow = self.builder.build_int_compare(inkwell::IntPredicate::EQ, len, cap, "needs_grow")
+                .expect("cmp failed");
+
+            let grow_block = self.context.append_basic_block(function, "grow");
+            let no_grow_block = self.context.append_basic_block(function, "no_grow");
+            let merge_block = self.context.append_basic_block(function, "grow_merge");
+            self.builder.build_conditional_branch(needs_grow, grow_block, no_grow_block)
+                .expect("branch failed");
+
+            // Grow: realloc(data, new_cap * elem_size)
+            self.builder.position_at_end(grow_block);
+            let new_cap = self.builder.build_select(
+                self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "cap_is_zero").expect("cmp failed"),
+                four,
+                self.builder.build_int_mul(cap, two, "cap_x2").expect("mul failed"),
+                "new_cap"
+            ).expect("select failed");
+            let realloc_fn = *self.functions.get("realloc").expect("realloc not declared");
+            let new_data_size = self.builder.build_int_mul(new_cap, elem_size, "new_size").expect("mul failed");
+            let new_data = self.builder.build_call(realloc_fn, &[data.into(), new_data_size.into()], "realloc_data")
+                .expect("realloc failed")
+                .try_as_basic_value().left().expect("realloc void")
+                .into_pointer_value();
+            // store new data + new cap back into header
+            self.builder.build_store(data_ptr, new_data).expect("store failed");
+            self.builder.build_store(cap_ptr, new_cap).expect("store failed");
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            // Merge: reload data (may have changed) and store value at data[len*elem_size]
+            self.builder.position_at_end(merge_block);
+            let merged_data = self.builder.build_load(data_ptr, "data2").expect("load failed").into_pointer_value();
+            let byte_off = self.builder.build_int_mul(len, elem_size, "byte_off").expect("mul failed");
+            let elem_ptr = unsafe { self.builder.build_gep(merged_data, &[byte_off], "elem_ptr") }
+                .expect("gep failed");
+            // Store the value — element type is i64 for Int lists; for String
+            // lists the value arrives as the string struct's i64 bits in the
+            // first field (pointer). The remaining struct field (length) is
+            // stored separately by list_push_string (see below). To keep
+            // list_push simple and fast, it stores only the first i64.
+            self.builder.build_store(elem_ptr, value).expect("store failed");
+
+            // len += 1
+            let new_len = self.builder.build_int_add(len, i64_type.const_int(1, false), "new_len").expect("add failed");
+            self.builder.build_store(len_ptr, new_len).expect("store failed");
+
+            let _ = self.builder.build_return(Some(&handle));
+            self.functions.insert("list_push".to_string(), function);
+        }
+
+        // --- list_push_string(list, ptr, len) -> list ---
+        // For List<String>, the caller splits the string struct into
+        // (i8* pointer, i64 length) and passes both; this builtin stores
+        // the full 16-byte element {i8*, i64} at data[len].
+        {
+            let fn_type = i64_type.fn_type(&[i64_type.into(), i8_ptr.into(), i64_type.into()], false);
+            let function = self.module.add_function("list_push_string", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("push_s: param 0").into_int_value();
+            let str_ptr = function.get_nth_param(1).expect("push_s: param 1").into_pointer_value();
+            let str_len = function.get_nth_param(2).expect("push_s: param 2").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            let cap_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(2, false)], "cap_ptr") }
+                .expect("gep failed");
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+                .expect("gep failed");
+
+            let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
+            let cap = self.builder.build_load(cap_ptr, "cap").expect("load failed").into_int_value();
+            let elem_size = self.builder.build_load(es_ptr, "elem_size").expect("load failed").into_int_value();
+            let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
+
+            let zero = i64_type.const_int(0, false);
+            let four = i64_type.const_int(4, false);
+            let two = i64_type.const_int(2, false);
+            let needs_grow = self.builder.build_int_compare(inkwell::IntPredicate::EQ, len, cap, "needs_grow")
+                .expect("cmp failed");
+            let grow_block = self.context.append_basic_block(function, "grow");
+            let no_grow_block = self.context.append_basic_block(function, "no_grow");
+            let merge_block = self.context.append_basic_block(function, "grow_merge");
+            self.builder.build_conditional_branch(needs_grow, grow_block, no_grow_block)
+                .expect("branch failed");
+
+            self.builder.position_at_end(grow_block);
+            let new_cap = self.builder.build_select(
+                self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "cap_is_zero").expect("cmp failed"),
+                four,
+                self.builder.build_int_mul(cap, two, "cap_x2").expect("mul failed"),
+                "new_cap"
+            ).expect("select failed");
+            let realloc_fn = *self.functions.get("realloc").expect("realloc not declared");
+            let new_data_size = self.builder.build_int_mul(new_cap, elem_size, "new_size").expect("mul failed");
+            let new_data = self.builder.build_call(realloc_fn, &[data.into(), new_data_size.into()], "realloc_data")
+                .expect("realloc failed")
+                .try_as_basic_value().left().expect("realloc void")
+                .into_pointer_value();
+            self.builder.build_store(data_ptr, new_data).expect("store failed");
+            self.builder.build_store(cap_ptr, new_cap).expect("store failed");
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            self.builder.position_at_end(merge_block);
+            let merged_data = self.builder.build_load(data_ptr, "data2").expect("load failed").into_pointer_value();
+            let byte_off = self.builder.build_int_mul(len, elem_size, "byte_off").expect("mul failed");
+            let elem_ptr = unsafe { self.builder.build_gep(merged_data, &[byte_off], "elem_ptr") }
+                .expect("gep failed");
+            // Store the full string struct: first i8* (pointer) then i64 (length).
+            self.builder.build_store(elem_ptr, str_ptr).expect("store failed");
+            let str_len_ptr = unsafe { self.builder.build_gep(elem_ptr, &[i64_type.const_int(8, false)], "str_len_ptr") }
+                .expect("gep failed");
+            self.builder.build_store(str_len_ptr, str_len).expect("store failed");
+
+            let new_len = self.builder.build_int_add(len, i64_type.const_int(1, false), "new_len").expect("add failed");
+            self.builder.build_store(len_ptr, new_len).expect("store failed");
+
+            let _ = self.builder.build_return(Some(&handle));
+            self.functions.insert("list_push_string".to_string(), function);
+        }
+
+        // --- list_get(list, index) -> i64 (Int element or string ptr) ---
+        {
+            let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+            let function = self.module.add_function("list_get", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("get: param 0").into_int_value();
+            let index = function.get_nth_param(1).expect("get: param 1").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+                .expect("gep failed");
+
+            let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
+            let elem_size = self.builder.build_load(es_ptr, "elem_size").expect("load failed").into_int_value();
+            let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
+
+            // Bounds check: index < len ? data[index] : 0
+            let in_bounds = self.builder.build_int_compare(inkwell::IntPredicate::SLT, index, len, "in_bounds")
+                .expect("cmp failed");
+            let ok_block = self.context.append_basic_block(function, "get_ok");
+            let oob_block = self.context.append_basic_block(function, "get_oob");
+            let merge_block = self.context.append_basic_block(function, "get_merge");
+            self.builder.build_conditional_branch(in_bounds, ok_block, oob_block)
+                .expect("branch failed");
+
+            self.builder.position_at_end(oob_block);
+            let oob_val = i64_type.const_int(0, false);
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            self.builder.position_at_end(ok_block);
+            // element offset = index * elem_size (byte offset into i8* data)
+            let byte_off = self.builder.build_int_mul(index, elem_size, "byte_off").expect("mul failed");
+            let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
+                .expect("gep failed");
+            let elem_val = self.builder.build_load(elem_ptr, "elem_val").expect("load failed").into_int_value();
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            self.builder.position_at_end(merge_block);
+            let merged = self.builder.build_phi(i64_type, "get_result").expect("phi failed");
+            merged.add_incoming(&[(&oob_val as &dyn inkwell::values::BasicValue, oob_block)]);
+            merged.add_incoming(&[(&elem_val as &dyn inkwell::values::BasicValue, ok_block)]);
+            let _ = self.builder.build_return(Some(&merged));
+            self.functions.insert("list_get".to_string(), function);
+        }
+
+        // --- list_get_string(list, index) -> {i8*, i64} string element ---
+        {
+            let fn_type = self.string_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+            let function = self.module.add_function("list_get_string", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("get_s: param 0").into_int_value();
+            let index = function.get_nth_param(1).expect("get_s: param 1").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(3, false)], "es_ptr") }
+                .expect("gep failed");
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+                .expect("gep failed");
+
+            let len = self.builder.build_load(len_ptr, "len").expect("load failed").into_int_value();
+            let elem_size = self.builder.build_load(es_ptr, "elem_size").expect("load failed").into_int_value();
+            let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
+
+            let in_bounds = self.builder.build_int_compare(inkwell::IntPredicate::SLT, index, len, "in_bounds")
+                .expect("cmp failed");
+            let ok_block = self.context.append_basic_block(function, "get_ok");
+            let oob_block = self.context.append_basic_block(function, "get_oob");
+            let merge_block = self.context.append_basic_block(function, "get_merge");
+            self.builder.build_conditional_branch(in_bounds, ok_block, oob_block)
+                .expect("branch failed");
+
+            self.builder.position_at_end(oob_block);
+            let empty_str = self.string_type.const_zero();
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            self.builder.position_at_end(ok_block);
+            let byte_off = self.builder.build_int_mul(index, elem_size, "byte_off").expect("mul failed");
+            let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
+                .expect("gep failed");
+            // Load the full {i8*, i64} string struct from the element slot.
+            let elem_struct_ptr = self.builder.build_bitcast(elem_ptr, self.string_type.ptr_type(inkwell::AddressSpace::default()), "elem_str_ptr")
+                .expect("bitcast failed");
+            let elem_str = self.builder.build_load(elem_struct_ptr, "elem_str").expect("load failed");
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
+            self.builder.position_at_end(merge_block);
+            let merged = self.builder.build_phi(self.string_type, "get_s_result").expect("phi failed");
+            merged.add_incoming(&[(&empty_str as &dyn inkwell::values::BasicValue, oob_block)]);
+            merged.add_incoming(&[(&elem_str as &dyn inkwell::values::BasicValue, ok_block)]);
+            let _ = self.builder.build_return(Some(&merged));
+            self.functions.insert("list_get_string".to_string(), function);
+        }
+
+        // --- list_len(list) -> i64 ---
+        {
+            let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+            let function = self.module.add_function("list_len", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("list_len: param 0").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+            let len_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(1, false)], "len_ptr") }
+                .expect("gep failed");
+            let len = self.builder.build_load(len_ptr, "len").expect("load failed");
+            let _ = self.builder.build_return(Some(&len));
+            self.functions.insert("list_len".to_string(), function);
+        }
+
+        // --- list_free(list) -> i64 (0) ---
+        {
+            let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+            let function = self.module.add_function("list_free", fn_type, None);
+            let entry = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(entry);
+
+            let handle = function.get_nth_param(0).expect("list_free: param 0").into_int_value();
+            let hdr_ptr = header_from_handle(&self.builder, handle);
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[i64_type.const_int(0, false), i64_type.const_int(0, false)], "data_ptr") }
+                .expect("gep failed");
+            let data = self.builder.build_load(data_ptr, "data").expect("load failed").into_pointer_value();
+            let free_fn = *self.functions.get("free").expect("free not declared");
+            // free data buffer, then free header
+            self.builder.build_call(free_fn, &[data.into()], "free_data").expect("free call failed");
+            let hdr_i8 = self.builder.build_bitcast(hdr_ptr, i8_ptr, "hdr_i8").expect("bitcast failed");
+            self.builder.build_call(free_fn, &[hdr_i8.into()], "free_hdr").expect("free call failed");
+            let zero = i64_type.const_int(0, false);
+            let _ = self.builder.build_return(Some(&zero));
+            self.functions.insert("list_free".to_string(), function);
+        }
+
+        // Register return types for list builtins
+        self.fn_types.insert("list_new".to_string(), AhaType::List(Box::new(AhaType::Int)));
+        self.fn_types.insert("list_new_string".to_string(), AhaType::List(Box::new(AhaType::String)));
+        self.fn_types.insert("list_push".to_string(), AhaType::List(Box::new(AhaType::Int)));
+        self.fn_types.insert("list_push_string".to_string(), AhaType::List(Box::new(AhaType::String)));
+        self.fn_types.insert("list_get".to_string(), AhaType::Int);
+        self.fn_types.insert("list_get_string".to_string(), AhaType::String);
+        self.fn_types.insert("list_len".to_string(), AhaType::Int);
+        self.fn_types.insert("list_free".to_string(), AhaType::Int);
+    }
+
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
@@ -889,6 +1347,29 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_index_expression(&mut self, idx: &ast::IndexExpression) -> Result<TypedValue<'ctx>, String> {
         let array_val = self.compile_expression(&idx.left)?;
         let index_val = self.compile_expression(&idx.index)?;
+
+        // List<T> indexing: delegate to list_get/list_get_string builtin.
+        if let AhaType::List(inner) = &array_val.aha_type {
+            let list_handle = array_val.value.into_int_value();
+            let args_meta: Vec<_> = [
+                list_handle.into(),
+                index_val.value.into(),
+            ].iter().map(|a| (*a).into()).collect();
+            let builtin = if inner.is_string() { "list_get_string" } else { "list_get" };
+            let function = *self.functions.get(builtin).expect("list builtin not declared");
+            let call_result = self.builder.build_call(function, &args_meta, "listidx")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value()
+                .left()
+                .ok_or("list_get returned void")?;
+            let tv = if inner.is_string() {
+                TypedValue::string(val)
+            } else {
+                TypedValue::int(val)
+            };
+            return Ok(tv);
+        }
+
         let array_ptr = self.builder.build_int_to_ptr(
             array_val.value.into_int_value(),
             self.i64_type.ptr_type(inkwell::AddressSpace::default()),
@@ -903,7 +1384,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(TypedValue::int(elem_val))
     }
 
-    /// Declare C runtime functions (malloc, strlen, memcpy, strcmp, sprintf)
+    /// Declare C runtime functions (malloc, strlen, memcpy, strcmp, sprintf, realloc, free)
     fn declare_c_runtime(&mut self) {
         let i8_ptr = self.i8_ptr_type();
         let i64_t = self.i64_type;
@@ -911,6 +1392,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let malloc_ty = i8_ptr.fn_type(&[i64_t.into()], false);
         let malloc_fn = self.module.add_function("malloc", malloc_ty, None);
         self.functions.insert("malloc".to_string(), malloc_fn);
+        // realloc
+        let realloc_ty = i8_ptr.fn_type(&[i8_ptr.into(), i64_t.into()], false);
+        let realloc_fn = self.module.add_function("realloc", realloc_ty, None);
+        self.functions.insert("realloc".to_string(), realloc_fn);
+        // free — returns void
+        let free_ty = self.context.void_type().fn_type(&[i8_ptr.into()], false);
+        let free_fn = self.module.add_function("free", free_ty, None);
+        self.functions.insert("free".to_string(), free_fn);
         // strlen
         let strlen_ty = i64_t.fn_type(&[i8_ptr.into()], false);
         let strlen_fn = self.module.add_function("strlen", strlen_ty, None);
@@ -1225,12 +1714,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         if self.generic_defs.contains_key(&func_name) {
             return self.compile_generic_call(&func_name, call);
         }
+        // List builtins: element type (Int vs String) is known only at the
+        // call site, so dispatch here before the generic argument loop.
+        if func_name.starts_with("list_") {
+            return self.compile_list_call(&func_name, call);
+        }
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
             args.push(self.compile_expression(arg)?.value);
         }
         let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
-        
+
         let function = if let Some(f) = self.functions.get(&func_name) {
             *f
         } else if let Some(f) = self.module.get_function(&func_name) {
@@ -1247,6 +1741,131 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(TypedValue::new(val, ret_type))
     }
 
+    /// Compile a list_* builtin call. The LLVM-level dispatch depends on
+    /// the list's element type (Int lists store i64 elements; String lists
+    /// store {i8*, i64} elements), which is only known at the call site.
+    fn compile_list_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        // list_new / list_new_string take no list arg — infer from the name.
+        if func_name == "list_new" || func_name == "list_new_string" {
+            return self.compile_call_generic_args(func_name, call);
+        }
+
+        // All other list builtins take the list as the first argument.
+        let list_tv = self.compile_expression(&call.arguments[0])?;
+        let elem_type = match &list_tv.aha_type {
+            AhaType::List(inner) => (**inner).clone(),
+            other => return Err(format!(
+                "list builtin '{}' expects a List as first argument, got {}",
+                func_name, other
+            )),
+        };
+        let list_handle = list_tv.value.into_int_value();
+
+        match func_name {
+            "list_len" | "list_free" => {
+                let args_meta: Vec<_> = [list_handle.into()].iter().map(|a| (*a).into()).collect();
+                let function = *self.functions.get(func_name).expect("list builtin not declared");
+                let call_result = self.builder.build_call(function, &args_meta, "calltmp")
+                    .map_err(|e| e.to_string())?;
+                let val = call_result.try_as_basic_value()
+                    .left()
+                    .ok_or("list builtin returned void")?;
+                let ret_type = self.fn_types.get(func_name).cloned().unwrap_or(AhaType::Int);
+                Ok(TypedValue::new(val, ret_type))
+            }
+            "list_push" => {
+                // Compile the value argument. For String lists, split the
+                // string struct and call list_push_string(list, ptr, len).
+                let value_tv = self.compile_expression(&call.arguments[1])?;
+                if elem_type.is_string() {
+                    if !value_tv.aha_type.is_string() {
+                        return Err(format!(
+                            "list_push on List<String> requires a string value, got {}",
+                            value_tv.aha_type
+                        ));
+                    }
+                    let s_ptr = self.extract_str_ptr(&value_tv)?;
+                    let s_len = self.extract_str_len(&value_tv)?;
+                    let args_meta: Vec<_> = [
+                        list_handle.into(),
+                        s_ptr.into(),
+                        s_len.into(),
+                    ].iter().map(|a| (*a).into()).collect();
+                    let function = *self.functions.get("list_push_string").expect("list_push_string not declared");
+                    self.builder.build_call(function, &args_meta, "calltmp")
+                        .map_err(|e| e.to_string())?;
+                    Ok(list_tv)
+                } else {
+                    if value_tv.aha_type.is_string() {
+                        return Err(format!(
+                            "list_push on List<Int> requires an int value, got string"
+                        ));
+                    }
+                    let args_meta: Vec<_> = [
+                        list_handle.into(),
+                        value_tv.value.into(),
+                    ].iter().map(|a| (*a).into()).collect();
+                    let function = *self.functions.get("list_push").expect("list_push not declared");
+                    self.builder.build_call(function, &args_meta, "calltmp")
+                        .map_err(|e| e.to_string())?;
+                    Ok(list_tv)
+                }
+            }
+            "list_get" => {
+                let index_tv = self.compile_expression(&call.arguments[1])?;
+                if elem_type.is_string() {
+                    let args_meta: Vec<_> = [
+                        list_handle.into(),
+                        index_tv.value.into(),
+                    ].iter().map(|a| (*a).into()).collect();
+                    let function = *self.functions.get("list_get_string").expect("list_get_string not declared");
+                    let call_result = self.builder.build_call(function, &args_meta, "calltmp")
+                        .map_err(|e| e.to_string())?;
+                    let val = call_result.try_as_basic_value()
+                        .left()
+                        .ok_or("list_get_string returned void")?;
+                    Ok(TypedValue::string(val))
+                } else {
+                    let args_meta: Vec<_> = [
+                        list_handle.into(),
+                        index_tv.value.into(),
+                    ].iter().map(|a| (*a).into()).collect();
+                    let function = *self.functions.get("list_get").expect("list_get not declared");
+                    let call_result = self.builder.build_call(function, &args_meta, "calltmp")
+                        .map_err(|e| e.to_string())?;
+                    let val = call_result.try_as_basic_value()
+                        .left()
+                        .ok_or("list_get returned void")?;
+                    Ok(TypedValue::int(val))
+                }
+            }
+            _ => Err(format!("Unknown list builtin: {}", func_name)),
+        }
+    }
+
+    /// Compile a call that takes no list argument (list_new, list_new_string)
+    /// — falls through to the generic argument loop.
+    fn compile_call_generic_args(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            args.push(self.compile_expression(arg)?.value);
+        }
+        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
+        let function = if let Some(f) = self.functions.get(func_name) {
+            *f
+        } else if let Some(f) = self.module.get_function(func_name) {
+            f
+        } else {
+            return Err(format!("Unknown function: {}", func_name));
+        };
+        let call_result = self.builder.build_call(function, &args_meta, "calltmp")
+            .map_err(|e| e.to_string())?;
+        let ret_type = self.fn_types.get(func_name).cloned().unwrap_or(AhaType::Int);
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| "Function call did not return a value".to_string())?;
+        Ok(TypedValue::new(val, ret_type))
+    }
     /// Infer a generic function's return type with concrete type
     /// parameters bound. Param types come from the resolved hints,
     /// so `fn id<T>(x: T) -> T { x }` returns the concrete arg type.
@@ -1589,6 +2208,70 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             return Ok(TypedValue::struct_val(new_struct.into(), struct_name_for_var));
+        }
+
+        // Handle list indexing: xs[i] = value
+        if let ast::Expression::Index(index_expr) = &*assign.target {
+            let list_tv = self.compile_expression(&index_expr.left)?;
+            let elem_type = match &list_tv.aha_type {
+                AhaType::List(inner) => (**inner).clone(),
+                other => return Err(format!(
+                    "Index assignment target is not a List, got {}", other
+                )),
+            };
+            let index_tv = self.compile_expression(&index_expr.index)?;
+
+            // For String lists, the value must be a string; store the full
+            // {i8*, i64} struct at data[index*elem_size].
+            if elem_type.is_string() {
+                if !typed_val.aha_type.is_string() {
+                    return Err(format!(
+                        "Assignment to List<String> element requires a string, got {}",
+                        typed_val.aha_type
+                    ));
+                }
+                let list_handle = list_tv.value.into_int_value();
+                let hdr_ptr = self.builder.build_int_to_ptr(
+                    list_handle,
+                    self.list_header_type.ptr_type(inkwell::AddressSpace::default()),
+                    "list_hdr"
+                ).map_err(|e| e.to_string())?;
+                let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(3, false)], "es_ptr") }
+                    .map_err(|e| e.to_string())?;
+                let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(0, false)], "data_ptr") }
+                    .map_err(|e| e.to_string())?;
+                let elem_size = self.builder.build_load(es_ptr, "es").map_err(|e| e.to_string())?.into_int_value();
+                let data = self.builder.build_load(data_ptr, "data").map_err(|e| e.to_string())?.into_pointer_value();
+                let byte_off = self.builder.build_int_mul(index_tv.value.into_int_value(), elem_size, "boff").map_err(|e| e.to_string())?;
+                let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
+                    .map_err(|e| e.to_string())?;
+                let s_ptr = self.extract_str_ptr(&typed_val)?;
+                let s_len = self.extract_str_len(&typed_val)?;
+                self.builder.build_store(elem_ptr, s_ptr).map_err(|e| e.to_string())?;
+                let len_ptr = unsafe { self.builder.build_gep(elem_ptr, &[self.i64_type.const_int(8, false)], "slen_ptr") }
+                    .map_err(|e| e.to_string())?;
+                self.builder.build_store(len_ptr, s_len).map_err(|e| e.to_string())?;
+                return Ok(list_tv);
+            }
+
+            // Int list: write the i64 directly at data[index*elem_size].
+            let list_handle = list_tv.value.into_int_value();
+            let hdr_ptr = self.builder.build_int_to_ptr(
+                list_handle,
+                self.list_header_type.ptr_type(inkwell::AddressSpace::default()),
+                "list_hdr"
+            ).map_err(|e| e.to_string())?;
+            let es_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(3, false)], "es_ptr") }
+                .map_err(|e| e.to_string())?;
+            let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[self.i64_type.const_int(0, false), self.i64_type.const_int(0, false)], "data_ptr") }
+                .map_err(|e| e.to_string())?;
+            let elem_size = self.builder.build_load(es_ptr, "es").map_err(|e| e.to_string())?.into_int_value();
+            let data = self.builder.build_load(data_ptr, "data").map_err(|e| e.to_string())?.into_pointer_value();
+            let byte_off = self.builder.build_int_mul(index_tv.value.into_int_value(), elem_size, "boff").map_err(|e| e.to_string())?;
+            let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
+                .map_err(|e| e.to_string())?;
+            self.builder.build_store(elem_ptr, typed_val.value).map_err(|e| e.to_string())?;
+            return Ok(list_tv);
         }
 
         // Handle plain variable: x = value

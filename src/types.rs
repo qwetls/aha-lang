@@ -19,6 +19,9 @@ pub enum AhaType {
     Void,
     /// Homogeneous array of elements
     Array(Box<AhaType>),
+    /// Heap-allocated dynamic list: List<T> — handle is an i64 pointer
+    /// to a header struct {data: i8*, len: i64, cap: i64, elem_size: i64}.
+    List(Box<AhaType>),
     /// Named struct — carries the struct's declared name so codegen can
     /// look up its field layout and LLVM struct type.
     Struct(String),
@@ -104,7 +107,20 @@ impl AhaType {
             "bool" => Some(AhaType::Bool),
             "string" | "str" => Some(AhaType::String),
             "void" => Some(AhaType::Void),
-            _ => None,
+            _ => {
+                // List<T> — parse the inner type.
+                let inner = hint
+                    .strip_prefix("List<")
+                    .and_then(|s| s.strip_suffix('>'))?;
+                let inner_type = match inner {
+                    "int" | "i64" => AhaType::Int,
+                    "bool" => AhaType::Bool,
+                    "string" | "str" => AhaType::String,
+                    // Nested List<U> inside List<T>.
+                    _ => Self::from_hint(inner)?,
+                };
+                Some(AhaType::List(Box::new(inner_type)))
+            }
         }
     }
 
@@ -129,6 +145,7 @@ impl fmt::Display for AhaType {
             AhaType::String => write!(f, "String"),
             AhaType::Void => write!(f, "Void"),
             AhaType::Array(inner) => write!(f, "[{}]", inner),
+            AhaType::List(inner) => write!(f, "List<{}>", inner),
             AhaType::Struct(name) => write!(f, "{}", name),
             AhaType::Function { params, ret } => {
                 write!(f, "fn(")?;
