@@ -2,6 +2,32 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [Unreleased] — branch `experimental/list`
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/codegen.rs` | 🔧 ENHANCED | +817 | List<T>: builtins heap (malloc/realloc/free), index read/write, monomorphization atas List, scan pass track list bindings, main return i64 untuk hasil non-int |
+| `src/parser.rs` | 🔧 ENHANCED | +33 | Parsing `List<T>` type hint & list bindings |
+| `src/types.rs` | 🔧 ENHANCED | +19 | `AhaType::List(Box<AhaType>)` |
+| `tests/lists.rs` | ✨ NEW | 346 | 20+ test List<Int>/List<String>/List<T> generik/IR shape |
+
+### Added
+
+- **List<T> (F3e):** heap-allocated dynamic array — `list_new()`, `list_new_string()`, `list_push`, `list_get`, `list_get_string`, `list_len`, `list_free`, index read `xs[i]` dan write `xs[i] = v`.
+- **List<String> penuh:** element struct `{i8*, i64}` — push/get/index/concat/len.
+- **Fungsi generik atas List:** `fn first<T>(xs: List<T>) -> T { xs[0] }` — type param T ter-bind dari hint `List<T>`; monomorphization `first_Int`/`first_String`.
+
+### Diubah
+
+- Scan pass (`scan_call_sites`) kini men-track binding `let xs = list_new()` → `List<Int>` dan `list_new_string()` → `List<String>`, sehingga param fungsi (`fn sum_list(xs) { list_get(xs, 0) + ... }`) ter-infer sebagai list, bukan Int.
+- Main entry point selalu return i64: jika last expression bertipe String/struct, main return 0 — memperbaiki verify abort `ret { i8*, i64 } %listidx / i64` (SIGABRT).
+
+### Rangkaian Pengujian
+
+- 440 tests passing di CI (`experimental/list`) — termasuk 20+ test `lists.rs`.
+
 ## [1.4.5] — 2026-08-16
 
 ### File-by-File Change Summary
