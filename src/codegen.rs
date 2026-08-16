@@ -849,6 +849,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     // =====================================================================
 
     fn create_list_builtins(&mut self) {
+        Self::diag_mark("3a: create_list_builtins start");
         let i64_type = self.i64_type;
         let i8_ptr = self.i8_ptr_type();
         let header = self.list_header_type;
@@ -859,9 +860,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let header_from_handle = |builder: &Builder<'ctx>, handle: inkwell::values::IntValue<'ctx>| {
             builder.build_int_to_ptr(handle, header_ptr, "list_hdr").expect("int_to_ptr failed")
         };
+        Self::diag_mark("3b: header_from_handle closure created");
 
         // --- list_new() -> List<Int> ---
         {
+            Self::diag_mark("3c: list_new start");
             let fn_type = i64_type.fn_type(&[], false);
             let function = self.module.add_function("list_new", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -902,6 +905,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_new_string() -> List<String> (elem_size 16) ---
         {
+            Self::diag_mark("3d: list_new_string start");
             let fn_type = i64_type.fn_type(&[], false);
             let function = self.module.add_function("list_new_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -935,6 +939,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_push(list, value) -> list ---
         {
+            Self::diag_mark("3e: list_push start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1019,6 +1024,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (i8* pointer, i64 length) and passes both; this builtin stores
         // the full 16-byte element {i8*, i64} at data[len].
         {
+            Self::diag_mark("3f: list_push_string start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i8_ptr.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1101,6 +1107,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get(list, index) -> i64 (Int element or string ptr) ---
         {
+            Self::diag_mark("3g: list_get start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1156,6 +1163,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get_string(list, index) -> {i8*, i64} string element ---
         {
+            Self::diag_mark("3h: list_get_string start");
             let fn_type = self.string_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1209,6 +1217,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_len(list) -> i64 ---
         {
+            Self::diag_mark("3i: list_len start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_len", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1225,6 +1234,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_free(list) -> i64 (0) ---
         {
+            Self::diag_mark("3j: list_free start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_free", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1254,6 +1264,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("list_get_string".to_string(), AhaType::String);
         self.fn_types.insert("list_len".to_string(), AhaType::Int);
         self.fn_types.insert("list_free".to_string(), AhaType::Int);
+        Self::diag_mark("3k: create_list_builtins done");
     }
 
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
