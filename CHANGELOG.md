@@ -2,6 +2,36 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.4.4] — 2026-08-16
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/ast.rs` | 🔧 ENHANCED | +3 | `LetStatement.type_annotation: Option<String>` (raw hint seperti `int`, `string`, nama struct) |
+| `src/parser.rs` | 🔧 ENHANCED | +12 | Parsing `let x: int = 5` — `:` lalu identifier hint sebelum `=` |
+| `src/codegen.rs` | 🔧 ENHANCED | +51 | Type-check annotation vs nilai; alloca pakai tipe annotation; inferensi return type (String/struct/if); phi node pakai tipe branch |
+| `tests/type_inference.rs` | ✨ NEW | 170 | 20 test type annotation & inferensi |
+
+### Added
+
+- **Type annotations (F2):** `let x: int = 5` — deklarasi variabel bisa diberi anotasi tipe eksplisit (`int`, `string`, `bool`, atau nama struct). Nilai di-*type-check* saat kompilasi:
+  - `let x: int = "hi"` → error `Type mismatch: variable 'x' annotated as 'int' but value has type 'String'`
+  - `let p: Point = Other { ... }` → error bila nama struct berbeda
+- **Type inference (F2):** Tipe variabel tanpa anotasi di-infer dari ekspresi (literal, panggilan fungsi, if-expression). Return type fungsi di-infer dari ekspresi terakhir (string, struct, cabang if).
+- **Return type inference:** `fn greet() { "hello" }` ber-return type String — caller bisa `let s = greet(); len(s)`.
+- **If-expression phi type:** Phi node kini memakai tipe LLVM dari cabang (String/struct), bukan selalu i64 — memperbaiki `fn pick(a) { if a > 0 { "pos" } else { "neg" } }`.
+- **Rangkaian Pengujian:** 404 tests passing (sebelumnya 384; +20 test type inference/annotations).
+
+### Diubah
+
+- `infer_expr_type` & `infer_expr_type_with_scope` mendukung anotasi dan inferensi return type.
+- Unknown type hint (`let x: unknown = 7`) bersifat lenient — fallback ke Int, konsisten dengan field hints.
+
+### Security
+
+- Anotasi tipe diverifikasi saat kompilasi: mencocokkan anotasi dengan tipe nilai menghasilkan error, bukan UB.
+
 ## [1.4.3] — 2026-08-16
 
 ### File-by-File Change Summary
