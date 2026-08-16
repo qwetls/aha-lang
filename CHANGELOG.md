@@ -2,6 +2,30 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.4.7] — 2026-08-17
+
+### File-by-File Change Summary
+
+| File | Status | Lines | What Changed |
+|------|--------|------:|-------------|
+| `src/codegen.rs` | 🔧 ENHANCED | +1005 | Map<K,V>: map_header_type, emit_map_combo (open addressing), 4 prefix combos, compile_map_call dispatch |
+| `src/parser.rs` | 🔧 ENHANCED | +22 | Parse `Map<K,V>` type hint with comma separator |
+| `src/types.rs` | 🔧 ENHANCED | +51 | `AhaType::Map(Box<AhaType>, Box<AhaType>)`, from_hint, unify_with, Display |
+| `tests/maps.rs` | ✨ NEW | ~220 | 21 integration tests for Map<Int,Int>/Map<String,Int>/Map<Int,String>/Map<String,String> |
+
+### Added
+
+- **Map<K,V> (F3e):** deterministic hash table — open addressing / linear probing, `splitmix64` (Int keys) / FNV-1a (String keys) hashing.
+- **Header struct:** `{data: i8*, len: i64, cap: i64, key_size: i64, val_size: i64}` — 40 bytes on heap.
+- **4 prefix combos:** `map_` (Int→Int), `map_string_key_` (String→Int), `map_string_val_` (Int→String), `map_strings_` (String→String).
+- **Builtins:** `map_new`, `map_set`, `map_get`, `map_contains`, `map_remove`, `map_len`, `map_free` — each combo has its own prefixed LLVM function.
+- **Parser:** `Map<K,V>` type hint parsed via comma separator in `parse_type_hint`.
+- **Type system:** `AhaType::Map(K,V)` with `from_hint`, `unify_with`, `Display`.
+
+### Rangkaian Pengujian
+
+- 21 test Map<K,V> di `tests/maps.rs` — all 4 combos covered (Int→Int, String→Int, Int→String, String→String).
+
 ## [1.4.6] — 2026-08-17
 
 ### File-by-File Change Summary

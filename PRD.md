@@ -132,7 +132,7 @@ kompromi.
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Sebagian, lanjut |
 | **F2** | Type inference & annotations | 🔜 Berikutnya |
-| **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test) |
+| **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test); Map<K,V> ✅ di `experimental/map` (21 test) |
 | **F4** | Module system & package manager | ⏳ Nanti |
 | **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
@@ -207,7 +207,7 @@ ke main. Tidak ada loncatan.
 - [x] Monomorphization via LLVM (tanpa runtime cost)
 - [x] List<T> (F3e) — heap-allocated dynamic array + builtins + index read/write (di `development`, 440 test)
 - [x] `fn first<T>(xs: List<T>) -> T` — type param T ter-bind dari hint `List<T>`
-- [ ] Map<K,V> — belum dimulai
+- [x] Map<K,V> — deterministic hash table (open addressing, splitmix64/FNV-1a, 4 combos, 21 tests) di `experimental/map`
 
 ### F4. Module system & package manager
 - [ ] `import "file.aha"` — modularitas antar file
