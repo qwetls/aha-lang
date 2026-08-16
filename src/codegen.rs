@@ -1281,7 +1281,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Pick the phi LLVM type based on the branch types — i64 for Int/Bool,
         // string_type for String, struct type for Struct.
-        let phi_type = match (&consequence_tv.aha_type, &alternative_tv.aha_type) {
+        let phi_type: inkwell::types::BasicTypeEnum<'ctx> = match (&consequence_tv.aha_type, &alternative_tv.aha_type) {
             (AhaType::String, _) | (_, AhaType::String) => self.string_type.into(),
             (AhaType::Struct(name), _) => self.struct_llvm_type(name)?.into(),
             (_, AhaType::Struct(name)) => self.struct_llvm_type(name)?.into(),
