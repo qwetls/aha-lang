@@ -932,6 +932,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.build_conditional_branch(needs_grow, grow_block, no_grow_block)
                 .expect("branch failed");
 
+            // no_grow: just branch to merge
+            self.builder.position_at_end(no_grow_block);
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
+
             // Grow: realloc(data, new_cap * elem_size)
             self.builder.position_at_end(grow_block);
             let new_cap = self.builder.build_select(
@@ -1009,6 +1013,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let merge_block = self.context.append_basic_block(function, "grow_merge");
             self.builder.build_conditional_branch(needs_grow, grow_block, no_grow_block)
                 .expect("branch failed");
+
+            // no_grow: just branch to merge
+            self.builder.position_at_end(no_grow_block);
+            self.builder.build_unconditional_branch(merge_block).expect("branch failed");
 
             self.builder.position_at_end(grow_block);
             let new_cap = self.builder.build_select(
