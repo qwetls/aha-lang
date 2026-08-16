@@ -1790,7 +1790,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         list_handle.into(),
                         s_ptr.into(),
                         s_len.into(),
-                    ].iter().map(|a| (*a).into()).collect();
+                    ].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                     let function = *self.functions.get("list_push_string").expect("list_push_string not declared");
                     self.builder.build_call(function, &args_meta, "calltmp")
                         .map_err(|e| e.to_string())?;
@@ -1804,7 +1804,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let args_meta: Vec<_> = [
                         list_handle.into(),
                         value_tv.value.into(),
-                    ].iter().map(|a| (*a).into()).collect();
+                    ].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                     let function = *self.functions.get("list_push").expect("list_push not declared");
                     self.builder.build_call(function, &args_meta, "calltmp")
                         .map_err(|e| e.to_string())?;
@@ -1817,7 +1817,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let args_meta: Vec<_> = [
                         list_handle.into(),
                         index_tv.value.into(),
-                    ].iter().map(|a| (*a).into()).collect();
+                    ].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                     let function = *self.functions.get("list_get_string").expect("list_get_string not declared");
                     let call_result = self.builder.build_call(function, &args_meta, "calltmp")
                         .map_err(|e| e.to_string())?;
@@ -1829,7 +1829,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let args_meta: Vec<_> = [
                         list_handle.into(),
                         index_tv.value.into(),
-                    ].iter().map(|a| (*a).into()).collect();
+                    ].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                     let function = *self.functions.get("list_get").expect("list_get not declared");
                     let call_result = self.builder.build_call(function, &args_meta, "calltmp")
                         .map_err(|e| e.to_string())?;
