@@ -1996,7 +1996,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let t = arg_types.get(i).cloned().unwrap_or(AhaType::Int);
                     type_params.insert(h.clone(), t);
                 } else if let Some(inner) = h.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
-                    if generic.type_params.contains(inner) && !type_params.contains_key(inner) {
+                    if generic.type_params.iter().any(|tp| tp == inner) && !type_params.contains_key(inner) {
                         if let Some(AhaType::List(inner_type)) = arg_types.get(i) {
                             type_params.insert(inner.to_string(), *inner_type.clone());
                         }
