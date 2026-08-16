@@ -957,12 +957,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte_off = self.builder.build_int_mul(len, elem_size, "byte_off").expect("mul failed");
             let elem_ptr = unsafe { self.builder.build_gep(merged_data, &[byte_off], "elem_ptr") }
                 .expect("gep failed");
-            // Store the value — element type is i64 for Int lists; for String
-            // lists the value arrives as the string struct's i64 bits in the
-            // first field (pointer). The remaining struct field (length) is
-            // stored separately by list_push_string (see below). To keep
-            // list_push simple and fast, it stores only the first i64.
-            self.builder.build_store(elem_ptr, value).expect("store failed");
+            // Bitcast i8* to i64* before storing — LLVM requires typed pointers.
+            let elem_i64_ptr = self.builder.build_bitcast(elem_ptr, i64_type.ptr_type(inkwell::AddressSpace::default()), "elem_i64_ptr")
+                .expect("bitcast failed").into_pointer_value();
+            self.builder.build_store(elem_i64_ptr, value).expect("store failed");
 
             // len += 1
             let new_len = self.builder.build_int_add(len, i64_type.const_int(1, false), "new_len").expect("add failed");
@@ -1034,9 +1032,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte_off = self.builder.build_int_mul(len, elem_size, "byte_off").expect("mul failed");
             let elem_ptr = unsafe { self.builder.build_gep(merged_data, &[byte_off], "elem_ptr") }
                 .expect("gep failed");
-            // Store the full string struct: first i8* (pointer) then i64 (length).
-            self.builder.build_store(elem_ptr, str_ptr).expect("store failed");
-            let str_len_ptr = unsafe { self.builder.build_gep(elem_ptr, &[i64_type.const_int(8, false)], "str_len_ptr") }
+            // Bitcast i8* element pointer to i64* for typed store.
+            let elem_i64_ptr = self.builder.build_bitcast(elem_ptr, i64_type.ptr_type(inkwell::AddressSpace::default()), "elem_i64_ptr")
+                .expect("bitcast failed").into_pointer_value();
+            // Store the i8* pointer as the first 8 bytes (i64).
+            let ptr_as_i64 = self.builder.build_ptr_to_int(str_ptr, i64_type, "ptr_as_i64")
+                .expect("ptr_to_int failed");
+            self.builder.build_store(elem_i64_ptr, ptr_as_i64).expect("store failed");
+            // Store the i64 length at offset 8 (GEP index 1 on i64*).
+            let str_len_ptr = unsafe { self.builder.build_gep(elem_i64_ptr, &[i64_type.const_int(1, false)], "str_len_ptr") }
                 .expect("gep failed");
             self.builder.build_store(str_len_ptr, str_len).expect("store failed");
 
@@ -1087,14 +1091,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte_off = self.builder.build_int_mul(index, elem_size, "byte_off").expect("mul failed");
             let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
                 .expect("gep failed");
-            let elem_val = self.builder.build_load(elem_ptr, "elem_val").expect("load failed").into_int_value();
+            // Bitcast i8* to i64* before loading — LLVM requires typed pointers.
+            let elem_i64_ptr = self.builder.build_bitcast(elem_ptr, i64_type.ptr_type(inkwell::AddressSpace::default()), "elem_i64_ptr")
+                .expect("bitcast failed").into_pointer_value();
+            let elem_val = self.builder.build_load(elem_i64_ptr, "elem_val").expect("load failed").into_int_value();
             self.builder.build_unconditional_branch(merge_block).expect("branch failed");
 
             self.builder.position_at_end(merge_block);
             let merged = self.builder.build_phi(i64_type, "get_result").expect("phi failed");
             merged.add_incoming(&[(&oob_val as &dyn inkwell::values::BasicValue, oob_block)]);
             merged.add_incoming(&[(&elem_val as &dyn inkwell::values::BasicValue, ok_block)]);
-            let _ = self.builder.build_return(Some(&merged.as_basic_value()));
+            let merged_val = merged.as_basic_value();
+            let _ = self.builder.build_return(Some(&merged_val));
             self.functions.insert("list_get".to_string(), function);
         }
 
@@ -1146,7 +1154,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let merged = self.builder.build_phi(self.string_type, "get_s_result").expect("phi failed");
             merged.add_incoming(&[(&empty_str as &dyn inkwell::values::BasicValue, oob_block)]);
             merged.add_incoming(&[(&elem_str as &dyn inkwell::values::BasicValue, ok_block)]);
-            let _ = self.builder.build_return(Some(&merged.as_basic_value()));
+            let merged_val = merged.as_basic_value();
+            let _ = self.builder.build_return(Some(&merged_val));
             self.functions.insert("list_get_string".to_string(), function);
         }
 
@@ -2245,10 +2254,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let byte_off = self.builder.build_int_mul(index_tv.value.into_int_value(), elem_size, "boff").map_err(|e| e.to_string())?;
                 let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
                     .map_err(|e| e.to_string())?;
+                // Bitcast i8* element pointer to i64* for typed stores.
+                let elem_i64_ptr = self.builder.build_bitcast(elem_ptr, self.i64_type.ptr_type(inkwell::AddressSpace::default()), "elem_i64_ptr")
+                    .map_err(|e| e.to_string())?.into_pointer_value();
                 let s_ptr = self.extract_str_ptr(&typed_val)?;
                 let s_len = self.extract_str_len(&typed_val)?;
-                self.builder.build_store(elem_ptr, s_ptr).map_err(|e| e.to_string())?;
-                let len_ptr = unsafe { self.builder.build_gep(elem_ptr, &[self.i64_type.const_int(8, false)], "slen_ptr") }
+                let ptr_as_i64 = self.builder.build_ptr_to_int(s_ptr, self.i64_type, "ptr_as_i64")
+                    .map_err(|e| e.to_string())?;
+                self.builder.build_store(elem_i64_ptr, ptr_as_i64).map_err(|e| e.to_string())?;
+                let len_ptr = unsafe { self.builder.build_gep(elem_i64_ptr, &[self.i64_type.const_int(1, false)], "slen_ptr") }
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(len_ptr, s_len).map_err(|e| e.to_string())?;
                 return Ok(list_tv);
@@ -2270,7 +2284,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte_off = self.builder.build_int_mul(index_tv.value.into_int_value(), elem_size, "boff").map_err(|e| e.to_string())?;
             let elem_ptr = unsafe { self.builder.build_gep(data, &[byte_off], "elem_ptr") }
                 .map_err(|e| e.to_string())?;
-            self.builder.build_store(elem_ptr, typed_val.value).map_err(|e| e.to_string())?;
+            // Bitcast i8* element pointer to i64* before storing the i64.
+            let elem_i64_ptr = self.builder.build_bitcast(elem_ptr, self.i64_type.ptr_type(inkwell::AddressSpace::default()), "elem_i64_ptr")
+                .map_err(|e| e.to_string())?.into_pointer_value();
+            self.builder.build_store(elem_i64_ptr, typed_val.value).map_err(|e| e.to_string())?;
             return Ok(list_tv);
         }
 
