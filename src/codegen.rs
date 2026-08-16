@@ -817,7 +817,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Helper: header pointer from a list handle (i64).
         // Used by every list_* builtin after the first.
         let header_from_handle = |builder: &Builder<'ctx>, handle: inkwell::values::IntValue<'ctx>| {
-            builder.build_int_to_ptr(handle, header_ptr, "list_hdr")
+            builder.build_int_to_ptr(handle, header_ptr, "list_hdr").expect("int_to_ptr failed")
         };
 
         // --- list_new() -> List<Int> ---
@@ -837,7 +837,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Zero the whole header explicitly — malloc memory is garbage.
             let zero = i64_type.const_int(0, false);
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
-                .expect("bitcast failed");
+                .expect("bitcast failed").into_pointer_value();
             let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
                 .expect("gep failed");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
@@ -875,7 +875,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .into_pointer_value();
             // Zero the whole header explicitly.
             let zero = i64_type.const_int(0, false);
-            let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed").expect("bitcast failed");
+            let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed").expect("bitcast failed").into_pointer_value();
             let data_ptr = unsafe { self.builder.build_gep(hdr_ptr, &[zero, zero], "data_ptr") }
                 .expect("gep failed");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
@@ -941,7 +941,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "new_cap"
             ).expect("select failed");
             let realloc_fn = *self.functions.get("realloc").expect("realloc not declared");
-            let new_data_size = self.builder.build_int_mul(new_cap, elem_size, "new_size").expect("mul failed");
+            let new_data_size = self.builder.build_int_mul(new_cap.into_int_value(), elem_size, "new_size").expect("mul failed");
             let new_data = self.builder.build_call(realloc_fn, &[data.into(), new_data_size.into()], "realloc_data")
                 .expect("realloc failed")
                 .try_as_basic_value().left().expect("realloc void")
@@ -1020,7 +1020,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "new_cap"
             ).expect("select failed");
             let realloc_fn = *self.functions.get("realloc").expect("realloc not declared");
-            let new_data_size = self.builder.build_int_mul(new_cap, elem_size, "new_size").expect("mul failed");
+            let new_data_size = self.builder.build_int_mul(new_cap.into_int_value(), elem_size, "new_size").expect("mul failed");
             let new_data = self.builder.build_call(realloc_fn, &[data.into(), new_data_size.into()], "realloc_data")
                 .expect("realloc failed")
                 .try_as_basic_value().left().expect("realloc void")
@@ -1094,7 +1094,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let merged = self.builder.build_phi(i64_type, "get_result").expect("phi failed");
             merged.add_incoming(&[(&oob_val as &dyn inkwell::values::BasicValue, oob_block)]);
             merged.add_incoming(&[(&elem_val as &dyn inkwell::values::BasicValue, ok_block)]);
-            let _ = self.builder.build_return(Some(&merged));
+            let _ = self.builder.build_return(Some(&merged.as_basic_value()));
             self.functions.insert("list_get".to_string(), function);
         }
 
@@ -1138,7 +1138,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .expect("gep failed");
             // Load the full {i8*, i64} string struct from the element slot.
             let elem_struct_ptr = self.builder.build_bitcast(elem_ptr, self.string_type.ptr_type(inkwell::AddressSpace::default()), "elem_str_ptr")
-                .expect("bitcast failed");
+                .expect("bitcast failed").into_pointer_value();
             let elem_str = self.builder.build_load(elem_struct_ptr, "elem_str").expect("load failed");
             self.builder.build_unconditional_branch(merge_block).expect("branch failed");
 
@@ -1146,7 +1146,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let merged = self.builder.build_phi(self.string_type, "get_s_result").expect("phi failed");
             merged.add_incoming(&[(&empty_str as &dyn inkwell::values::BasicValue, oob_block)]);
             merged.add_incoming(&[(&elem_str as &dyn inkwell::values::BasicValue, ok_block)]);
-            let _ = self.builder.build_return(Some(&merged));
+            let _ = self.builder.build_return(Some(&merged.as_basic_value()));
             self.functions.insert("list_get_string".to_string(), function);
         }
 
@@ -1181,7 +1181,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let free_fn = *self.functions.get("free").expect("free not declared");
             // free data buffer, then free header
             self.builder.build_call(free_fn, &[data.into()], "free_data").expect("free call failed");
-            let hdr_i8 = self.builder.build_bitcast(hdr_ptr, i8_ptr, "hdr_i8").expect("bitcast failed");
+            let hdr_i8 = self.builder.build_bitcast(hdr_ptr, i8_ptr, "hdr_i8").expect("bitcast failed").into_pointer_value();
             self.builder.build_call(free_fn, &[hdr_i8.into()], "free_hdr").expect("free call failed");
             let zero = i64_type.const_int(0, false);
             let _ = self.builder.build_return(Some(&zero));
@@ -1354,7 +1354,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let args_meta: Vec<_> = [
                 list_handle.into(),
                 index_val.value.into(),
-            ].iter().map(|a| (*a).into()).collect();
+            ].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
             let builtin = if inner.is_string() { "list_get_string" } else { "list_get" };
             let function = *self.functions.get(builtin).expect("list builtin not declared");
             let call_result = self.builder.build_call(function, &args_meta, "listidx")
@@ -1763,7 +1763,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match func_name {
             "list_len" | "list_free" => {
-                let args_meta: Vec<_> = [list_handle.into()].iter().map(|a| (*a).into()).collect();
+                let args_meta: Vec<_> = [list_handle.into()].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                 let function = *self.functions.get(func_name).expect("list builtin not declared");
                 let call_result = self.builder.build_call(function, &args_meta, "calltmp")
                     .map_err(|e| e.to_string())?;
