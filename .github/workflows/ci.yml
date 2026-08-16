@@ -4,7 +4,6 @@ name: 'CI & Discord Notification'
 # Kapan workflow ini dijalankan?
 on:
   push:
-    branches: [ '*' ]
   pull_request:
     branches: [ 'main' ]
 

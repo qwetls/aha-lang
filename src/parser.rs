@@ -201,6 +201,16 @@ impl Parser {
         }
         let name = Identifier { value: self.current_token.literal.clone() };
 
+        // Optional type annotation: `let x: int = 5`
+        let mut type_annotation: Option<String> = None;
+        if self.peek_token_is(TokenType::Colon) {
+            self.next_token(); // Skip ':'
+            if !self.expect_peek(TokenType::Identifier) {
+                return None;
+            }
+            type_annotation = Some(self.current_token.literal.clone());
+        }
+
         if !self.expect_peek(TokenType::Assign) {
             return None;
         }
@@ -212,7 +222,7 @@ impl Parser {
             self.next_token(); // Skip ';'
         }
 
-        Some(Statement::Let(LetStatement { name, value }))
+        Some(Statement::Let(LetStatement { name, value, type_annotation }))
     }
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
