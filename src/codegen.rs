@@ -229,13 +229,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         return_type: &AhaType,
         param_types: &[inkwell::types::BasicTypeEnum<'ctx>],
     ) -> Result<inkwell::types::FunctionType<'ctx>, String> {
+        let meta: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = param_types.iter()
+            .map(|p| (*p).into())
+            .collect();
         match return_type {
-            AhaType::String => Ok(self.string_type.fn_type(param_types, false)),
+            AhaType::String => Ok(self.string_type.fn_type(&meta, false)),
             AhaType::Struct(name) => {
                 let st = self.struct_llvm_type(name)?;
-                Ok(st.fn_type(param_types, false))
+                Ok(st.fn_type(&meta, false))
             }
-            _ => Ok(self.i64_type.fn_type(param_types, false)),
+            _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
     }
 
@@ -326,8 +329,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let obj_type = self.infer_expr_type(&fa.object);
                 if let AhaType::Struct(name) = &obj_type {
                     if let Some(fields) = self.struct_defs.get(name) {
-                        for (fn, ft) in fields {
-                            if fn == &fa.field.value {
+                        for (field_name, ft) in fields {
+                            if field_name == &fa.field.value {
                                 return ft.clone();
                             }
                         }
@@ -434,8 +437,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let obj_type = self.infer_expr_type_with_scope(&fa.object, scope);
                 if let AhaType::Struct(name) = &obj_type {
                     if let Some(fields) = self.struct_defs.get(name) {
-                        for (fn, ft) in fields {
-                            if fn == &fa.field.value {
+                        for (field_name, ft) in fields {
+                            if field_name == &fa.field.value {
                                 return ft.clone();
                             }
                         }
