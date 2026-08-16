@@ -205,6 +205,9 @@ pub enum Statement {
 pub struct LetStatement {
     pub name: Identifier,
     pub value: Expression,
+    /// Optional explicit type annotation: `let x: int = 5`.
+    /// Stored as the raw hint string ("int", "string", "bool", struct name).
+    pub type_annotation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

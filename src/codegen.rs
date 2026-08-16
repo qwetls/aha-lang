@@ -107,8 +107,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ast::Statement::Let(let_stmt) => {
                     // Track struct variable bindings so infer_expr_type
                     // can resolve them when the variable is passed as a
-                    // function argument.
-                    if let ast::Expression::StructLiteral(sl) = &let_stmt.value {
+                    // function argument. Prefer the explicit annotation
+                    // when present (e.g. `let p: Point = ...`).
+                    if let Some(ref hint) = let_stmt.type_annotation {
+                        if self.struct_defs.contains_key(hint) {
+                            self.struct_var_types.insert(
+                                let_stmt.name.value.clone(),
+                                AhaType::Struct(hint.clone()),
+                            );
+                        }
+                    } else if let ast::Expression::StructLiteral(sl) = &let_stmt.value {
                         self.struct_var_types.insert(
                             let_stmt.name.value.clone(),
                             AhaType::Struct(sl.name.value.clone()),
@@ -701,7 +709,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         match statement {
             ast::Statement::Let(let_stmt) => {
                 let typed_val = self.compile_expression(&let_stmt.value)?;
-                let alloc_type = self.aha_type_to_llvm_type(&typed_val.aha_type)?;
+                // Determine allocation type: prefer explicit annotation,
+                // then fall back to inferred type from the expression.
+                let alloc_type = if let Some(ref hint) = let_stmt.type_annotation {
+                    let hint_type = AhaType::from_hint(hint)
+                        .unwrap_or(AhaType::Int);
+                    // If the struct_defs registry has a matching name, use Struct.
+                    let hint_type = if self.struct_defs.contains_key(hint) {
+                        AhaType::Struct(hint.clone())
+                    } else {
+                        hint_type
+                    };
+                    // Type-check: annotation must match the inferred type.
+                    // Struct("Point") vs Struct("Point") is compatible.
+                    // Int annotation with String value → error.
+                    let compatible = match (&hint_type, &typed_val.aha_type) {
+                        (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                        _ => hint_type == typed_val.aha_type,
+                    };
+                    if !compatible {
+                        return Err(format!(
+                            "Type mismatch: variable '{}' annotated as '{}' but value has type '{}'",
+                            let_stmt.name.value, hint, typed_val.aha_type
+                        ));
+                    }
+                    self.aha_type_to_llvm_type(&hint_type)?
+                } else {
+                    self.aha_type_to_llvm_type(&typed_val.aha_type)?
+                };
                 let pointer = self.builder.build_alloca(alloc_type, &let_stmt.name.value)
                     .map_err(|e| e.to_string())?;
                 self.builder.build_store(pointer, typed_val.value)
