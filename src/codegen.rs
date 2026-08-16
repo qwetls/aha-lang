@@ -215,13 +215,27 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// LLVM type for an AhaType (function params, returns, allocas).
-    /// String → {i8*, i64}, named structs → their registered layout,
-    /// everything else → i64.
     fn aha_type_to_llvm_type(&self, t: &AhaType) -> Result<inkwell::types::BasicTypeEnum<'ctx>, String> {
         match t {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
             _ => Ok(self.i64_type.into()),
+        }
+    }
+
+    /// Build a function type from a return type enum and param types.
+    fn build_fn_type(
+        &self,
+        return_type: &AhaType,
+        param_types: &[inkwell::types::BasicTypeEnum<'ctx>],
+    ) -> Result<inkwell::types::FunctionType<'ctx>, String> {
+        match return_type {
+            AhaType::String => Ok(self.string_type.fn_type(param_types, false)),
+            AhaType::Struct(name) => {
+                let st = self.struct_llvm_type(name)?;
+                Ok(st.fn_type(param_types, false))
+            }
+            _ => Ok(self.i64_type.fn_type(param_types, false)),
         }
     }
 
@@ -239,18 +253,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if self.functions.contains_key(&func_name) {
                         continue;
                     }
-                    let param_types: Vec<_> = func.parameters.iter().enumerate()
+                    let param_types: Result<Vec<_>, _> = func.parameters.iter().enumerate()
                         .map(|(i, _)| {
                             let t = self.param_type_map.get(&func_name)
                                 .and_then(|types| types.get(i).cloned())
                                 .unwrap_or(AhaType::Int);
                             self.aha_type_to_llvm_type(&t)
                         })
-                        .collect::<Result<_, _>>();
+                        .collect();
                     let Ok(param_types) = param_types else { continue; };
                     let return_type = self.infer_function_return_type(func, &func_name);
-                    let Ok(ret_llvm) = self.aha_type_to_llvm_type(&return_type) else { continue; };
-                    let fn_type = ret_llvm.fn_type(&param_types, false);
+                    let Ok(fn_type) = self.build_fn_type(&return_type, &param_types) else { continue; };
                     let function = self.module.add_function(&func_name, fn_type, None);
                     self.functions.insert(func_name.clone(), function);
                     self.fn_types.insert(func_name, return_type);
@@ -1055,12 +1068,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         let function = if let Some(f) = self.functions.get(&func_name) {
             *f
         } else {
-            let param_types: Vec<_> = param_aha_types.iter()
+            let param_types: Result<Vec<_>, _> = param_aha_types.iter()
                 .map(|t| self.aha_type_to_llvm_type(t))
-                .collect::<Result<_, _>>()?;
-            let ret_llvm = self.aha_type_to_llvm_type(&return_type)?;
-            let fn_type = ret_llvm.fn_type(&param_types, false);
-            let function = self.module.add_function(&func_name, fn_type, None);
+                .collect();
+            let param_types = param_types?;
+            let ret_llvm = self.build_fn_type(&return_type, &param_types)?;
+            let function = self.module.add_function(&func_name, ret_llvm, None);
             self.functions.insert(func_name.clone(), function);
             function
         };
