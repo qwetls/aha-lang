@@ -561,6 +561,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
 
+        // DIAGNOSTIC: verify the module is valid before proceeding, so an
+        // invalid-IR bug surfaces as a message instead of a SIGSEGV in
+        // print_to_string. Remove once List<T> lands.
+        if let Err(e) = self.module.verify() {
+            eprintln!("MODULE VERIFY FAILED: {}", e);
+            std::process::abort();
+        }
+
         // Register struct definitions first so struct literals and field
         // access can resolve field layout during codegen.
         self.register_structs(&program.statements);
