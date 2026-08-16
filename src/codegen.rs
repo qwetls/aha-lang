@@ -138,6 +138,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let_stmt.name.value.clone(),
                             AhaType::Struct(sl.name.value.clone()),
                         );
+                    } else if let ast::Expression::Call(call) = &let_stmt.value {
+                        // Track list bindings so a later call site can infer
+                        // the param type: `let xs = list_new(); f(xs)` passes
+                        // xs as List<Int>, not Int.
+                        if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                            if id.value == "list_new" {
+                                self.struct_var_types.insert(
+                                    let_stmt.name.value.clone(),
+                                    AhaType::List(Box::new(AhaType::Int)),
+                                );
+                            } else if id.value == "list_new_string" {
+                                self.struct_var_types.insert(
+                                    let_stmt.name.value.clone(),
+                                    AhaType::List(Box::new(AhaType::String)),
+                                );
+                            }
+                        }
                     }
                     self.scan_expr_for_calls(&let_stmt.value);
                 }
@@ -651,9 +668,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.compile_statement(statement)?;
         }
         
-        let return_val = last_value
-            .map(|tv| tv.value)
-            .unwrap_or_else(|| self.i64_type.const_int(0, false).into());
+        let return_val = match last_value {
+            Some(tv) => match tv.aha_type {
+                // main is always an i64 entry point; a String/Struct result
+                // has no meaningful i64 value, so return 0 (callers use len()
+                // etc. to inspect it instead).
+                AhaType::String | AhaType::Struct(_) => self.i64_type.const_int(0, false).into(),
+                _ => tv.value,
+            },
+            None => self.i64_type.const_int(0, false).into(),
+        };
         let _ = self.builder.build_return(Some(&return_val));
 
         Self::diag_mark("5: main compiled");
