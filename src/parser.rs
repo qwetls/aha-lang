@@ -73,25 +73,37 @@ impl Parser {
         self.peek_token = self.lexer.next_token();
     }
 
-    /// Parse a type hint, supporting compound types like `List<int>`.
+    /// Parse a type hint, supporting compound types like `List<int>` and
+    /// `Map<K,V>` (two comma-separated inner types).
     /// Caller has already consumed the leading identifier (current_token is
     /// the first identifier of the hint). Consumes the full hint and returns
-    /// the canonical hint string ("List<int>", "int", "string", ...).
+    /// the canonical hint string ("List<int>", "Map<string,int>", ...).
     fn parse_type_hint(&mut self) -> Option<String> {
         if !self.current_token_is(TokenType::Identifier) {
             return None;
         }
         let hint = self.current_token.literal.clone();
-        // List<T>: identifier followed by '<' then an inner hint then '>'.
+        // Compound hint: identifier followed by '<'.
         if self.peek_token_is(TokenType::LT) {
             self.next_token(); // current = '<', peek = first token of inner
             self.next_token(); // current = inner hint start, peek = '>' or '<'
-            let inner_hint = self.parse_type_hint()?;
+            let first_hint = self.parse_type_hint()?;
+            if self.peek_token_is(TokenType::Comma) {
+                // Map<K, V>: after the key hint comes a comma, then the value hint.
+                self.next_token(); // current = ','
+                self.next_token(); // current = value hint start
+                let second_hint = self.parse_type_hint()?;
+                if !self.expect_peek(TokenType::GT) {
+                    self.errors.push("Expected '>' to close Map<K,V> type hint".to_string());
+                    return None;
+                }
+                return Some(format!("Map<{}, {}>", first_hint, second_hint));
+            }
             if !self.expect_peek(TokenType::GT) {
                 self.errors.push("Expected '>' to close List<T> type hint".to_string());
                 return None;
             }
-            return Some(format!("List<{}>", inner_hint));
+            return Some(format!("List<{}>", first_hint));
         }
         Some(hint)
     }
