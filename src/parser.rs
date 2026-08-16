@@ -403,12 +403,37 @@ impl Parser {
             None
         };
 
-        if !self.expect_peek(TokenType::LeftParen) {
+        // Generic type parameters: fn max<T, U>(...) 
+        let mut type_params = Vec::new();
+        if self.peek_token_is(TokenType::LT) {
+            self.next_token(); // skip '<'
+            while !self.current_token_is(TokenType::GT) && !self.current_token_is(TokenType::Eof) {
+                if self.current_token_is(TokenType::Identifier) {
+                    type_params.push(self.current_token.literal.clone());
+                }
+                self.next_token(); // skip ',' or type name
+            }
+            if !self.expect_peek(TokenType::LeftParen) {
+                self.errors.push("Expected '(' after generic type params".to_string());
+                return Expression::Integer(IntegerLiteral { value: 0 });
+            }
+        } else if !self.expect_peek(TokenType::LeftParen) {
             self.errors.push("Expected '(' after function name".to_string());
             return Expression::Integer(IntegerLiteral { value: 0 });
         }
 
-        let parameters = self.parse_function_parameters();
+        let (parameters, param_type_hints) = self.parse_function_parameters();
+
+        // Optional return type annotation: fn f(...) -> T
+        let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
+            self.next_token(); // skip '->'
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after '->' in function return".to_string());
+            }
+            Some(self.current_token.literal.clone())
+        } else {
+            None
+        };
 
         if !self.expect_peek(TokenType::LeftBrace) {
             self.errors.push("Expected '{' for function body".to_string());
@@ -417,32 +442,55 @@ impl Parser {
 
         let body = self.parse_block_statement();
 
-        Expression::Function(FunctionLiteral { name, parameters, body })
+        Expression::Function(FunctionLiteral { name, parameters, type_params, param_type_hints, return_type_hint, body })
     }
 
-    // Parse function parameters: (a, b, c)
-    fn parse_function_parameters(&mut self) -> Vec<Identifier> {
+    // Parse function parameters: (a, b, c) or (a: T, b: int)
+    fn parse_function_parameters(&mut self) -> (Vec<Identifier>, Vec<Option<String>>) {
         let mut params = Vec::new();
+        let mut hints = Vec::new();
 
         if self.peek_token_is(TokenType::RightParen) {
             self.next_token();
-            return params;
+            return (params, hints);
         }
 
         self.next_token(); // Skip '('
         params.push(Identifier { value: self.current_token.literal.clone() });
 
+        // Optional per-param type hint: name: Type
+        let hint = if self.peek_token_is(TokenType::Colon) {
+            self.next_token(); // skip ':'
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after ':' in parameter".to_string());
+            }
+            Some(self.current_token.literal.clone())
+        } else {
+            None
+        };
+        hints.push(hint);
+
         while self.peek_token_is(TokenType::Comma) {
             self.next_token(); // Skip current param
             self.next_token(); // Skip ','
             params.push(Identifier { value: self.current_token.literal.clone() });
+            let hint = if self.peek_token_is(TokenType::Colon) {
+                self.next_token(); // skip ':'
+                if !self.expect_peek(TokenType::Identifier) {
+                    self.errors.push("Expected type after ':' in parameter".to_string());
+                }
+                Some(self.current_token.literal.clone())
+            } else {
+                None
+            };
+            hints.push(hint);
         }
 
         if !self.expect_peek(TokenType::RightParen) {
             self.errors.push("Expected ')' after function parameters".to_string());
         }
 
-        params
+        (params, hints)
     }
 
     // Parse function call arguments: (expr, expr, ...)

@@ -51,6 +51,7 @@ pub enum TokenType {
     RightBracket, // ]
     DotDot,       // ..
     Dot,          // .
+    Arrow,        // ->
     // Special
     Eof,          // End of file
     Illegal,      // Unrecognized character
@@ -183,6 +184,12 @@ pub struct IndexExpression {
 pub struct FunctionLiteral {
     pub name: Option<Identifier>,
     pub parameters: Vec<Identifier>,
+    /// Generic type parameters: `fn max<T>(...)` → ["T"]
+    pub type_params: Vec<String>,
+    /// Per-parameter type hints: `fn f(a: T, b: int)` → [Some("T"), Some("int")]
+    pub param_type_hints: Vec<Option<String>>,
+    /// Optional return type annotation: `fn f(...) -> T`
+    pub return_type_hint: Option<String>,
     pub body: BlockStatement,
 }
 

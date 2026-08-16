@@ -41,6 +41,13 @@ pub struct CodeGenerator<'ctx> {
     /// Synthetic param scope used while scanning a function body, so
     /// calls inside resolve their args against the function's own params.
     scan_scope: Vec<HashMap<String, AhaType>>,
+    /// Generic function definitions: name → cloned FunctionLiteral AST.
+    /// Populated during predeclare; bodies are compiled lazily per
+    /// concrete type at each call site (monomorphization).
+    generic_defs: HashMap<String, ast::FunctionLiteral>,
+    /// Active generic type-parameter bindings during monomorphized
+    /// body compilation: type param name → concrete AhaType.
+    type_param_map: HashMap<String, AhaType>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -67,6 +74,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             struct_defs: HashMap::new(),
             struct_var_types: HashMap::new(),
             scan_scope: Vec::new(),
+            generic_defs: HashMap::new(),
+            type_param_map: HashMap::new(),
         }
     }
 
@@ -231,6 +240,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Resolve a type hint string to AhaType, checking active generic
+    /// type-parameter bindings first, then built-in hints, then struct names.
+    fn resolve_hint_type(&self, hint: &str) -> AhaType {
+        if let Some(t) = self.type_param_map.get(hint) {
+            return t.clone();
+        }
+        if let Some(t) = AhaType::from_hint(hint) {
+            return t;
+        }
+        if self.struct_defs.contains_key(hint) {
+            return AhaType::Struct(hint.to_string());
+        }
+        AhaType::Int
+    }
+
     /// Build a function type from a return type enum and param types.
     fn build_fn_type(
         &self,
@@ -253,6 +277,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Pre-declare all user functions so forward references work.
     /// Creates the LLVM function value with correct param types but
     /// does NOT compile the body — bodies are compiled later.
+    /// Generic functions are stored in generic_defs for lazy monomorphization.
     fn predeclare_functions(&mut self, statements: &[ast::Statement]) {
         for stmt in statements {
             if let ast::Statement::Expression(ast::ExpressionStatement {
@@ -261,6 +286,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             {
                 if let Some(name) = &func.name {
                     let func_name = name.value.clone();
+                    // Generic functions are stored for lazy monomorphization
+                    if !func.type_params.is_empty() {
+                        self.generic_defs.insert(func_name, func.clone());
+                        continue;
+                    }
                     if self.functions.contains_key(&func_name) {
                         continue;
                     }
@@ -505,6 +535,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }) = stmt
                 {
                     if let Some(name) = &func.name {
+                        // Generic functions are monomorphized lazily at call
+                        // sites; their "return type" only exists per
+                        // instantiation, so skip them here.
+                        if !func.type_params.is_empty() {
+                            continue;
+                        }
                         let rt = self.infer_function_return_type(func, &name.value);
                         self.fn_types.insert(name.value.clone(), rt);
                     }
@@ -1087,10 +1123,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     // Compile function definition — FIX C-05 (double return) and C-06 (variable restore safety)
+    // Generic functions are compiled lazily via monomorphization; skip body compilation here.
     fn compile_function(&mut self, func: &ast::FunctionLiteral) -> Result<TypedValue<'ctx>, String> {
         let func_name = func.name.as_ref()
             .map(|id| id.value.clone())
             .unwrap_or_else(|| format!("anonymous_{}", self.functions.len()));
+        if !func.type_params.is_empty() {
+            return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
+        }
 
         // Infer param types from call sites: scan all call expressions
         // in already-compiled code for this function name
@@ -1181,6 +1221,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Identifier(id) => id.value.clone(),
             _ => return Err("Can only call named functions".to_string()),
         };
+        // Generic function call → monomorphize (lazy per call-site type).
+        if self.generic_defs.contains_key(&func_name) {
+            return self.compile_generic_call(&func_name, call);
+        }
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
             args.push(self.compile_expression(arg)?.value);
@@ -1201,6 +1245,169 @@ impl<'ctx> CodeGenerator<'ctx> {
             .left()
             .ok_or_else(|| "Function call did not return a value".to_string())?;
         Ok(TypedValue::new(val, ret_type))
+    }
+
+    /// Infer a generic function's return type with concrete type
+    /// parameters bound. Param types come from the resolved hints,
+    /// so `fn id<T>(x: T) -> T { x }` returns the concrete arg type.
+    fn infer_generic_return_type(&self, func: &ast::FunctionLiteral, param_types: &[AhaType]) -> AhaType {
+        let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
+            .map(|(i, p)| (p.value.clone(), param_types.get(i).cloned().unwrap_or(AhaType::Int)))
+            .collect();
+        for stmt in &func.body.statements {
+            if let ast::Statement::Return(ret) = stmt {
+                return self.infer_expr_type_with_scope(&ret.return_value, &scope);
+            }
+        }
+        for stmt in func.body.statements.iter().rev() {
+            if let ast::Statement::Expression(expr_stmt) = stmt {
+                return self.infer_expr_type_with_scope(&expr_stmt.expression, &scope);
+            }
+        }
+        AhaType::Int
+    }
+
+    /// Monomorphize and call a generic function.
+    /// Each unique (generic name, concrete type params) combination gets
+    /// its own LLVM function (`max_Int`, `max_String`, ...), compiled
+    /// lazily at the first call site and cached in `functions`.
+    fn compile_generic_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let generic = self.generic_defs.get(func_name).cloned()
+            .ok_or_else(|| format!("Unknown generic function: {}", func_name))?;
+
+        // Compile the arguments first (still in the caller's block).
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        let mut arg_types: Vec<AhaType> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            arg_types.push(tv.aha_type.clone());
+            args.push(tv.value);
+        }
+
+        // Bind generic type params (T, U, ...) from param hints to the
+        // concrete argument types at matching positions.
+        let mut type_params: HashMap<String, AhaType> = HashMap::new();
+        for (i, hint) in generic.param_type_hints.iter().enumerate() {
+            if let Some(h) = hint {
+                if generic.type_params.contains(h) && !type_params.contains_key(h) {
+                    let t = arg_types.get(i).cloned().unwrap_or(AhaType::Int);
+                    type_params.insert(h.clone(), t);
+                }
+            }
+        }
+
+        // Mangled name: deterministic order by type-param name.
+        let mut keyed: Vec<(String, AhaType)> = type_params.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        let suffix: String = keyed.iter().map(|(_, t)| format!("_{}", t)).collect();
+        let mangled = format!("{}{}", func_name, suffix);
+
+        // Cache hit — just call the already-instantiated function.
+        if let Some(f) = self.functions.get(&mangled) {
+            let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
+            let call_result = self.builder.build_call(*f, &args_meta, "calltmp")
+                .map_err(|e| e.to_string())?;
+            let ret_type = self.fn_types.get(&mangled).cloned().unwrap_or(AhaType::Int);
+            let val = call_result.try_as_basic_value()
+                .left()
+                .ok_or_else(|| "Generic call did not return a value".to_string())?;
+            return Ok(TypedValue::new(val, ret_type));
+        }
+
+        // Activate type-param bindings for hint resolution & body compile.
+        let saved_tpm = std::mem::replace(&mut self.type_param_map, type_params);
+
+        let mut param_aha_types: Vec<AhaType> = Vec::new();
+        for (i, p) in generic.parameters.iter().enumerate() {
+            let t = match generic.param_type_hints.get(i) {
+                Some(Some(h)) => self.resolve_hint_type(h.as_str()),
+                Some(None) | None => arg_types.get(i).cloned().unwrap_or(AhaType::Int),
+            };
+            param_aha_types.push(t);
+        }
+
+        let return_type = match &generic.return_type_hint {
+            Some(h) => self.resolve_hint_type(h.as_str()),
+            None => self.infer_generic_return_type(&generic, &param_aha_types),
+        };
+
+        let param_types: Result<Vec<_>, _> = param_aha_types.iter()
+            .map(|t| self.aha_type_to_llvm_type(t))
+            .collect();
+        let param_types = param_types?;
+        let fn_type = self.build_fn_type(&return_type, &param_types)?;
+        let function = self.module.add_function(&mangled, fn_type, None);
+        self.functions.insert(mangled.clone(), function);
+        self.fn_types.insert(mangled.clone(), return_type.clone());
+
+        // Compile the body with the concrete type params bound.
+        let saved_block = self.builder.get_insert_block();
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+        let saved_function = self.current_function;
+
+        let entry_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry_block);
+        self.current_function = Some(function);
+
+        let result = (|| -> Result<(), String> {
+            for (i, param) in generic.parameters.iter().enumerate() {
+                let param_value = function.get_nth_param(i as u32)
+                    .ok_or("Failed to get parameter")?;
+                let aha_type = &param_aha_types[i];
+                let alloc_type = self.aha_type_to_llvm_type(aha_type)?;
+                let alloca = self.builder.build_alloca(alloc_type, &param.value)
+                    .map_err(|e| e.to_string())?;
+                self.builder.build_store(alloca, param_value)
+                    .map_err(|e| e.to_string())?;
+                self.insert_variable(param.value.clone(), alloca, aha_type.clone());
+            }
+
+            let mut has_return = false;
+            let mut last_value: BasicValueEnum<'ctx> = match &return_type {
+                AhaType::String => self.string_type.const_zero().into(),
+                AhaType::Struct(name) => {
+                    self.struct_llvm_type(name)?.const_zero().into()
+                }
+                _ => self.i64_type.const_int(0, false).into(),
+            };
+
+            for stmt in &generic.body.statements {
+                if let ast::Statement::Return(_) = stmt {
+                    self.compile_statement(stmt)?;
+                    has_return = true;
+                    break;
+                } else if let ast::Statement::Expression(expr_stmt) = stmt {
+                    let tv = self.compile_expression(&expr_stmt.expression)?;
+                    last_value = tv.value;
+                } else {
+                    self.compile_statement(stmt)?;
+                }
+            }
+
+            if !has_return {
+                self.builder.build_return(Some(&last_value))
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })();
+
+        self.scopes = saved_scopes;
+        self.current_function = saved_function;
+        self.type_param_map = saved_tpm;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        result?;
+
+        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
+        let call_result = self.builder.build_call(function, &args_meta, "calltmp")
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| "Generic call did not return a value".to_string())?;
+        Ok(TypedValue::new(val, return_type))
     }
 
     fn compile_while_expression(&mut self, while_expr: &ast::WhileExpression) -> Result<TypedValue<'ctx>, String> {
