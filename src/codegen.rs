@@ -1988,12 +1988,19 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Bind generic type params (T, U, ...) from param hints to the
         // concrete argument types at matching positions.
+        // Handles both direct hints (T) and container hints (List<T>).
         let mut type_params: HashMap<String, AhaType> = HashMap::new();
         for (i, hint) in generic.param_type_hints.iter().enumerate() {
             if let Some(h) = hint {
                 if generic.type_params.contains(h) && !type_params.contains_key(h) {
                     let t = arg_types.get(i).cloned().unwrap_or(AhaType::Int);
                     type_params.insert(h.clone(), t);
+                } else if let Some(inner) = h.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
+                    if generic.type_params.contains(inner) && !type_params.contains_key(inner) {
+                        if let Some(AhaType::List(inner_type)) = arg_types.get(i) {
+                            type_params.insert(inner.to_string(), *inner_type.clone());
+                        }
+                    }
                 }
             }
         }
