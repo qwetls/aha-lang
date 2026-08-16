@@ -5,27 +5,30 @@
 use aha_lang::lexer::Lexer;
 use aha_lang::parser::Parser;
 use aha_lang::codegen::CodeGenerator;
+use inkwell::context::Context;
 
 fn run(source: &str) -> i64 {
-    let lexer = Lexer::new(source);
+    let lexer = Lexer::new(source.to_string());
     let mut parser = Parser::new(lexer);
     let program = parser.parse_program();
     if !parser.errors.is_empty() {
         panic!("Parser errors: {:?}", parser.errors);
     }
-    let mut codegen = CodeGenerator::new("test");
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context);
     codegen.compile(&program).expect("compile failed");
     codegen.run_jit().expect("JIT execution failed")
 }
 
 fn expect_error(source: &str) -> String {
-    let lexer = Lexer::new(source);
+    let lexer = Lexer::new(source.to_string());
     let mut parser = Parser::new(lexer);
     let program = parser.parse_program();
     if !parser.errors.is_empty() {
         return format!("{:?}", parser.errors);
     }
-    let mut codegen = CodeGenerator::new("test");
+    let context = Context::create();
+    let mut codegen = CodeGenerator::new(&context);
     match codegen.compile(&program) {
         Ok(()) => panic!("Expected compile error, but compilation succeeded"),
         Err(e) => e.to_string(),
