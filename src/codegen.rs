@@ -1506,19 +1506,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                        key_param: &[inkwell::values::BasicValueEnum<'ctx>]|
          -> inkwell::values::IntValue<'ctx> {
             if key_is_str {
-                // Compare both the pointer and length.  Since we store
-                // the full {i8*,i64} struct, we can memcmp(key_sz bytes).
-                let slot_i8 = b.build_bitcast(slot_base, i8_ptr, "kc_slot").unwrap().into_pointer_value();
-                // Build the key bytes from the params: for a string key,
-                // key_param = [ptr, len]. We need to construct a contiguous
-                // key buffer.  Since the key is stored in the slot as two
-                // i64s, we compare the slot bytes directly.
-                let key_in_slot = b.build_load(slot_base, "kc_key").unwrap();
-                let key1 = b.build_extract_value(key_in_slot.into_struct_value(), 0, "kc_k1").unwrap();
-                let key2 = b.build_extract_value(key_in_slot.into_struct_value(), 1, "kc_k2").unwrap();
-                let slot_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
-                let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, key1.into_int_value(), slot_ptr_i64, "kc_c1").unwrap();
-                let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, key2.into_int_value(), key_param[1].into_int_value(), "kc_c2").unwrap();
+                // String keys are stored as two i64s: {ptr_as_i64, len}.
+                // Match the store_key layout exactly.
+                let slot_i64 = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_slot_i64").unwrap().into_pointer_value();
+                let slot_ptr_i64_val = b.build_load(slot_i64, "kc_slot_ptr").unwrap().into_int_value();
+                let slot_len_ptr = unsafe { b.build_gep(slot_i64, &[i64_type.const_int(1, false)], "kc_slot_len_p").unwrap() };
+                let slot_len = b.build_load(slot_len_ptr, "kc_slot_len").unwrap().into_int_value();
+                let key_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
+                let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, slot_ptr_i64_val, key_ptr_i64, "kc_c1").unwrap();
+                let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, slot_len, key_param[1].into_int_value(), "kc_c2").unwrap();
                 b.build_or(cmp1, cmp2, "kc_or").unwrap()
             } else {
                 let slot_i64_ptr = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_i64").unwrap().into_pointer_value();
