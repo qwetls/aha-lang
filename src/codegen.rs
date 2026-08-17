@@ -1381,13 +1381,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         // Helper: hash an i64 key via splitmix64.
-        let splitmix64 = |b: &Builder<'ctx>, x: inkwell::values::IntValue<'ctx>| {
-            let x = b.build_int_add(x, i64_type.const_int(0x9e3779b97f4a7c15, false), "sm64_a").unwrap();
-            let x = b.build_int_xor(x, b.build_right_shift(x, 30, false).unwrap(), "sm64_b").unwrap();
-            let x = b.build_int_mul(x, i64_type.const_int(0xbf58476d1ce4e5b9, false), "sm64_c").unwrap();
-            let x = b.build_int_xor(x, b.build_right_shift(x, 27, false).unwrap(), "sm64_d").unwrap();
-            let x = b.build_int_mul(x, i64_type.const_int(0x94d049bb133111eb, false), "sm64_e").unwrap();
-            b.build_int_xor(x, b.build_right_shift(x, 31, false).unwrap(), "sm64_f").unwrap()
+        let splitmix64 = |_b: &Builder<'ctx>, x: inkwell::values::IntValue<'ctx>| {
+            let x = x.build_xor(i64_type.const_int(0x9e3779b97f4a7c15, false), "sm64_a").unwrap();
+            let x = x.build_xor(x.build_right_shift(30, false, "sm64_r1").unwrap(), "sm64_b").unwrap();
+            let x = x.build_mul(i64_type.const_int(0xbf58476d1ce4e5b9, false), "sm64_c").unwrap();
+            let x = x.build_xor(x.build_right_shift(27, false, "sm64_r2").unwrap(), "sm64_d").unwrap();
+            let x = x.build_mul(i64_type.const_int(0x94d049bb133111eb, false), "sm64_e").unwrap();
+            x.build_xor(x.build_right_shift(31, false, "sm64_r3").unwrap(), "sm64_f").unwrap()
         };
 
         // Helper: hash a string key {i8*, i64} via FNV-1a over bytes.
@@ -1423,8 +1423,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte = b.build_load(byte_ptr, "fnv_byte").unwrap();
             let byte_i64 = b.build_int_z_extend(byte.into_int_value(), i64_type, "fnv_byte_i64").unwrap();
             let cur_hash = b.build_load(hash_alloca, "cur_hash").unwrap().into_int_value();
-            let xored = b.build_int_xor(cur_hash, byte_i64, "fnv_xor").unwrap();
-            let new_hash = b.build_int_mul(xored, fnv_prime, "fnv_mul").unwrap();
+            let xored = cur_hash.build_xor(byte_i64, "fnv_xor").unwrap();
+            let new_hash = xored.build_mul(fnv_prime, "fnv_mul").unwrap();
             b.build_store(hash_alloca, new_hash).unwrap();
             let i_next = b.build_int_add(i2, one, "fnv_inc").unwrap();
             b.build_store(i_alloca, i_next).unwrap();
@@ -1516,13 +1516,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let key1 = b.build_extract_value(key_in_slot.into_struct_value(), 0, "kc_k1").unwrap();
                 let key2 = b.build_extract_value(key_in_slot.into_struct_value(), 1, "kc_k2").unwrap();
                 let slot_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
-                let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, key1.into_int_value(), slot_ptr_i64, "kc_c1").unwrap().into_int_value();
-                let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, key2.into_int_value(), key_param[1].into_int_value(), "kc_c2").unwrap().into_int_value();
-                b.build_int_or(cmp1, cmp2, "kc_or").unwrap()
+                let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, key1.into_int_value(), slot_ptr_i64, "kc_c1").unwrap();
+                let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, key2.into_int_value(), key_param[1].into_int_value(), "kc_c2").unwrap();
+                cmp1.build_or(cmp2, "kc_or").unwrap()
             } else {
                 let slot_i64_ptr = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_i64").unwrap().into_pointer_value();
                 let slot_key = b.build_load(slot_i64_ptr, "kc_key").unwrap().into_int_value();
-                b.build_int_compare(inkwell::IntPredicate::NE, slot_key, key_param[0].into_int_value(), "kc_cmp").unwrap().into_int_value()
+                b.build_int_compare(inkwell::IntPredicate::NE, slot_key, key_param[0].into_int_value(), "kc_cmp").unwrap()
             }
         };
 
@@ -1623,8 +1623,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let idx_phi = b.build_phi(i64_type, "probe_idx_phi").unwrap();
             let found_phi = b.build_phi(i64_type, "probe_found_phi").unwrap();
             // If cap == 0, idx = -1, found = 0
-            idx_phi.add_incoming(&[(&i64_type.const_int(u64::MAX, false), &probe_done)]);
-            found_phi.add_incoming(&[(&zero, &probe_done)]);
+            idx_phi.add_incoming(&[(&i64_type.const_int(u64::MAX, false), probe_done)]);
+            found_phi.add_incoming(&[(&zero, probe_done)]);
             // Actually let me redo this with a simpler approach
             // ... I'll just use a simpler LLVM structure
             drop(idx_phi); drop(found_phi);
@@ -1678,17 +1678,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         // {prefix}_set(handle, key..., val...) -> handle
         // ==================================================================
         {
-            let key_params: Vec<inkwell::types::BasicTypeEnum<'ctx>> = if key_is_str {
+            let key_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = if key_is_str {
                 vec![i8_ptr.into(), i64_type.into()]
             } else {
                 vec![i64_type.into()]
             };
-            let val_params: Vec<inkwell::types::BasicTypeEnum<'ctx>> = if val_is_str {
+            let val_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = if val_is_str {
                 vec![i8_ptr.into(), i64_type.into()]
             } else {
                 vec![i64_type.into()]
             };
-            let mut all_params = vec![i64_type.into()]; // handle
+            let mut all_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![i64_type.into()];
             all_params.extend(key_params.iter().cloned());
             all_params.extend(val_params.iter().cloned());
             let fn_type = i64_type.fn_type(&all_params, false);
@@ -1774,7 +1774,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(zero_cond);
             let z_i = self.builder.build_phi(i64_type, "z_i").unwrap();
-            z_i.add_incoming(&[(&zero, &grow_needed_block)]);
+            z_i.add_incoming(&[(&zero, grow_needed_block)]);
             // Actually let me use a simpler approach: just zero the occupied flags
             // using struct GEP on each slot.
             // Even simpler: just store 0 to the occ field of each slot.
@@ -1938,19 +1938,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         // {prefix}_get(handle, key...) -> value (i64 or {i8*,i64})
         // ==================================================================
         {
-            let key_params: Vec<inkwell::types::BasicTypeEnum<'ctx>> = if key_is_str {
+            let key_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = if key_is_str {
                 vec![i8_ptr.into(), i64_type.into()]
             } else {
                 vec![i64_type.into()]
             };
-            let mut all_params = vec![i64_type.into()];
+            let mut all_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![i64_type.into()];
             all_params.extend(key_params.iter().cloned());
-            let ret_type: inkwell::types::BasicTypeEnum<'ctx> = if val_is_str {
-                self.string_type.into()
+            let fn_type = if val_is_str {
+                self.string_type.fn_type(&all_params, false)
             } else {
-                i64_type.into()
+                i64_type.fn_type(&all_params, false)
             };
-            let fn_type = ret_type.fn_type(&all_params, false);
             let func_name = format!("{}_get", prefix);
             let function = self.module.add_function(&func_name, fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -2042,12 +2041,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         // {prefix}_contains(handle, key...) -> i64 (0 or 1)
         // ==================================================================
         {
-            let key_params: Vec<inkwell::types::BasicTypeEnum<'ctx>> = if key_is_str {
+            let key_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = if key_is_str {
                 vec![i8_ptr.into(), i64_type.into()]
             } else {
                 vec![i64_type.into()]
             };
-            let mut all_params = vec![i64_type.into()];
+            let mut all_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![i64_type.into()];
             all_params.extend(key_params.iter().cloned());
             let fn_type = i64_type.fn_type(&all_params, false);
             let func_name = format!("{}_contains", prefix);
@@ -2133,12 +2132,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         // {prefix}_remove(handle, key...) -> handle
         // ==================================================================
         {
-            let key_params: Vec<inkwell::types::BasicTypeEnum<'ctx>> = if key_is_str {
+            let key_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = if key_is_str {
                 vec![i8_ptr.into(), i64_type.into()]
             } else {
                 vec![i64_type.into()]
             };
-            let mut all_params = vec![i64_type.into()];
+            let mut all_params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = vec![i64_type.into()];
             all_params.extend(key_params.iter().cloned());
             let fn_type = i64_type.fn_type(&all_params, false);
             let func_name = format!("{}_remove", prefix);
@@ -3183,7 +3182,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let saved_tpm = std::mem::replace(&mut self.type_param_map, type_params);
 
         let mut param_aha_types: Vec<AhaType> = Vec::new();
-        for (i, p) in generic.parameters.iter().enumerate() {
+        for (i, _p) in generic.parameters.iter().enumerate() {
             let t = match generic.param_type_hints.get(i) {
                 Some(Some(h)) => self.resolve_hint_type(h.as_str()),
                 Some(None) | None => arg_types.get(i).cloned().unwrap_or(AhaType::Int),
