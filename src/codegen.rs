@@ -1381,13 +1381,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
 
         // Helper: hash an i64 key via splitmix64.
-        let splitmix64 = |_b: &Builder<'ctx>, x: inkwell::values::IntValue<'ctx>| {
-            let x = x.build_xor(i64_type.const_int(0x9e3779b97f4a7c15, false), "sm64_a").unwrap();
-            let x = x.build_xor(x.build_right_shift(30, false, "sm64_r1").unwrap(), "sm64_b").unwrap();
-            let x = x.build_mul(i64_type.const_int(0xbf58476d1ce4e5b9, false), "sm64_c").unwrap();
-            let x = x.build_xor(x.build_right_shift(27, false, "sm64_r2").unwrap(), "sm64_d").unwrap();
-            let x = x.build_mul(i64_type.const_int(0x94d049bb133111eb, false), "sm64_e").unwrap();
-            x.build_xor(x.build_right_shift(31, false, "sm64_r3").unwrap(), "sm64_f").unwrap()
+        let splitmix64 = |b: &Builder<'ctx>, x: inkwell::values::IntValue<'ctx>| {
+            let x = b.build_xor(x, i64_type.const_int(0x9e3779b97f4a7c15, false), "sm64_a").unwrap();
+            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(30, false), "sm64_r1").unwrap(), "sm64_b").unwrap();
+            let x = b.build_int_mul(x, i64_type.const_int(0xbf58476d1ce4e5b9, false), "sm64_c").unwrap();
+            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(27, false), "sm64_r2").unwrap(), "sm64_d").unwrap();
+            let x = b.build_int_mul(x, i64_type.const_int(0x94d049bb133111eb, false), "sm64_e").unwrap();
+            b.build_xor(x, b.build_right_shift(x, i64_type.const_int(31, false), "sm64_r3").unwrap(), "sm64_f").unwrap()
         };
 
         // Helper: hash a string key {i8*, i64} via FNV-1a over bytes.
@@ -1423,8 +1423,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let byte = b.build_load(byte_ptr, "fnv_byte").unwrap();
             let byte_i64 = b.build_int_z_extend(byte.into_int_value(), i64_type, "fnv_byte_i64").unwrap();
             let cur_hash = b.build_load(hash_alloca, "cur_hash").unwrap().into_int_value();
-            let xored = cur_hash.build_xor(byte_i64, "fnv_xor").unwrap();
-            let new_hash = xored.build_mul(fnv_prime, "fnv_mul").unwrap();
+            let xored = b.build_xor(cur_hash, byte_i64, "fnv_xor").unwrap();
+            let new_hash = b.build_int_mul(xored, fnv_prime, "fnv_mul").unwrap();
             b.build_store(hash_alloca, new_hash).unwrap();
             let i_next = b.build_int_add(i2, one, "fnv_inc").unwrap();
             b.build_store(i_alloca, i_next).unwrap();
@@ -1518,7 +1518,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let slot_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
                 let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, key1.into_int_value(), slot_ptr_i64, "kc_c1").unwrap();
                 let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, key2.into_int_value(), key_param[1].into_int_value(), "kc_c2").unwrap();
-                cmp1.build_or(cmp2, "kc_or").unwrap()
+                b.build_or(cmp1, cmp2, "kc_or").unwrap()
             } else {
                 let slot_i64_ptr = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_i64").unwrap().into_pointer_value();
                 let slot_key = b.build_load(slot_i64_ptr, "kc_key").unwrap().into_int_value();
