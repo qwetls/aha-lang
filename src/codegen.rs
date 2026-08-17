@@ -1383,11 +1383,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Helper: hash an i64 key via splitmix64.
         let splitmix64 = |b: &Builder<'ctx>, x: inkwell::values::IntValue<'ctx>| {
             let x = b.build_xor(x, i64_type.const_int(0x9e3779b97f4a7c15, false), "sm64_a").unwrap();
-            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(30, false), "sm64_r1").unwrap(), "sm64_b").unwrap();
+            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(30, false), false, "sm64_r1").unwrap(), "sm64_b").unwrap();
             let x = b.build_int_mul(x, i64_type.const_int(0xbf58476d1ce4e5b9, false), "sm64_c").unwrap();
-            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(27, false), "sm64_r2").unwrap(), "sm64_d").unwrap();
+            let x = b.build_xor(x, b.build_right_shift(x, i64_type.const_int(27, false), false, "sm64_r2").unwrap(), "sm64_d").unwrap();
             let x = b.build_int_mul(x, i64_type.const_int(0x94d049bb133111eb, false), "sm64_e").unwrap();
-            b.build_xor(x, b.build_right_shift(x, i64_type.const_int(31, false), "sm64_r3").unwrap(), "sm64_f").unwrap()
+            b.build_xor(x, b.build_right_shift(x, i64_type.const_int(31, false), false, "sm64_r3").unwrap(), "sm64_f").unwrap()
         };
 
         // Helper: hash a string key {i8*, i64} via FNV-1a over bytes.
