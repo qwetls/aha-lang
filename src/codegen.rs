@@ -1498,6 +1498,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Helper: compare key at a slot with the given key params.
         // Returns i64 0 (equal) or nonzero (not equal).
+        // ponytail: extract memcmp_fn early to avoid holding &self across the closure
+        let memcmp_fn_val = *self.functions.get("memcmp").expect("memcmp not declared");
         let key_cmp = |b: &Builder<'ctx>,
                        f: inkwell::values::FunctionValue<'ctx>,
                        slot_base: inkwell::values::PointerValue<'ctx>,
@@ -1506,7 +1508,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             if key_is_str {
                 // Compare both the pointer and length.  Since we store
                 // the full {i8*,i64} struct, we can memcmp(key_sz bytes).
-                let memcmp_fn = *self.functions.get("memcmp").expect("memcmp not declared");
                 let slot_i8 = b.build_bitcast(slot_base, i8_ptr, "kc_slot").unwrap().into_pointer_value();
                 // Build the key bytes from the params: for a string key,
                 // key_param = [ptr, len]. We need to construct a contiguous
