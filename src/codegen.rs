@@ -1390,49 +1390,53 @@ impl<'ctx> CodeGenerator<'ctx> {
             b.build_xor(x, b.build_right_shift(x, i64_type.const_int(31, false), false, "sm64_r3").unwrap(), "sm64_f").unwrap()
         };
 
-        // Helper: hash a string key {i8*, i64} via FNV-1a over bytes.
-        // Returns i64 hash.
-        let fnv1a_hash = |b: &Builder<'ctx>,
-                          f: inkwell::values::FunctionValue<'ctx>,
-                          str_ptr: inkwell::values::PointerValue<'ctx>,
-                          str_len: inkwell::values::IntValue<'ctx>|
-         -> inkwell::values::IntValue<'ctx> {
-            let zero = i64_type.const_int(0, false);
+        // Real LLVM function for FNV-1a string hash — allocas in its own entry block.
+        // Only create once (emit_map_combo called 4 times for 4 combos).
+        let fnv_func = if let Some(f) = self.module.get_function("__fnv1a_hash") {
+            f
+        } else {
+            let fnv_hash_type = i64_type.fn_type(&[i8_ptr.into(), i64_type.into()], false);
+            let f = self.module.add_function("__fnv1a_hash", fnv_hash_type, None);
+            let fnv_entry = self.context.append_basic_block(f, "entry");
+            let fnv_check = self.context.append_basic_block(f, "check");
+            let fnv_loop = self.context.append_basic_block(f, "loop");
+            let fnv_done = self.context.append_basic_block(f, "done");
+
+            self.builder.position_at_end(fnv_entry);
             let fnv_offset = i64_type.const_int(0xcbf29ce484222325, false);
             let fnv_prime = i64_type.const_int(0x100000001b3, false);
-            let one = i64_type.const_int(1, false);
+            let fnv_zero = i64_type.const_int(0, false);
+            let fnv_one = i64_type.const_int(1, false);
+            let fnv_key_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
+            let fnv_key_len = f.get_nth_param(1).unwrap().into_int_value();
+            let h_alloca = self.builder.build_alloca(i64_type, "h").unwrap();
+            self.builder.build_store(h_alloca, fnv_offset).unwrap();
+            let i_alloca = self.builder.build_alloca(i64_type, "i").unwrap();
+            self.builder.build_store(i_alloca, fnv_zero).unwrap();
+            self.builder.build_unconditional_branch(fnv_check).unwrap();
 
-            let hash_alloca = b.build_alloca(i64_type, "fnv_hash").unwrap();
-            b.build_store(hash_alloca, fnv_offset).unwrap();
-            let i_alloca = b.build_alloca(i64_type, "fnv_i").unwrap();
-            b.build_store(i_alloca, zero).unwrap();
+            self.builder.position_at_end(fnv_check);
+            let i_val = self.builder.build_load(i_alloca, "i").unwrap().into_int_value();
+            let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, i_val, fnv_key_len, "cmp").unwrap();
+            self.builder.build_conditional_branch(cmp, fnv_loop, fnv_done).unwrap();
 
-            let loop_block = self.context.append_basic_block(f, "fnv_loop");
-            let done_block = self.context.append_basic_block(f, "fnv_done");
-            let check_block = self.context.append_basic_block(f, "fnv_check");
-            b.build_unconditional_branch(check_block).unwrap();
+            self.builder.position_at_end(fnv_loop);
+            let i2 = self.builder.build_load(i_alloca, "i2").unwrap().into_int_value();
+            let byte_ptr = unsafe { self.builder.build_gep(fnv_key_ptr, &[i2], "byte_ptr").unwrap() };
+            let byte = self.builder.build_load(byte_ptr, "byte").unwrap();
+            let byte_i64 = self.builder.build_int_z_extend(byte.into_int_value(), i64_type, "byte_ext").unwrap();
+            let cur = self.builder.build_load(h_alloca, "cur").unwrap().into_int_value();
+            let xored = self.builder.build_xor(cur, byte_i64, "xored").unwrap();
+            let mul = self.builder.build_int_mul(xored, fnv_prime, "mul").unwrap();
+            self.builder.build_store(h_alloca, mul).unwrap();
+            let i_next = self.builder.build_int_add(i2, fnv_one, "i_next").unwrap();
+            self.builder.build_store(i_alloca, i_next).unwrap();
+            self.builder.build_unconditional_branch(fnv_check).unwrap();
 
-            b.position_at_end(check_block);
-            let i = b.build_load(i_alloca, "i").unwrap().into_int_value();
-            let cond = b.build_int_compare(inkwell::IntPredicate::SLT, i, str_len, "fnv_cond").unwrap();
-            b.build_conditional_branch(cond, loop_block, done_block).unwrap();
-
-            b.position_at_end(loop_block);
-            let i2 = b.build_load(i_alloca, "i2").unwrap().into_int_value();
-            let byte_ptr = unsafe { b.build_gep(str_ptr, &[i2], "fnv_byte_ptr").unwrap() };
-            let byte = b.build_load(byte_ptr, "fnv_byte").unwrap();
-            let byte_i64 = b.build_int_z_extend(byte.into_int_value(), i64_type, "fnv_byte_i64").unwrap();
-            let cur_hash = b.build_load(hash_alloca, "cur_hash").unwrap().into_int_value();
-            let xored = b.build_xor(cur_hash, byte_i64, "fnv_xor").unwrap();
-            let new_hash = b.build_int_mul(xored, fnv_prime, "fnv_mul").unwrap();
-            b.build_store(hash_alloca, new_hash).unwrap();
-            let i_next = b.build_int_add(i2, one, "fnv_inc").unwrap();
-            b.build_store(i_alloca, i_next).unwrap();
-            b.build_unconditional_branch(check_block).unwrap();
-
-            b.position_at_end(done_block);
-            let hash_val = b.build_load(hash_alloca, "fnv_result").unwrap().into_int_value();
-            hash_val
+            self.builder.position_at_end(fnv_done);
+            let result = self.builder.build_load(h_alloca, "result").unwrap().into_int_value();
+            self.builder.build_return(Some(&result)).unwrap();
+            f
         };
 
         // Helper: store key bytes into a slot.  For Int keys, store i64;
@@ -1718,23 +1722,27 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            // Compute hash — fnv1a_hash repositions builder to fnv_done.
-            // No save/restore: caller instructions go directly into fnv_done,
-            // which gets its terminator from the caller's branch instruction.
+            // Compute hash via real LLVM function (allocas in its own entry block).
             let hash = if key_is_str {
-                fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
+                self.builder.build_call(fnv_func, &[
+                    key_args[0].into_pointer_value().into(),
+                    key_args[1].into_int_value().into(),
+                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
 
-            // Loop counters — alloca MUST be in a block dominated by entry.
-            // fnv_done is reachable from entry (via fnv_check→fnv_done),
-            // so alloca here is valid. mem2reg won't promote these, but
-            // correctness is unaffected — we just miss the SSA optimization.
+            // Loop counters — alloca in entry block so mem2reg promotes to SSA.
+            self.builder.position_at_end(entry);
             let z_counter = self.builder.build_alloca(i64_type, "z_counter").unwrap();
             self.builder.build_store(z_counter, zero).unwrap();
             let p_counter = self.builder.build_alloca(i64_type, "p_counter").unwrap();
             self.builder.build_store(p_counter, one).unwrap();
+
+            // Branch from entry to continuation — terminates entry block.
+            let cont = self.context.append_basic_block(function, "cont");
+            self.builder.build_unconditional_branch(cont).unwrap();
+            self.builder.position_at_end(cont);
 
             // Probe: find slot or empty position
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
@@ -1907,15 +1915,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            // fnv1a_hash repositions builder to fnv_done — caller continues there.
+            // Compute hash via real LLVM function (allocas in its own entry block).
             let hash = if key_is_str {
-                fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
+                self.builder.build_call(fnv_func, &[
+                    key_args[0].into_pointer_value().into(),
+                    key_args[1].into_int_value().into(),
+                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
 
+            // Counter — alloca in entry block so mem2reg promotes to SSA.
+            self.builder.position_at_end(entry);
             let g_counter = self.builder.build_alloca(i64_type, "g_counter").unwrap();
             self.builder.build_store(g_counter, zero).unwrap();
+
+            // Branch from entry to continuation — terminates entry block.
+            let g_cont = self.context.append_basic_block(function, "g_cont");
+            self.builder.build_unconditional_branch(g_cont).unwrap();
+            self.builder.position_at_end(g_cont);
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let get_miss = self.context.append_basic_block(function, "get_miss");
@@ -2007,15 +2025,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            // fnv1a_hash repositions builder to fnv_done — caller continues there.
+            // Compute hash via real LLVM function (allocas in its own entry block).
             let hash = if key_is_str {
-                fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
+                self.builder.build_call(fnv_func, &[
+                    key_args[0].into_pointer_value().into(),
+                    key_args[1].into_int_value().into(),
+                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
 
+            // Counter — alloca in entry block so mem2reg promotes to SSA.
+            self.builder.position_at_end(entry);
             let c_counter = self.builder.build_alloca(i64_type, "c_counter").unwrap();
             self.builder.build_store(c_counter, zero).unwrap();
+
+            // Branch from entry to continuation — terminates entry block.
+            let c_cont = self.context.append_basic_block(function, "c_cont");
+            self.builder.build_unconditional_branch(c_cont).unwrap();
+            self.builder.position_at_end(c_cont);
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let c_miss = self.context.append_basic_block(function, "c_miss");
@@ -2101,15 +2129,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            // fnv1a_hash repositions builder to fnv_done — caller continues there.
+            // Compute hash via real LLVM function (allocas in its own entry block).
             let hash = if key_is_str {
-                fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
+                self.builder.build_call(fnv_func, &[
+                    key_args[0].into_pointer_value().into(),
+                    key_args[1].into_int_value().into(),
+                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
 
+            // Counter — alloca in entry block so mem2reg promotes to SSA.
+            self.builder.position_at_end(entry);
             let r_counter = self.builder.build_alloca(i64_type, "r_counter").unwrap();
             self.builder.build_store(r_counter, zero).unwrap();
+
+            // Branch from entry to continuation — terminates entry block.
+            let r_cont = self.context.append_basic_block(function, "r_cont");
+            self.builder.build_unconditional_branch(r_cont).unwrap();
+            self.builder.position_at_end(r_cont);
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let r_done = self.context.append_basic_block(function, "r_done");
