@@ -131,7 +131,7 @@ fn map_int_string_set_get() {
     assert_eq!(run(r#"let m = map_string_val_new()
         let m2 = map_string_val_set(m, 1, "hello")
         let s = map_string_val_get(m2, 1)
-        length(s)"#), 5);
+        len(s)"#), 5);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn map_int_string_get_missing_returns_empty() {
     assert_eq!(run(r#"let m = map_string_val_new()
         let m2 = map_string_val_set(m, 1, "hello")
         let s = map_string_val_get(m2, 99)
-        length(s)"#), 0);
+        len(s)"#), 0);
 }
 
 // =====================================================================
@@ -181,7 +181,7 @@ fn map_strings_set_get() {
     assert_eq!(run(r#"let m = map_strings_new()
         let m2 = map_strings_set(m, "key", "value")
         let s = map_strings_get(m2, "key")
-        length(s)"#), 5);
+        len(s)"#), 5);
 }
 
 #[test]
