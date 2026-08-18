@@ -649,10 +649,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         match self.module.verify() {
             Ok(()) => Self::diag_mark("4: verify ok"),
             Err(e) => {
-                let msg = format!("MODULE VERIFY FAILED: {}", e);
-                eprintln!("{}", msg);
-                Self::diag_mark(&format!("4: {}", msg));
-                panic!("{}", msg);
+                Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
+                std::process::abort();
             }
         }
 
@@ -1433,7 +1431,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             b.build_unconditional_branch(check_block).unwrap();
 
             b.position_at_end(done_block);
-            b.build_load(hash_alloca, "fnv_result").unwrap().into_int_value()
+            let hash_val = b.build_load(hash_alloca, "fnv_result").unwrap().into_int_value();
+            let fnv_cont = self.context.append_basic_block(f, "fnv_cont");
+            b.build_unconditional_branch(fnv_cont).unwrap();
+            b.position_at_end(fnv_cont);
+            hash_val
         };
 
         // Helper: store key bytes into a slot.  For Int keys, store i64;
