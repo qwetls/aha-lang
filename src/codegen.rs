@@ -649,8 +649,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         match self.module.verify() {
             Ok(()) => Self::diag_mark("4: verify ok"),
             Err(e) => {
-                Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
-                std::process::abort();
+                let msg = format!("MODULE VERIFY FAILED: {}", e);
+                eprintln!("{}", msg);
+                Self::diag_mark(&format!("4: {}", msg));
+                panic!("{}", msg);
             }
         }
 
