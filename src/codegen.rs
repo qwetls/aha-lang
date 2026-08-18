@@ -155,38 +155,26 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Insert a cleanup block that frees all heap-allocated local variables
-    /// (Map, List, String) in the current scope. Returns the cleanup block
-    /// so callers can branch to it.
-    ///
-    /// Flow: current_block → cleanup (free calls) → return_block
-    fn insert_cleanup_block(
-        &mut self,
-        function: FunctionValue<'ctx>,
-        return_block: inkwell::basic_block::BasicBlock<'ctx>,
-    ) -> inkwell::basic_block::BasicBlock<'ctx> {
-        let cleanup_block = self.context.append_basic_block(function, "cleanup");
-        self.builder.position_at_end(cleanup_block);
-
-        // Free all heap-allocated locals (NOT parameters — they're in
-        // the parent scope and owned by the caller). Skip already-freed
-        // variables to avoid double-free.
+    /// Insert free calls for all heap-allocated local variables directly
+    /// into the current basic block (no new blocks created).
+    /// Must be called BEFORE the return terminator is built.
+    fn insert_cleanup_inline(&mut self) {
         if let Some(scope) = self.scopes.last() {
             for (_, var_info) in scope {
-                if var_info.freed { continue; }
+                if var_info.is_param || var_info.freed { continue; }
                 match &var_info.var_type {
                     AhaType::Map(_, _) => {
                         if let Some(f) = self.module.get_function("map_free") {
-                            let handle = self.builder.build_load(var_info.ptr, "map_handle")
-                                .map_err(|e| e.to_string()).unwrap();
-                            let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "map_handle") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
                         }
                     }
                     AhaType::List(_) => {
                         if let Some(f) = self.module.get_function("list_free") {
-                            let handle = self.builder.build_load(var_info.ptr, "list_handle")
-                                .map_err(|e| e.to_string()).unwrap();
-                            let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "list_handle") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
                         }
                     }
                     // ponytail: string_free not yet declared as builtin —
@@ -195,9 +183,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
         }
-
-        let _ = self.builder.build_unconditional_branch(return_block);
-        cleanup_block
     }
 
     /// Pre-pass: walk all statements to find call expressions and infer
@@ -2364,13 +2349,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             ast::Statement::Return(ret_stmt) => {
                 let typed_val = self.compile_expression(&ret_stmt.return_value)?;
-                // Scope-based free: insert cleanup block before return
+                // Scope-based free: insert cleanup before return terminator
                 if self.has_heap_locals() {
-                    if let Some(function) = self.current_function {
-                        let return_block = self.context.append_basic_block(function, "ret");
-                        let _ = self.insert_cleanup_block(function, return_block);
-                        self.builder.position_at_end(return_block);
-                    }
+                    self.insert_cleanup_inline();
                 }
                 self.builder.build_return(Some(&typed_val.value))
                     .map_err(|e| e.to_string())?;
@@ -2826,9 +2807,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             if !has_return && self.has_heap_locals() {
-                let return_block = self.context.append_basic_block(function, "ret");
-                let _ = self.insert_cleanup_block(function, return_block);
-                self.builder.position_at_end(return_block);
+                self.insert_cleanup_inline();
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             } else if !has_return {
