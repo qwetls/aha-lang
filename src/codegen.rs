@@ -1461,12 +1461,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let store_val = |b: &Builder<'ctx>,
                          slot_base: inkwell::values::PointerValue<'ctx>,
                          val_param: &[inkwell::values::BasicValueEnum<'ctx>]| {
-            let val_off = b.build_int_add(
-                b.build_ptr_to_int(slot_base, i64_type, "vo_base").unwrap(),
-                i64_type.const_int(key_sz, false),
-                "vo_off"
-            ).unwrap();
-            let val_ptr = b.build_int_to_ptr(val_off, i64_type.ptr_type(inkwell::AddressSpace::default()), "vp").unwrap();
+            let val_ptr = unsafe { b.build_gep(slot_base, &[i64_type.const_int(key_sz, false)], "vp").unwrap() };
             if val_is_str {
                 let ptr_i64 = b.build_ptr_to_int(val_param[0].into_pointer_value(), i64_type, "vp2").unwrap();
                 b.build_store(val_ptr, ptr_i64).unwrap();
@@ -1481,12 +1476,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let load_val = |b: &Builder<'ctx>,
                         slot_base: inkwell::values::PointerValue<'ctx>|
          -> inkwell::values::BasicValueEnum<'ctx> {
-            let val_off = b.build_int_add(
-                b.build_ptr_to_int(slot_base, i64_type, "lvo_base").unwrap(),
-                i64_type.const_int(key_sz, false),
-                "lvo_off"
-            ).unwrap();
-            let val_ptr = b.build_int_to_ptr(val_off, i64_type.ptr_type(inkwell::AddressSpace::default()), "lvp").unwrap();
+            let val_ptr = unsafe { b.build_gep(slot_base, &[i64_type.const_int(key_sz, false)], "lvp").unwrap() };
             if val_is_str {
                 let val_i64 = b.build_load(val_ptr, "lv_val").unwrap().into_int_value();
                 let val2_ptr = unsafe { b.build_gep(val_ptr, &[i64_type.const_int(1, false)], "lvp2").unwrap() };
@@ -2946,8 +2936,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_map_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
         // map_new variants take no map arg — infer from name.
         if func_name == "map_new"
-            || func_name == "map_new_string_key"
-            || func_name == "map_new_string_val"
+            || func_name == "map_string_key_new"
+            || func_name == "map_string_val_new"
             || func_name == "map_strings_new"
         {
             return self.compile_call_generic_args(func_name, call);
