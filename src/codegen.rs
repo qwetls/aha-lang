@@ -1498,8 +1498,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Helper: compare key at a slot with the given key params.
         // Returns i64 0 (equal) or nonzero (not equal).
-        // ponytail: extract memcmp_fn early to avoid holding &self across the closure
-        let memcmp_fn_val = *self.functions.get("memcmp").expect("memcmp not declared");
         let key_cmp = |b: &Builder<'ctx>,
                        f: inkwell::values::FunctionValue<'ctx>,
                        slot_base: inkwell::values::PointerValue<'ctx>,
@@ -1507,7 +1505,6 @@ impl<'ctx> CodeGenerator<'ctx> {
          -> inkwell::values::IntValue<'ctx> {
             if key_is_str {
                 // String keys are stored as two i64s: {ptr_as_i64, len}.
-                // Match the store_key layout exactly.
                 let slot_i64 = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_slot_i64").unwrap().into_pointer_value();
                 let slot_ptr_i64_val = b.build_load(slot_i64, "kc_slot_ptr").unwrap().into_int_value();
                 let slot_len_ptr = unsafe { b.build_gep(slot_i64, &[i64_type.const_int(1, false)], "kc_slot_len_p").unwrap() };
@@ -1515,11 +1512,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let key_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
                 let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, slot_ptr_i64_val, key_ptr_i64, "kc_c1").unwrap();
                 let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, slot_len, key_param[1].into_int_value(), "kc_c2").unwrap();
-                b.build_or(cmp1, cmp2, "kc_or").unwrap()
+                let or_val = b.build_or(cmp1, cmp2, "kc_or").unwrap();
+                b.build_int_z_extend(or_val, i64_type, "kc_or_i64").unwrap()
             } else {
                 let slot_i64_ptr = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_i64").unwrap().into_pointer_value();
                 let slot_key = b.build_load(slot_i64_ptr, "kc_key").unwrap().into_int_value();
-                b.build_int_compare(inkwell::IntPredicate::NE, slot_key, key_param[0].into_int_value(), "kc_cmp").unwrap()
+                let cmp_val = b.build_int_compare(inkwell::IntPredicate::NE, slot_key, key_param[0].into_int_value(), "kc_cmp").unwrap();
+                b.build_int_z_extend(cmp_val, i64_type, "kc_cmp_i64").unwrap()
             }
         };
 
