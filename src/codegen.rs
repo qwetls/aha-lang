@@ -1727,7 +1727,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_call(fnv_func, &[
                     key_args[0].into_pointer_value().into(),
                     key_args[1].into_int_value().into(),
-                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
+                ], "hash").unwrap().try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
@@ -1920,7 +1920,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_call(fnv_func, &[
                     key_args[0].into_pointer_value().into(),
                     key_args[1].into_int_value().into(),
-                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
+                ], "hash").unwrap().try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
@@ -2030,7 +2030,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_call(fnv_func, &[
                     key_args[0].into_pointer_value().into(),
                     key_args[1].into_int_value().into(),
-                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
+                ], "hash").unwrap().try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
@@ -2134,7 +2134,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_call(fnv_func, &[
                     key_args[0].into_pointer_value().into(),
                     key_args[1].into_int_value().into(),
-                ], "hash").try_as_basic_value().left().unwrap().into_int_value()
+                ], "hash").unwrap().try_as_basic_value().left().unwrap().into_int_value()
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
