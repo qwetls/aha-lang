@@ -131,6 +131,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Check if current scope has any unfreed heap-allocated variables.
+    fn has_heap_locals(&self) -> bool {
+        if let Some(scope) = self.scopes.last() {
+            scope.values().any(|v| !v.freed && matches!(
+                v.var_type,
+                AhaType::Map(_, _) | AhaType::List(_) | AhaType::String
+            ))
+        } else {
+            false
+        }
+    }
+
     /// Insert a cleanup block that frees all heap-allocated local variables
     /// (Map, List, String) in the current scope. Returns the cleanup block
     /// so callers can branch to it.
@@ -2341,10 +2353,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Statement::Return(ret_stmt) => {
                 let typed_val = self.compile_expression(&ret_stmt.return_value)?;
                 // Scope-based free: insert cleanup block before return
-                if let Some(function) = self.current_function {
-                    let return_block = self.context.append_basic_block(function, "ret");
-                    let _ = self.insert_cleanup_block(function, return_block);
-                    self.builder.position_at_end(return_block);
+                if self.has_heap_locals() {
+                    if let Some(function) = self.current_function {
+                        let return_block = self.context.append_basic_block(function, "ret");
+                        let _ = self.insert_cleanup_block(function, return_block);
+                        self.builder.position_at_end(return_block);
+                    }
                 }
                 self.builder.build_return(Some(&typed_val.value))
                     .map_err(|e| e.to_string())?;
@@ -2798,10 +2812,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            if !has_return {
+            if !has_return && self.has_heap_locals() {
                 let return_block = self.context.append_basic_block(function, "ret");
                 let _ = self.insert_cleanup_block(function, return_block);
                 self.builder.position_at_end(return_block);
+                self.builder.build_return(Some(&last_value))
+                    .map_err(|e| e.to_string())?;
+            } else if !has_return {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             }
