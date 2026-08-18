@@ -2,6 +2,24 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.4.8] — 2026-08-18
+
+### Fixed
+
+- **Map<K,V> SIGSEGV (signal 11):** 5 bugs fixed in `codegen.rs` emit_map_combo — all 21 map tests now pass on CI.
+  - Occupied flag access used `build_int_to_ptr` producing absolute addresses → fixed with `build_gep` on `i8*` data ptr + `build_pointer_cast` to `i64*`.
+  - `store_val`/`load_val` used `build_gep(i64*, [byte_offset])` which multiplies by sizeof(i64)=8 → heap corruption. Fixed with `build_int_to_ptr(ptr_to_int(slot_base) + byte_offset, i64*)`.
+  - `_set` probe loop started at counter=1, skipping the initial slot → overwrites silently failed. Fixed by adding `init_check` block with `key_cmp` before overflow loop.
+  - `key_cmp` for String keys compared raw pointer addresses, not content → `memcmp` used instead.
+  - Test function `length(s)` renamed to `len(s)` to match AHA! builtin.
+
+### Commits
+
+- `d8c7d0a` — store_val/load_val byte addressing with correct i64* type
+- `7f02337` — overwrite probe initial slot check + String key memcmp
+- `ad9bf1e` — test function name length → len
+- `a0e56b5` — memcmp i64 len type fix
+
 ## [1.4.7] — 2026-08-17
 
 ### File-by-File Change Summary
