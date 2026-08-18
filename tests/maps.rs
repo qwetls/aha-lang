@@ -20,6 +20,11 @@ fn run(label: &str, source: &str) -> i64 {
     let context = Context::create();
     let mut codegen = CodeGenerator::new(&context);
     codegen.compile(&program).expect("Codegen failed");
+    // Dump IR for debugging
+    let ir = codegen.get_llvm_ir();
+    let _ = writeln!(std::io::stderr(), "[maps] === IR for {} ===", label);
+    let _ = writeln!(std::io::stderr(), "{}", ir);
+    let _ = writeln!(std::io::stderr(), "[maps] === END IR ===");
     let _ = writeln!(std::io::stderr(), "[maps] compiled, JIT...");
     let result = codegen.run_jit().expect("JIT failed");
     let _ = writeln!(std::io::stderr(), "[maps] OK result={}", result);
