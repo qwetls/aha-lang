@@ -1390,6 +1390,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             b.build_xor(x, b.build_right_shift(x, i64_type.const_int(31, false), false, "sm64_r3").unwrap(), "sm64_f").unwrap()
         };
 
+        let memcmp_fn = *self.functions.get("memcmp").expect("memcmp not declared");
+
         // Real LLVM function for FNV-1a string hash — allocas in its own entry block.
         // Only create once (emit_map_combo called 4 times for 4 combos).
         let fnv_func = if let Some(f) = self.module.get_function("__fnv1a_hash") {
@@ -1509,16 +1511,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                        key_param: &[inkwell::values::BasicValueEnum<'ctx>]|
          -> inkwell::values::IntValue<'ctx> {
             if key_is_str {
-                // String keys are stored as two i64s: {ptr_as_i64, len}.
+                // String keys stored as {i8*, i64}: compare len then content.
                 let slot_i64 = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_slot_i64").unwrap().into_pointer_value();
-                let slot_ptr_i64_val = b.build_load(slot_i64, "kc_slot_ptr").unwrap().into_int_value();
+                let slot_ptr_i64 = b.build_load(slot_i64, "kc_slot_ptr").unwrap().into_int_value();
                 let slot_len_ptr = unsafe { b.build_gep(slot_i64, &[i64_type.const_int(1, false)], "kc_slot_len_p").unwrap() };
                 let slot_len = b.build_load(slot_len_ptr, "kc_slot_len").unwrap().into_int_value();
-                let key_ptr_i64 = b.build_ptr_to_int(key_param[0].into_pointer_value(), i64_type, "kc_kp").unwrap();
-                let cmp1 = b.build_int_compare(inkwell::IntPredicate::NE, slot_ptr_i64_val, key_ptr_i64, "kc_c1").unwrap();
-                let cmp2 = b.build_int_compare(inkwell::IntPredicate::NE, slot_len, key_param[1].into_int_value(), "kc_c2").unwrap();
-                let or_val = b.build_or(cmp1, cmp2, "kc_or").unwrap();
-                b.build_int_z_extend(or_val, i64_type, "kc_or_i64").unwrap()
+                let slot_ptr = b.build_int_to_ptr(slot_ptr_i64, i8_ptr, "kc_slot_p").unwrap();
+                let key_ptr = key_param[0].into_pointer_value();
+                let key_len = key_param[1].into_int_value();
+                // Lengths differ → not equal
+                let len_eq = b.build_int_compare(inkwell::IntPredicate::EQ, slot_len, key_len, "kc_len_eq").unwrap();
+                let i32_zero = self.context.i32_type().const_int(0, false);
+                // Content comparison via memcmp(ptr1, ptr2, len) — returns i32
+                let min_len = b.build_int_truncate(slot_len, self.context.i32_type(), "kc_min_i32").unwrap();
+                let memcmp_call = b.build_call(memcmp_fn, &[slot_ptr.into(), key_ptr.into(), min_len.into()], "kc_memcmp")
+                    .unwrap().try_as_basic_value().left().unwrap().into_int_value();
+                let content_eq = b.build_int_compare(inkwell::IntPredicate::EQ, memcmp_call, i32_zero, "kc_content_eq").unwrap();
+                // Equal iff lengths match AND content matches → return NOT(both_eq) as i64
+                let both_eq = b.build_and(len_eq, content_eq, "kc_both_eq").unwrap();
+                let not_eq = b.build_not(both_eq, "kc_not_eq").unwrap();
+                b.build_int_z_extend(not_eq, i64_type, "kc_result_i64").unwrap()
             } else {
                 let slot_i64_ptr = b.build_bitcast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "kc_i64").unwrap().into_pointer_value();
                 let slot_key = b.build_load(slot_i64_ptr, "kc_key").unwrap().into_int_value();
@@ -1807,9 +1819,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let occ_p = self.builder.build_load(occ_ptr_p, "occ_p").unwrap().into_int_value();
             let is_occ_p = self.builder.build_int_compare(inkwell::IntPredicate::EQ, occ_p, zero, "is_occ_p").unwrap();
             let store_empty = self.context.append_basic_block(function, "store_empty");
+            let init_check = self.context.append_basic_block(function, "init_check");
             let probe_loop = self.context.append_basic_block(function, "probe_loop");
             let store_done = self.context.append_basic_block(function, "store_done");
-            self.builder.build_conditional_branch(is_occ_p, store_empty, probe_loop).unwrap();
+            self.builder.build_conditional_branch(is_occ_p, store_empty, init_check).unwrap();
 
             self.builder.position_at_end(store_empty);
             store_key(&self.builder, slot_p, &key_args);
@@ -1818,6 +1831,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             // len++
             let len_cur = self.builder.build_load(len_ptr, "len_cur").unwrap().into_int_value();
             self.builder.build_store(len_ptr, self.builder.build_int_add(len_cur, one, "len_inc").unwrap()).unwrap();
+            self.builder.build_unconditional_branch(store_done).unwrap();
+
+            // Initial slot occupied — check if key matches for overwrite
+            self.builder.position_at_end(init_check);
+            let init_cmp = key_cmp(&self.builder, function, slot_p, &key_args);
+            let init_eq = self.builder.build_int_compare(inkwell::IntPredicate::EQ, init_cmp, zero, "init_eq").unwrap();
+            let init_overwrite = self.context.append_basic_block(function, "init_overwrite");
+            self.builder.build_conditional_branch(init_eq, init_overwrite, probe_loop).unwrap();
+
+            self.builder.position_at_end(init_overwrite);
+            store_val(&self.builder, slot_p, &val_args);
             self.builder.build_unconditional_branch(store_done).unwrap();
 
             // Probe loop: linear scan for existing key or empty slot
