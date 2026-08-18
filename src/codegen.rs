@@ -1617,17 +1617,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // done: return (idx, found_flag)
             b.position_at_end(probe_done);
-            let idx_phi = b.build_phi(i64_type, "probe_idx_phi").unwrap();
-            let found_phi = b.build_phi(i64_type, "probe_found_phi").unwrap();
-            // If cap == 0, idx = -1, found = 0
-            idx_phi.add_incoming(&[(&i64_type.const_int(u64::MAX, false), probe_done)]);
-            found_phi.add_incoming(&[(&zero, probe_done)]);
-            // Actually let me redo this with a simpler approach
-            // ... I'll just use a simpler LLVM structure
-            drop(idx_phi); drop(found_phi);
-            // For simplicity, we'll just return the current idx.
-            // The callers will check cap == 0 separately.
-            (cur_idx, b.build_load(occ_ptr, "occ_final").unwrap().into_int_value())
+            // ponytail: removed malformed phi nodes. This closure is never invoked
+            // (let _ = probe), so the blocks exist only for IR well-formedness.
+            // Use allocas + stores in predecessor blocks; load here.
+            let idx_alloca = b.build_alloca(i64_type, "ret_idx").unwrap();
+            let found_alloca = b.build_alloca(i64_type, "ret_found").unwrap();
+            b.build_store(idx_alloca, cur_idx).unwrap();
+            b.build_store(found_alloca, b.build_load(occ_ptr, "occ_load").unwrap().into_int_value()).unwrap();
+            b.build_unreachable().unwrap();
+            (b.build_load(idx_alloca, "ret_idx_v").unwrap().into_int_value(),
+             b.build_load(found_alloca, "ret_found_v").unwrap().into_int_value())
         };
 
         // Avoid unused variable warnings — probe is called inside each builtin.
@@ -1730,19 +1729,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let grow_needed_block = self.context.append_basic_block(function, "grow_needed");
             let probe_block = self.context.append_basic_block(function, "probe");
-            let after_probe = self.context.append_basic_block(function, "after_probe");
             self.builder.build_conditional_branch(no_cap, grow_needed_block, probe_block).unwrap();
 
             // If cap == 0, need to grow first
             self.builder.position_at_end(grow_needed_block);
-            // We'll handle growth after probing — just go to probe with cap=0
-            // Actually, let's go to a grow block
-            b"
-            // This is getting complex. Let me use a simpler approach:
-            // grow if needed, then probe.
-            ";
-
-            // For now, let me just write the grow logic inline:
             // new_cap = 4, alloc data, set cap, then probe
             let new_cap = i64_type.const_int(4, false);
             let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
@@ -1750,70 +1740,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             let alloc_size = self.builder.build_int_mul(new_cap, slot_size, "alloc_sz").unwrap();
             let new_data = self.builder.build_call(malloc_fn, &[alloc_size.into()], "new_data")
                 .unwrap().try_as_basic_value().left().unwrap().into_pointer_value();
-            // Clear all occupied flags. We do this by writing 0 to the occ field
-            // of each slot. Since we just allocated, the memory is garbage.
-            // We'll zero the occupied flag for each slot.
-            // Actually, for simplicity, let's use memset_0 — but we don't have memset.
-            // Instead, we calloc: use malloc + zero the occupied bytes.
-            // For 4 slots, we can just zero all bytes:
-            // memset(start, 0, alloc_size) — but we don't have memset.
-            // Alternative: use calloc. But we don't have calloc either.
-            // Let me just use a loop to zero the occupied flags.
-            // Actually, we can just not zero — we'll check occupied == 0 on the
-            // first probe. But malloc returns uninitialized memory, so occupied
-            // could be any value. We need to zero it.
-            // Let me write a loop to zero occupied bytes.
-            let zero_i8 = self.context.i8_type().const_zero();
+            // Zero the occupied flag for each slot via a counted loop.
             let zero_loop = self.context.append_basic_block(function, "zero_loop");
             let zero_done = self.context.append_basic_block(function, "zero_done");
             let zero_cond = self.context.append_basic_block(function, "zero_cond");
             self.builder.build_unconditional_branch(zero_cond).unwrap();
 
             self.builder.position_at_end(zero_cond);
-            let z_i = self.builder.build_phi(i64_type, "z_i").unwrap();
-            z_i.add_incoming(&[(&zero, grow_needed_block)]);
-            // Actually let me use a simpler approach: just zero the occupied flags
-            // using struct GEP on each slot.
-            // Even simpler: just store 0 to the occ field of each slot.
-            // For slot_count = 4, we can unroll.
-            let slot_count = i64_type.const_int(4, false);
-            // Use a counted loop
-            // Actually, let me just use the zero_i8 approach with a loop
-            // through alloc_size bytes. This is wasteful but simple.
-            // Simpler: build a loop counter from 0 to alloc_size (in i8 steps).
-            // This is too verbose. Let me just use a different approach:
-            // allocate with the i8_ptr const_null and bitcast to the slot type.
-            // Actually, let me just use the i8_ptr approach and store i8 0 at
-            // each occupied byte offset.
-            // For 4 slots × slot_sz bytes, let me just do it in a loop.
-            // OK let me write a simple loop:
-            let z_i_ptr = self.builder.build_alloca(i64_type, "z_i_ptr").unwrap();
-            // Actually, this is getting too complex. Let me just use a simpler
-            // approach: after malloc, for each slot (4 slots), store 0 at the
-            // occupied offset.
-            // Simpler: just use a memset loop in LLVM IR.
-            // Build a loop over i from 0 to alloc_size, store i8 0 at each byte.
-            // This is verbose but correct.
-            // Let me do it differently. I'll just use a loop for slot_count.
-            // Actually, let me just write the simplest possible approach:
-            // store 0 at the occupied field of each slot using a loop.
-            // We'll iterate from 0 to new_cap (4).
-            // For each slot, store 0 at offset (i * slot_sz + key_sz + val_sz).
-            // This is simple and correct.
-
-            // Let me just use a simpler method: write the growth and probe
-            // inline without the complex zeroing loop by using a function call.
-            // Actually, I'll just use realloc semantics: realloc with zeroed memory.
-            // We don't have calloc, but we can use memset.
-            // Let me add memset to the C runtime.
-            // Actually, I'll just use a simpler approach: use a constant
-            // initializer and store 0 to the occupied flag for each slot.
-
-            // For now, let me just write a simple loop:
             let z_counter = self.builder.build_alloca(i64_type, "z_counter").unwrap();
             self.builder.build_store(z_counter, zero).unwrap();
-            self.builder.build_unconditional_branch(zero_cond).unwrap();
-            self.builder.position_at_end(zero_cond);
             let z_c = self.builder.build_load(z_counter, "z_c").unwrap().into_int_value();
             let z_done_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, z_c, new_cap, "z_done_cmp").unwrap();
             self.builder.build_conditional_branch(z_done_cmp, zero_loop, zero_done).unwrap();
@@ -1829,35 +1764,37 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.build_unconditional_branch(zero_cond).unwrap();
 
             self.builder.position_at_end(zero_done);
-            // Store new data and cap
+            // Store new data and cap, then fall through to probe_block.
             self.builder.build_store(data_ptr, new_data).unwrap();
             self.builder.build_store(cap_ptr, new_cap).unwrap();
-            // Reload cap for probe
-            let cap_after = self.builder.build_load(cap_ptr, "cap2").unwrap().into_int_value();
-            let data_after = self.builder.build_load(data_ptr, "data2").unwrap().into_pointer_value();
-            let hash_after = if key_is_str {
-                fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
-            } else {
-                splitmix64(&self.builder, key_args[0].into_int_value())
-            };
-            let idx_after = self.builder.build_int_unsigned_rem(hash_after, cap_after, "idx2").unwrap();
-            // Check if occupied
-            let byte_off2 = self.builder.build_int_mul(idx_after, slot_size, "boff2").unwrap();
-            let slot_ptr2 = unsafe { self.builder.build_gep(data_after, &[byte_off2], "slot2").unwrap() };
-            let occ_off2 = self.builder.build_int_add(byte_off2, i64_type.const_int(key_sz + val_sz, false), "occ_off2").unwrap();
-            let occ_ptr2 = self.builder.build_int_to_ptr(occ_off2, i64_type.ptr_type(inkwell::AddressSpace::default()), "occ_ptr2").unwrap();
-            let occ2 = self.builder.build_load(occ_ptr2, "occ2").unwrap().into_int_value();
-            let is_occ2 = self.builder.build_int_compare(inkwell::IntPredicate::EQ, occ2, zero, "is_occ2").unwrap();
-            // If empty, just store
+            self.builder.build_unconditional_branch(probe_block).unwrap();
+
+            // ==================================================================
+            // probe_block — shared by grow and non-grow paths.
+            // Non-grow: cap/data from header (unchanged).
+            // Grow: header already updated by grow_needed_block above.
+            // ==================================================================
+            self.builder.position_at_end(probe_block);
+            // Re-read cap/data from header (works for both paths).
+            let cap_probe = self.builder.build_load(cap_ptr, "cap_p").unwrap().into_int_value();
+            let data_probe = self.builder.build_load(data_ptr, "data_p").unwrap().into_pointer_value();
+            let idx_probe = self.builder.build_int_unsigned_rem(hash, cap_probe, "idx_p").unwrap();
+            // Check if first slot is occupied
+            let boff_p = self.builder.build_int_mul(idx_probe, slot_size, "boff_p").unwrap();
+            let slot_p = unsafe { self.builder.build_gep(data_probe, &[boff_p], "slot_p").unwrap() };
+            let occ_off_p = self.builder.build_int_add(boff_p, i64_type.const_int(key_sz + val_sz, false), "occ_off_p").unwrap();
+            let occ_ptr_p = self.builder.build_int_to_ptr(occ_off_p, i64_type.ptr_type(inkwell::AddressSpace::default()), "occ_ptr_p").unwrap();
+            let occ_p = self.builder.build_load(occ_ptr_p, "occ_p").unwrap().into_int_value();
+            let is_occ_p = self.builder.build_int_compare(inkwell::IntPredicate::EQ, occ_p, zero, "is_occ_p").unwrap();
             let store_empty = self.context.append_basic_block(function, "store_empty");
             let probe_loop = self.context.append_basic_block(function, "probe_loop");
             let store_done = self.context.append_basic_block(function, "store_done");
-            self.builder.build_conditional_branch(is_occ2, store_empty, probe_loop).unwrap();
+            self.builder.build_conditional_branch(is_occ_p, store_empty, probe_loop).unwrap();
 
             self.builder.position_at_end(store_empty);
-            store_key(&self.builder, slot_ptr2, &key_args);
-            store_val(&self.builder, slot_ptr2, &val_args);
-            self.builder.build_store(occ_ptr2, one).unwrap();
+            store_key(&self.builder, slot_p, &key_args);
+            store_val(&self.builder, slot_p, &val_args);
+            self.builder.build_store(occ_ptr_p, one).unwrap();
             // len++
             let len_cur = self.builder.build_load(len_ptr, "len_cur").unwrap().into_int_value();
             self.builder.build_store(len_ptr, self.builder.build_int_add(len_cur, one, "len_inc").unwrap()).unwrap();
@@ -1865,32 +1802,26 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // Probe loop: linear scan for existing key or empty slot
             self.builder.position_at_end(probe_loop);
-            let probe_idx = self.builder.build_alloca(i64_type, "probe_idx").unwrap();
-            // We'll just do a simple linear probe without the complex phi
-            // Actually, let's just use a simple loop.
-            // For now, we already handled the first slot; we need to probe
-            // subsequent slots. Let's use a loop with a counter.
             let p_counter = self.builder.build_alloca(i64_type, "p_counter").unwrap();
             self.builder.build_store(p_counter, one).unwrap(); // start from 1 (0 already checked)
-            let p_loop_start = self.context.append_basic_block(function, "p_loop_start");
-            let p_loop_body = self.context.append_basic_block(function, "p_loop_body");
             let p_loop_check = self.context.append_basic_block(function, "p_loop_check");
+            let p_loop_body = self.context.append_basic_block(function, "p_loop_body");
             self.builder.build_unconditional_branch(p_loop_check).unwrap();
 
             self.builder.position_at_end(p_loop_check);
             let p_c = self.builder.build_load(p_counter, "p_c").unwrap().into_int_value();
-            let p_done = self.builder.build_int_compare(inkwell::IntPredicate::SLT, p_c, cap_after, "p_done").unwrap();
+            let p_done = self.builder.build_int_compare(inkwell::IntPredicate::SLT, p_c, cap_probe, "p_done").unwrap();
             self.builder.build_conditional_branch(p_done, p_loop_body, store_done).unwrap();
 
             self.builder.position_at_end(p_loop_body);
             let p_c2 = self.builder.build_load(p_counter, "p_c2").unwrap().into_int_value();
             let p_idx = self.builder.build_int_unsigned_rem(
-                self.builder.build_int_add(idx_after, p_c2, "p_idx_sum").unwrap(),
-                cap_after,
+                self.builder.build_int_add(idx_probe, p_c2, "p_idx_sum").unwrap(),
+                cap_probe,
                 "p_idx_mod"
             ).unwrap();
             let p_boff = self.builder.build_int_mul(p_idx, slot_size, "p_boff").unwrap();
-            let p_slot = unsafe { self.builder.build_gep(data_after, &[p_boff], "p_slot").unwrap() };
+            let p_slot = unsafe { self.builder.build_gep(data_probe, &[p_boff], "p_slot").unwrap() };
             let p_occ_off = self.builder.build_int_add(p_boff, i64_type.const_int(key_sz + val_sz, false), "p_occ_off").unwrap();
             let p_occ_ptr = self.builder.build_int_to_ptr(p_occ_off, i64_type.ptr_type(inkwell::AddressSpace::default()), "p_occ_ptr").unwrap();
             let p_occ = self.builder.build_load(p_occ_ptr, "p_occ").unwrap().into_int_value();
