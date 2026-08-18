@@ -14,6 +14,7 @@ use std::collections::HashMap;
 struct VarInfo<'ctx> {
     ptr: PointerValue<'ctx>,
     var_type: AhaType,
+    freed: bool,
 }
 
 pub struct CodeGenerator<'ctx> {
@@ -116,8 +117,72 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn insert_variable(&mut self, name: String, ptr: PointerValue<'ctx>, var_type: AhaType) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, VarInfo { ptr, var_type });
+            scope.insert(name, VarInfo { ptr, var_type, freed: false });
         }
+    }
+
+    /// Mark a variable as freed so automatic cleanup won't double-free.
+    fn mark_freed(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                info.freed = true;
+                return;
+            }
+        }
+    }
+
+    /// Insert a cleanup block that frees all heap-allocated local variables
+    /// (Map, List, String) in the current scope. Returns the cleanup block
+    /// so callers can branch to it.
+    ///
+    /// Flow: current_block → cleanup (free calls) → return_block
+    fn insert_cleanup_block(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        return_block: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> inkwell::basic_block::BasicBlock<'ctx> {
+        let cleanup_block = self.context.append_basic_block(function, "cleanup");
+        self.builder.position_at_end(cleanup_block);
+
+        // Free all heap-allocated locals (NOT parameters — they're in
+        // the parent scope and owned by the caller). Skip already-freed
+        // variables to avoid double-free.
+        if let Some(scope) = self.scopes.last() {
+            for (_, var_info) in scope {
+                if var_info.freed { continue; }
+                match &var_info.var_type {
+                    AhaType::Map(_, _) => {
+                        if let Some(f) = self.module.get_function("map_free") {
+                            let handle = self.builder.build_load(var_info.ptr, "map_handle")
+                                .map_err(|e| e.to_string()).unwrap();
+                            let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                        }
+                    }
+                    AhaType::List(_) => {
+                        if let Some(f) = self.module.get_function("list_free") {
+                            let handle = self.builder.build_load(var_info.ptr, "list_handle")
+                                .map_err(|e| e.to_string()).unwrap();
+                            let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                        }
+                    }
+                    AhaType::String => {
+                        if let Some(f) = self.module.get_function("string_free") {
+                            let str_val = self.builder.build_load(var_info.ptr, "str_val")
+                                .map_err(|e| e.to_string()).unwrap();
+                            let str_ptr = self.builder.build_extract_value(str_val.into_struct_value(), 0, "s_ptr")
+                                .map_err(|e| e.to_string()).unwrap();
+                            let str_len = self.builder.build_extract_value(str_val.into_struct_value(), 1, "s_len")
+                                .map_err(|e| e.to_string()).unwrap();
+                            let _ = self.builder.build_call(f, &[str_ptr, str_len], "cleanup");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let _ = self.builder.build_unconditional_branch(return_block);
+        cleanup_block
     }
 
     /// Pre-pass: walk all statements to find call expressions and infer
@@ -2284,6 +2349,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             ast::Statement::Return(ret_stmt) => {
                 let typed_val = self.compile_expression(&ret_stmt.return_value)?;
+                // Scope-based free: insert cleanup block before return
+                if let Some(function) = self.current_function {
+                    let return_block = self.context.append_basic_block(function, "ret");
+                    let _ = self.insert_cleanup_block(function, return_block);
+                    self.builder.position_at_end(return_block);
+                }
                 self.builder.build_return(Some(&typed_val.value))
                     .map_err(|e| e.to_string())?;
             },
@@ -2735,8 +2806,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.compile_statement(stmt)?;
                 }
             }
-            
+
             if !has_return {
+                let return_block = self.context.append_basic_block(function, "ret");
+                let _ = self.insert_cleanup_block(function, return_block);
+                self.builder.position_at_end(return_block);
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             }
@@ -2815,6 +2889,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match func_name {
             "list_len" | "list_free" => {
+                // Mark variable as freed to prevent double-free by automatic cleanup
+                if func_name == "list_free" {
+                    if let ast::Expression::Identifier(id) = &call.arguments[0] {
+                        self.mark_freed(&id.value);
+                    }
+                }
                 let args_meta: Vec<_> = [list_handle.into()].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                 let function = *self.functions.get(func_name).expect("list builtin not declared");
                 let call_result = self.builder.build_call(function, &args_meta, "calltmp")
@@ -2923,6 +3003,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             "map_len" | "map_free" | "map_string_key_len" | "map_string_key_free"
             | "map_string_val_len" | "map_string_val_free"
             | "map_strings_len" | "map_strings_free" => {
+                // Mark variable as freed to prevent double-free by automatic cleanup
+                if func_name.contains("free") {
+                    if let ast::Expression::Identifier(id) = &call.arguments[0] {
+                        self.mark_freed(&id.value);
+                    }
+                }
                 let args_meta: Vec<_> = [map_handle.into()]
                     .iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                 let function = *self.functions.get(func_name).expect("map builtin not declared");
