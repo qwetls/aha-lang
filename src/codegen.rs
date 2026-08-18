@@ -15,6 +15,7 @@ struct VarInfo<'ctx> {
     ptr: PointerValue<'ctx>,
     var_type: AhaType,
     freed: bool,
+    is_param: bool,
 }
 
 pub struct CodeGenerator<'ctx> {
@@ -117,7 +118,17 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn insert_variable(&mut self, name: String, ptr: PointerValue<'ctx>, var_type: AhaType) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, VarInfo { ptr, var_type, freed: false });
+            scope.insert(name, VarInfo { ptr, var_type, freed: false, is_param: false });
+        }
+    }
+
+    /// Mark a variable as a function parameter (excluded from auto-free).
+    fn mark_param(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                info.is_param = true;
+                return;
+            }
         }
     }
 
@@ -131,10 +142,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Check if current scope has any unfreed heap-allocated variables.
+    /// Check if current scope has any unfreed heap-allocated local variables.
+    /// Excludes function parameters — they're owned by the caller.
     fn has_heap_locals(&self) -> bool {
         if let Some(scope) = self.scopes.last() {
-            scope.values().any(|v| !v.freed && matches!(
+            scope.values().any(|v| !v.is_param && !v.freed && matches!(
                 v.var_type,
                 AhaType::Map(_, _) | AhaType::List(_) | AhaType::String
             ))
@@ -2788,6 +2800,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_store(alloca, param_value)
                     .map_err(|e| e.to_string())?;
                 self.insert_variable(param.value.clone(), alloca, aha_type.clone());
+                self.mark_param(&param.value);
             }
 
             let mut has_return = false;
@@ -3259,6 +3272,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_store(alloca, param_value)
                     .map_err(|e| e.to_string())?;
                 self.insert_variable(param.value.clone(), alloca, aha_type.clone());
+                self.mark_param(&param.value);
             }
 
             let mut has_return = false;
