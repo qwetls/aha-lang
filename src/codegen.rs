@@ -1573,7 +1573,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let slot_ptr = unsafe { b.build_gep(data, &[byte_off], "slot_ptr").unwrap() };
             // occupied flag at offset key_sz + val_sz
             let occ_off = b.build_int_add(byte_off, i64_type.const_int(key_sz + val_sz, false), "occ_off").unwrap();
-            let occ_ptr = unsafe { b.build_gep(data, &[occ_off], "occ_ptr").unwrap() };
+            let occ_ptr_raw = unsafe { b.build_gep(data, &[occ_off], "occ_ptr").unwrap() };
+            let occ_ptr = b.build_pointer_cast(occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "occ_ptr_typed").unwrap();
             let occupied = b.build_load(occ_ptr, "occupied").unwrap().into_int_value();
             let is_occ = b.build_int_compare(inkwell::IntPredicate::NE, occupied, zero, "is_occ").unwrap();
 
@@ -1774,7 +1775,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let z_c2 = self.builder.build_load(z_counter, "z_c2").unwrap().into_int_value();
             let z_byte_off = self.builder.build_int_mul(z_c2, slot_size, "z_byte_off").unwrap();
             let z_occ_off = self.builder.build_int_add(z_byte_off, i64_type.const_int(key_sz + val_sz, false), "z_occ_off").unwrap();
-            let z_occ_ptr = unsafe { self.builder.build_gep(new_data, &[z_occ_off], "z_occ_ptr").unwrap() };
+            let z_occ_ptr_raw = unsafe { self.builder.build_gep(new_data, &[z_occ_off], "z_occ_ptr").unwrap() };
+            let z_occ_ptr = self.builder.build_pointer_cast(z_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "z_occ_ptr_typed").unwrap();
             self.builder.build_store(z_occ_ptr, zero).unwrap();
             let z_c_next = self.builder.build_int_add(z_c2, one, "z_c_next").unwrap();
             self.builder.build_store(z_counter, z_c_next).unwrap();
@@ -1800,7 +1802,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let boff_p = self.builder.build_int_mul(idx_probe, slot_size, "boff_p").unwrap();
             let slot_p = unsafe { self.builder.build_gep(data_probe, &[boff_p], "slot_p").unwrap() };
             let occ_off_p = self.builder.build_int_add(boff_p, i64_type.const_int(key_sz + val_sz, false), "occ_off_p").unwrap();
-            let occ_ptr_p = unsafe { self.builder.build_gep(data_probe, &[occ_off_p], "occ_ptr_p").unwrap() };
+            let occ_ptr_p_raw = unsafe { self.builder.build_gep(data_probe, &[occ_off_p], "occ_ptr_p").unwrap() };
+            let occ_ptr_p = self.builder.build_pointer_cast(occ_ptr_p_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "occ_ptr_p_typed").unwrap();
             let occ_p = self.builder.build_load(occ_ptr_p, "occ_p").unwrap().into_int_value();
             let is_occ_p = self.builder.build_int_compare(inkwell::IntPredicate::EQ, occ_p, zero, "is_occ_p").unwrap();
             let store_empty = self.context.append_basic_block(function, "store_empty");
@@ -1838,7 +1841,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let p_boff = self.builder.build_int_mul(p_idx, slot_size, "p_boff").unwrap();
             let p_slot = unsafe { self.builder.build_gep(data_probe, &[p_boff], "p_slot").unwrap() };
             let p_occ_off = self.builder.build_int_add(p_boff, i64_type.const_int(key_sz + val_sz, false), "p_occ_off").unwrap();
-            let p_occ_ptr = unsafe { self.builder.build_gep(data_probe, &[p_occ_off], "p_occ_ptr").unwrap() };
+            let p_occ_ptr_raw = unsafe { self.builder.build_gep(data_probe, &[p_occ_off], "p_occ_ptr").unwrap() };
+            let p_occ_ptr = self.builder.build_pointer_cast(p_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "p_occ_ptr_typed").unwrap();
             let p_occ = self.builder.build_load(p_occ_ptr, "p_occ").unwrap().into_int_value();
             let p_is_occ = self.builder.build_int_compare(inkwell::IntPredicate::EQ, p_occ, zero, "p_is_occ").unwrap();
 
@@ -1960,7 +1964,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let g_boff = self.builder.build_int_mul(g_slot_idx, i64_type.const_int(slot_sz, false), "g_boff").unwrap();
             let g_slot = unsafe { self.builder.build_gep(data, &[g_boff], "g_slot").unwrap() };
             let g_occ_off = self.builder.build_int_add(g_boff, i64_type.const_int(key_sz + val_sz, false), "g_occ_off").unwrap();
-            let g_occ_ptr = unsafe { self.builder.build_gep(data, &[g_occ_off], "g_occ_ptr").unwrap() };
+            let g_occ_ptr_raw = unsafe { self.builder.build_gep(data, &[g_occ_off], "g_occ_ptr").unwrap() };
+            let g_occ_ptr = self.builder.build_pointer_cast(g_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "g_occ_ptr_typed").unwrap();
             let g_occ = self.builder.build_load(g_occ_ptr, "g_occ").unwrap().into_int_value();
             let g_is_occ = self.builder.build_int_compare(inkwell::IntPredicate::NE, g_occ, zero, "g_is_occ").unwrap();
 
@@ -2070,7 +2075,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let c_boff = self.builder.build_int_mul(c_slot_idx, i64_type.const_int(slot_sz, false), "c_boff").unwrap();
             let c_slot = unsafe { self.builder.build_gep(data, &[c_boff], "c_slot").unwrap() };
             let c_occ_off = self.builder.build_int_add(c_boff, i64_type.const_int(key_sz + val_sz, false), "c_occ_off").unwrap();
-            let c_occ_ptr = unsafe { self.builder.build_gep(data, &[c_occ_off], "c_occ_ptr").unwrap() };
+            let c_occ_ptr_raw = unsafe { self.builder.build_gep(data, &[c_occ_off], "c_occ_ptr").unwrap() };
+            let c_occ_ptr = self.builder.build_pointer_cast(c_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "c_occ_ptr_typed").unwrap();
             let c_occ = self.builder.build_load(c_occ_ptr, "c_occ").unwrap().into_int_value();
             let c_is_occ = self.builder.build_int_compare(inkwell::IntPredicate::NE, c_occ, zero, "c_is_occ").unwrap();
 
@@ -2174,7 +2180,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let r_boff = self.builder.build_int_mul(r_slot_idx, i64_type.const_int(slot_sz, false), "r_boff").unwrap();
             let r_slot = unsafe { self.builder.build_gep(data, &[r_boff], "r_slot").unwrap() };
             let r_occ_off = self.builder.build_int_add(r_boff, i64_type.const_int(key_sz + val_sz, false), "r_occ_off").unwrap();
-            let r_occ_ptr = unsafe { self.builder.build_gep(data, &[r_occ_off], "r_occ_ptr").unwrap() };
+            let r_occ_ptr_raw = unsafe { self.builder.build_gep(data, &[r_occ_off], "r_occ_ptr").unwrap() };
+            let r_occ_ptr = self.builder.build_pointer_cast(r_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "r_occ_ptr_typed").unwrap();
             let r_occ = self.builder.build_load(r_occ_ptr, "r_occ").unwrap().into_int_value();
             let r_is_occ = self.builder.build_int_compare(inkwell::IntPredicate::NE, r_occ, zero, "r_is_occ").unwrap();
 
