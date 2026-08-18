@@ -165,17 +165,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
                         }
                     }
-                    AhaType::String => {
-                        if let Some(f) = self.module.get_function("string_free") {
-                            let str_val = self.builder.build_load(var_info.ptr, "str_val")
-                                .map_err(|e| e.to_string()).unwrap();
-                            let str_ptr = self.builder.build_extract_value(str_val.into_struct_value(), 0, "s_ptr")
-                                .map_err(|e| e.to_string()).unwrap();
-                            let str_len = self.builder.build_extract_value(str_val.into_struct_value(), 1, "s_len")
-                                .map_err(|e| e.to_string()).unwrap();
-                            let _ = self.builder.build_call(f, &[str_ptr, str_len], "cleanup");
-                        }
-                    }
+                    // ponytail: string_free not yet declared as builtin —
+                    // add when string lifetime management is implemented.
                     _ => {}
                 }
             }
