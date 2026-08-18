@@ -1,0 +1,54 @@
+name: '🔬 Labs CI'
+
+on:
+  push:
+    branches: ['labs']
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install LLVM and Polly
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Run cargo check
+        run: cargo check --verbose
+
+      - name: Run tests
+        env:
+          RUST_BACKTRACE: "full"
+        run: cargo test --verbose -- --test-threads=1
+
+      - name: Print diag log
+        if: always()
+        run: cat /tmp/aha_diag.log 2>/dev/null || true
+
+      - name: Build project
+        run: cargo build --release --verbose
+
+      - name: Notify Discord on success or failure
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "🔬 Labs Build: ${{ job.status }}"
+          description: |
+            Branch: `labs`
+            Commit: `${{ github.sha }}`
+            Message: ${{ github.event.head_commit.message }}
+            [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          color: ${{ job.status == 'success' && '0x28a745' || '0xdc3545' }}
+          avatar_url: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
