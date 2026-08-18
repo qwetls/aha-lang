@@ -1522,9 +1522,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Lengths differ → not equal
                 let len_eq = b.build_int_compare(inkwell::IntPredicate::EQ, slot_len, key_len, "kc_len_eq").unwrap();
                 let i32_zero = self.context.i32_type().const_int(0, false);
-                // Content comparison via memcmp(ptr1, ptr2, len) — returns i32
-                let min_len = b.build_int_truncate(slot_len, self.context.i32_type(), "kc_min_i32").unwrap();
-                let memcmp_call = b.build_call(memcmp_fn, &[slot_ptr.into(), key_ptr.into(), min_len.into()], "kc_memcmp")
+                // Content comparison via memcmp(ptr1, ptr2, len) — memcmp takes i64 len
+                let memcmp_call = b.build_call(memcmp_fn, &[slot_ptr.into(), key_ptr.into(), slot_len.into()], "kc_memcmp")
                     .unwrap().try_as_basic_value().left().unwrap().into_int_value();
                 let content_eq = b.build_int_compare(inkwell::IntPredicate::EQ, memcmp_call, i32_zero, "kc_content_eq").unwrap();
                 // Equal iff lengths match AND content matches → return NOT(both_eq) as i64
