@@ -1432,9 +1432,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             b.position_at_end(done_block);
             let hash_val = b.build_load(hash_alloca, "fnv_result").unwrap().into_int_value();
-            let fnv_cont = self.context.append_basic_block(f, "fnv_cont");
-            b.build_unconditional_branch(fnv_cont).unwrap();
-            b.position_at_end(fnv_cont);
             hash_val
         };
 
@@ -1721,19 +1718,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            // Compute hash — fnv1a_hash repositions the builder, so save
-            // and restore to keep instructions in the entry block.
-            let saved_block = self.builder.get_insert_block().unwrap();
+            // Compute hash — fnv1a_hash repositions builder to fnv_done.
+            // No save/restore: caller instructions go directly into fnv_done,
+            // which gets its terminator from the caller's branch instruction.
             let hash = if key_is_str {
                 fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
-            self.builder.position_at_end(saved_block);
 
-            // Loop counters — alloca AND initial store MUST be in the entry
-            // block.  If the store is in the loop header, it resets the
-            // counter to 0 on every back-edge, causing an infinite loop.
+            // Loop counters — alloca MUST be in a block dominated by entry.
+            // fnv_done is reachable from entry (via fnv_check→fnv_done),
+            // so alloca here is valid. mem2reg won't promote these, but
+            // correctness is unaffected — we just miss the SSA optimization.
             let z_counter = self.builder.build_alloca(i64_type, "z_counter").unwrap();
             self.builder.build_store(z_counter, zero).unwrap();
             let p_counter = self.builder.build_alloca(i64_type, "p_counter").unwrap();
@@ -1910,13 +1907,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            let saved_block = self.builder.get_insert_block().unwrap();
+            // fnv1a_hash repositions builder to fnv_done — caller continues there.
             let hash = if key_is_str {
                 fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
-            self.builder.position_at_end(saved_block);
 
             let g_counter = self.builder.build_alloca(i64_type, "g_counter").unwrap();
             self.builder.build_store(g_counter, zero).unwrap();
@@ -2011,13 +2007,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            let saved_block = self.builder.get_insert_block().unwrap();
+            // fnv1a_hash repositions builder to fnv_done — caller continues there.
             let hash = if key_is_str {
                 fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
-            self.builder.position_at_end(saved_block);
 
             let c_counter = self.builder.build_alloca(i64_type, "c_counter").unwrap();
             self.builder.build_store(c_counter, zero).unwrap();
@@ -2106,13 +2101,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             let zero = i64_type.const_int(0, false);
             let one = i64_type.const_int(1, false);
 
-            let saved_block = self.builder.get_insert_block().unwrap();
+            // fnv1a_hash repositions builder to fnv_done — caller continues there.
             let hash = if key_is_str {
                 fnv1a_hash(&self.builder, function, key_args[0].into_pointer_value(), key_args[1].into_int_value())
             } else {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
-            self.builder.position_at_end(saved_block);
 
             let r_counter = self.builder.build_alloca(i64_type, "r_counter").unwrap();
             self.builder.build_store(r_counter, zero).unwrap();
