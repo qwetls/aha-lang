@@ -1461,7 +1461,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let store_val = |b: &Builder<'ctx>,
                          slot_base: inkwell::values::PointerValue<'ctx>,
                          val_param: &[inkwell::values::BasicValueEnum<'ctx>]| {
-            let val_ptr = unsafe { b.build_gep(slot_base, &[i64_type.const_int(key_sz, false)], "vp").unwrap() };
+            let slot_i64 = b.build_pointer_cast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "sv_slot_i64").unwrap();
+            let val_ptr = unsafe { b.build_gep(slot_i64, &[i64_type.const_int(key_sz, false)], "vp").unwrap() };
             if val_is_str {
                 let ptr_i64 = b.build_ptr_to_int(val_param[0].into_pointer_value(), i64_type, "vp2").unwrap();
                 b.build_store(val_ptr, ptr_i64).unwrap();
@@ -1476,7 +1477,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let load_val = |b: &Builder<'ctx>,
                         slot_base: inkwell::values::PointerValue<'ctx>|
          -> inkwell::values::BasicValueEnum<'ctx> {
-            let val_ptr = unsafe { b.build_gep(slot_base, &[i64_type.const_int(key_sz, false)], "lvp").unwrap() };
+            let slot_i64 = b.build_pointer_cast(slot_base, i64_type.ptr_type(inkwell::AddressSpace::default()), "lv_slot_i64").unwrap();
+            let val_ptr = unsafe { b.build_gep(slot_i64, &[i64_type.const_int(key_sz, false)], "lvp").unwrap() };
             if val_is_str {
                 let val_i64 = b.build_load(val_ptr, "lv_val").unwrap().into_int_value();
                 let val2_ptr = unsafe { b.build_gep(val_ptr, &[i64_type.const_int(1, false)], "lvp2").unwrap() };
