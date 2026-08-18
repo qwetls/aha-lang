@@ -1724,11 +1724,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 splitmix64(&self.builder, key_args[0].into_int_value())
             };
 
-            // Loop counters — alloca MUST be in entry block so they aren't
-            // re-zeroed on every loop iteration (LLVM mem2reg only promotes
-            // allocas in the entry block).
+            // Loop counters — alloca AND initial store MUST be in the entry
+            // block.  If the store is in the loop header, it resets the
+            // counter to 0 on every back-edge, causing an infinite loop.
             let z_counter = self.builder.build_alloca(i64_type, "z_counter").unwrap();
+            self.builder.build_store(z_counter, zero).unwrap();
             let p_counter = self.builder.build_alloca(i64_type, "p_counter").unwrap();
+            self.builder.build_store(p_counter, one).unwrap();
 
             // Probe: find slot or empty position
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
@@ -1752,7 +1754,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.build_unconditional_branch(zero_cond).unwrap();
 
             self.builder.position_at_end(zero_cond);
-            self.builder.build_store(z_counter, zero).unwrap();
             let z_c = self.builder.build_load(z_counter, "z_c").unwrap().into_int_value();
             let z_done_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, z_c, new_cap, "z_done_cmp").unwrap();
             self.builder.build_conditional_branch(z_done_cmp, zero_loop, zero_done).unwrap();
@@ -1806,7 +1807,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // Probe loop: linear scan for existing key or empty slot
             self.builder.position_at_end(probe_loop);
-            self.builder.build_store(p_counter, one).unwrap(); // start from 1 (0 already checked)
             let p_loop_check = self.context.append_basic_block(function, "p_loop_check");
             let p_loop_body = self.context.append_basic_block(function, "p_loop_body");
             self.builder.build_unconditional_branch(p_loop_check).unwrap();
@@ -1910,6 +1910,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             };
 
             let g_counter = self.builder.build_alloca(i64_type, "g_counter").unwrap();
+            self.builder.build_store(g_counter, zero).unwrap();
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let get_miss = self.context.append_basic_block(function, "get_miss");
@@ -1918,7 +1919,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(get_probe);
             let idx = self.builder.build_int_unsigned_rem(hash, cap, "g_idx").unwrap();
-            self.builder.build_store(g_counter, zero).unwrap();
             let g_loop_check = self.context.append_basic_block(function, "g_loop_check");
             let g_loop_body = self.context.append_basic_block(function, "g_loop_body");
             let g_found = self.context.append_basic_block(function, "g_found");
@@ -2009,6 +2009,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             };
 
             let c_counter = self.builder.build_alloca(i64_type, "c_counter").unwrap();
+            self.builder.build_store(c_counter, zero).unwrap();
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let c_miss = self.context.append_basic_block(function, "c_miss");
@@ -2017,7 +2018,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(c_probe);
             let c_idx = self.builder.build_int_unsigned_rem(hash, cap, "c_idx").unwrap();
-            self.builder.build_store(c_counter, zero).unwrap();
             let c_loop_check = self.context.append_basic_block(function, "c_loop_check");
             let c_loop_body = self.context.append_basic_block(function, "c_loop_body");
             let c_found = self.context.append_basic_block(function, "c_found");
@@ -2102,6 +2102,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             };
 
             let r_counter = self.builder.build_alloca(i64_type, "r_counter").unwrap();
+            self.builder.build_store(r_counter, zero).unwrap();
 
             let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
             let r_done = self.context.append_basic_block(function, "r_done");
@@ -2110,7 +2111,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             self.builder.position_at_end(r_probe);
             let r_idx = self.builder.build_int_unsigned_rem(hash, cap, "r_idx").unwrap();
-            self.builder.build_store(r_counter, zero).unwrap();
             let r_loop_check = self.context.append_basic_block(function, "r_loop_check");
             let r_loop_body = self.context.append_basic_block(function, "r_loop_body");
             let r_found = self.context.append_basic_block(function, "r_found");
