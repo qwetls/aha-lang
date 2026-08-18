@@ -1,7 +1,7 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.2
-**Tanggal:** 2026-08-16
+**Versi PRD:** 0.3
+**Tanggal:** 2026-08-19
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
 
@@ -85,9 +85,7 @@ diinginkan web, aman tanpa GC seperti yang dituntut safety-critical.
   di PRD v0.3+).
 - ❌ **Tidak menjanjikan** fitur yang belum ada. README & docs wajib jujur
   soal status implementasi (prinsip anti-overclaim).
-- ❌ **Resource lifetimes tidak disentuh** sebelum semua fondasi (F1-F4)
-  benar-benar stabil. Ini adalah keputusan desain permanen — F5 dikerjakan
-  hanya setelah F1-F4 selesai dan terverifikasi.
+- ❌ **Resource lifetimes** — diimplementasi lewat *compiler-inserted free* (bukan borrow checker, bukan GC). F5 aktif di branch `labs`.
 
 ---
 
@@ -126,7 +124,7 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**Keputusan: F5 (Resource lifetimes) di-freeze sampai F1-F4 stabil.**
+**Keputusan: F5 (Resource lifetimes) diaktifkan — compiler-inserted free.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
@@ -134,7 +132,7 @@ kompromi.
 | **F2** | Type inference & annotations | 🔜 Berikutnya |
 | **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test); Map<K,V> ✅ di `experimental/map` (21 test) |
 | **F4** | Module system & package manager | ⏳ Nanti |
-| **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
+| **F5** | Resource lifetimes — compiler-inserted free | 🔄 AKTIF di `labs` (Fase 1: scope-based free) |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 
@@ -183,7 +181,7 @@ ke main. Tidak ada loncatan.
 - Generics / parametric types
 - Module system & package manager (`aha install`)
 - AOT compile ke native binary (saat ini JIT-only)
-- **Resource lifetimes** (ditunda — menunggu F1-F4 stabil)
+- **Resource lifetimes** — compiler-inserted free (Fase 1 di `labs`: scope-based free; Fase 2: last-use analysis; Fase 3: escape analysis)
 - Self-hosting (compiler AHA! ditulis dalam AHA!)
 
 ---
@@ -214,9 +212,14 @@ ke main. Tidak ada loncatan.
 - [ ] Namespace & visibilitas
 - [ ] `aha install` — registry sederhana
 
-### ⛔ F5. Resource lifetimes — DI-FREEZE
-Fitur ini TIDAK akan disentuh sampai F1-F4 selesai, stabil, dan terverifikasi
-oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
+### F5. Resource lifetimes — compiler-inserted free — 🔄 AKTIF
+Pendekatan unik AHA!: **compiler yang otomatis insert `free()`** — tanpa borrow checker, tanpa GC, tanpa reference counting.
+
+| Fase | Deskripsi | Status |
+|------|-----------|--------|
+| Fase 1 | Scope-based free — auto free Map/List di akhir scope | 🔄 `labs` branch |
+| Fase 2 | Last-use analysis — free di titik terakhir penggunaan | ⏳ Nanti |
+| Fase 3 | Escape analysis — handle alokasi yang di-return/di-pass | ⏳ Nanti |
 
 ### ⏳ F6. Actor-model concurrency
 - [ ] Message passing antar actor
@@ -285,8 +288,7 @@ oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
 3. README & docs wajib jujur: fitur yang belum ada TIDAK diclaim.
 4. **Tanpa GC adalah komitmen desain permanen** — setiap keputusan arsitektur
    diuji terhadap prinsip ini.
-5. **F5 (resource lifetimes) di-freeze** sampai F1-F4 stabil. Tidak ada
-   pengecualian.
+5. **F5 (resource lifetimes) diaktifkan** — compiler-inserted free. Progress di-track di branch `labs`.
 6. PRD ini diperbarui saat keputusan besar diambil (bukan per commit kecil).
 
 ---
@@ -297,3 +299,4 @@ oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
 |---------|-------|-----------|
 | 2026-08-16 | 0.1 | PRD awal: visi 3 pilar, status jujur, roadmap terpetakan, metrik |
 | 2026-08-16 | 0.2 | Visi besar: web → aerospace; "Hybrid" dijelaskan; F5 di-freeze; strategi stabilisasi; target aerospace & embedded |
+| 2026-08-19 | 0.3 | F5 diaktifkan: compiler-inserted free (bukan borrow checker/GC). 3 fase: scope-based → last-use → escape analysis |
