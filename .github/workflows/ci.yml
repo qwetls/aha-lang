@@ -29,9 +29,9 @@ jobs:
       # Ensure llvm-config is available for llvm-sys
       - name: Verify LLVM
         run: |
-          echo "LLVM_DIR=$LLVM_DIR"
-          "$LLVM_DIR/bin/llvm-config" --version
-          echo "LLVM_SYS_140_PREFIX=$LLVM_DIR" >> $GITHUB_ENV
+          echo "LLVM_PATH=$LLVM_PATH"
+          "$LLVM_PATH/bin/llvm-config" --version
+          echo "LLVM_SYS_140_PREFIX=$LLVM_PATH" >> $GITHUB_ENV
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
