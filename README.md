@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="assets/logo.png" alt="AHA! Lang Logo" width="200">
+<img src="logo.svg" alt="AHA! Lang Logo" width="200">
 
 **A**dvanced **H**ybrid **A**rchitecture
 
@@ -13,7 +13,7 @@ A modern programming language with an LLVM backend — designed to be understood
 [![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-336%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
+[![Tests](https://img.shields.io/badge/tests-571%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -29,7 +29,7 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **📦 Strings Done Right:** Strings are a real `{pointer, length}` struct — safe concatenation, `==`/`!=` comparison, and an O(1) `len()` builtin.
 - **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
 - **🔗 Module System:** `use "file"` imports functions and structs from another `.aha` file — recursive resolution, cycle detection, zero config.
-- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 336+ tests on every commit.
+- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 571+ tests on every commit.
 
 ---
 
@@ -236,7 +236,7 @@ let result = add(2, 3);
 - [x] CLI (`--file`, `--emit-ir`, `--version`)
 - [x] VS Code syntax-highlighting extension (`editors/vscode`)
 - [x] Module system: `use "file"` for multi-file compilation (v1.5.0)
-- [x] CI: `cargo check`, 336+ tests, `cargo build --release`
+- [x] CI: `cargo check`, 571+ tests, `cargo build --release`
 
 ### 🚧 Planned (Phase 2)
 
