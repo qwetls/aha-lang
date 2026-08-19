@@ -1863,7 +1863,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             if key_is_str {
                 // String key: load {i8*, i64} from old slot.
                 let rk_ptr_raw = unsafe { self.builder.build_gep(rh_slot, &[i64_type.const_int(0, false)], "rk_ptr_raw").unwrap() };
-                let rk_ptr = self.builder.build_pointer_cast(rk_ptr_raw, i8_ptr, "rk_ptr").unwrap();
+                let rk_ptr = self.builder.build_pointer_cast(rk_ptr_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rk_ptr").unwrap();
                 let rk_ptr_l = self.builder.build_load(rk_ptr, "rk_ptr_l").unwrap().into_pointer_value();
                 let rk_len_off = i64_type.const_int(8, false);
                 let rk_len_ptr_raw = unsafe { self.builder.build_gep(rh_slot, &[rk_len_off], "rk_len_ptr_raw").unwrap() };
@@ -1918,7 +1918,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let rp_slot = unsafe { self.builder.build_gep(new_data_grow, &[rp_boff], "rp_slot").unwrap() };
                 // Copy string key: store pointer and length.
                 let rk_dst_ptr_raw = unsafe { self.builder.build_gep(rp_slot, &[i64_type.const_int(0, false)], "rk_dst_raw").unwrap() };
-                let rk_dst_ptr = self.builder.build_pointer_cast(rk_dst_ptr_raw, i8_ptr, "rk_dst").unwrap();
+                let rk_dst_ptr = self.builder.build_pointer_cast(rk_dst_ptr_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rk_dst").unwrap();
                 self.builder.build_store(rk_dst_ptr, rk_ptr_l).unwrap();
                 let rk_dst_len_off = i64_type.const_int(8, false);
                 let rk_dst_len_raw = unsafe { self.builder.build_gep(rp_slot, &[rk_dst_len_off], "rk_dst_len_raw").unwrap() };
@@ -1929,11 +1929,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let rv_off = i64_type.const_int(key_sz, false);
                     let rv_slot = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_slot").unwrap() };
                     let rv_dst_raw = unsafe { self.builder.build_gep(rv_slot, &[i64_type.const_int(0, false)], "rv_dst_raw").unwrap() };
-                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr, "rv_dst").unwrap();
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rv_dst").unwrap();
                     let rv_old_off = i64_type.const_int(key_sz, false);
                     let rv_old_slot = unsafe { self.builder.build_gep(rh_slot, &[rv_old_off], "rv_old_slot").unwrap() };
                     let rv_old_ptr_raw = unsafe { self.builder.build_gep(rv_old_slot, &[i64_type.const_int(0, false)], "rv_old_raw").unwrap() };
-                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_ptr_raw, i8_ptr, "rv_old_ptr").unwrap();
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_ptr_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rv_old_ptr").unwrap();
                     let rv_old_ptr_l = self.builder.build_load(rv_old_ptr, "rv_old_ptr_l").unwrap().into_pointer_value();
                     self.builder.build_store(rv_dst_ptr, rv_old_ptr_l).unwrap();
                     let rv_old_len_off = i64_type.const_int(8, false);
@@ -2016,10 +2016,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let rv_off = i64_type.const_int(key_sz, false);
                     let rv_slot = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_slot").unwrap() };
                     let rv_dst_raw = unsafe { self.builder.build_gep(rv_slot, &[i64_type.const_int(0, false)], "rv_dst_raw").unwrap() };
-                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr, "rv_dst").unwrap();
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rv_dst").unwrap();
                     let rv_old_slot = unsafe { self.builder.build_gep(rh_slot, &[rv_off], "rv_old_slot").unwrap() };
                     let rv_old_raw = unsafe { self.builder.build_gep(rv_old_slot, &[i64_type.const_int(0, false)], "rv_old_raw").unwrap() };
-                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_raw, i8_ptr, "rv_old_ptr").unwrap();
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_raw, i8_ptr.ptr_type(inkwell::AddressSpace::default()), "rv_old_ptr").unwrap();
                     let rv_old_ptr_l = self.builder.build_load(rv_old_ptr, "rv_old_ptr_l").unwrap().into_pointer_value();
                     self.builder.build_store(rv_dst_ptr, rv_old_ptr_l).unwrap();
                     let rv_old_len_off = i64_type.const_int(8, false);
