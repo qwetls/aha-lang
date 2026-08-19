@@ -2,6 +2,21 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.4.9] — 2026-08-19
+
+### Fixed
+
+- **Map<K,V> grow-on-load-factor:** `_set` now grows the hash table when `len >= cap`, preventing silent data loss. Previously the map was fixed at 4 slots — entries were silently dropped once full.
+  - `init_alloc`: cap==0 → allocate 4 slots, zero occupied flags.
+  - `grow_rehash`: len>=cap → allocate 2×cap, rehash all occupied entries into new buffer, free old buffer, update header.
+  - `probe_block`: unchanged linear probing for insert/overwrite.
+- **Rehash string pointer type casts:** rehash path loaded string keys/values through `i8*` pointers, returning `i8` (byte) instead of `i8*` (pointer). Fixed 6 cast sites: `i8_ptr` → `i8_ptr.ptr_type(...)` so `build_load` returns the correct `i8*` value. Fixed inkwell panic: `Found IntValue but expected PointerValue variant`.
+
+### Commits
+
+- `ca602b0` — grow-on-load-factor with rehash + free old buffer
+- `7702c74` / `71a33ec` — rehash string pointer casts i8* → i8**
+
 ## [1.4.8] — 2026-08-18
 
 ### Fixed
