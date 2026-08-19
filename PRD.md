@@ -131,7 +131,7 @@ kompromi.
 | Fase | Fokus | Status |
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
-| **F2** | Type inference & annotations | 🔜 Berikutnya |
+| **F2** | Type inference & annotations | ✅ Selesai |
 | **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test); Map<K,V> ✅ di `experimental/map` (21 test) |
 | **F4** | Module system & package manager | ✅ Selesai (v1.5.0) |
 | **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
@@ -196,11 +196,12 @@ ke main. Tidak ada loncatan.
 - [x] Mutasi field (`p.x = 5`) — lvalue field access (7 tests)
 - [x] Struct sebagai parameter & return value fungsi (6 tests)
 
-### F2. Type inference & annotations
+### F2. Type inference & annotations — ✅ SELESAI
 - [x] Field struct bertipe (slice pertama, selesai di `development`)
-- [ ] Inferensi tipe `let` tanpa anotasi (default Int saat ini)
-- [ ] Inferensi tipe return fungsi (sudah parsial untuk String)
-- [ ] Anotasi tipe eksplisit `let x: int = 5`
+- [x] Inferensi tipe `let` tanpa anotasi (default Int, List/Map dari builtins)
+- [x] Inferensi tipe return fungsi dari body (String, Struct, if-branches)
+- [x] Anotasi tipe eksplisit `let x: int = 5` (20 tests)
+- [x] Return type annotation `fn f() -> int` + validation (7 tests)
 
 ### F3. Generics / parametric types — 🔄 SEBAGIAN SELESAI
 - [x] Fungsi generik `fn max<T>(a: T, b: T) -> T` (di `development`, 417 test)
