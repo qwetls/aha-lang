@@ -126,15 +126,15 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F4 stabil di `main`. F5 (Resource lifetimes) aktif sejak 2026-08-20.**
+**F1-F3 stabil di `main`. F4 module system selesai, package manager & namespace belum. F5 aktif sejak 2026-08-20.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
 | **F2** | Type inference & annotations | ✅ Selesai |
 | **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (571+ test) |
-| **F4** | Module system & package manager | ✅ Selesai (v1.5.0) |
-| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1: Compiler-inserted free (labs) |
+| **F4** | Module system & package manager | ⚠️ `use "file"` ✅ (v1.5.0); namespace & `aha install` belum |
+| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1: Compiler-inserted free (f5-ownership branch) |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 
@@ -179,8 +179,8 @@ ke main. Tidak ada loncatan.
 - Map 4 combos: `<Int,Int>`, `<String,Int>`, `<Int,String>`, `<String,String>`
 - 21 Map tests, grow-on-load-factor + rehash + free old buffer
 
-### ✅ F4 — Module System (v1.5.0)
-- `use "file"` — modularitas antar file (recursive import, AST merge, cycle detection)
+### ⚠️ F4 — Module System (partial, v1.5.0)
+- `use "file"` — modularitas antar file (recursive import, AST merge, cycle detection) ✅
 - [ ] Namespace & visibilitas (belum)
 - [ ] `aha install` — registry sederhana (belum)
 
