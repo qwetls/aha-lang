@@ -4,7 +4,6 @@ name: 'CI & Discord Notification'
 # Kapan workflow ini dijalankan?
 on:
   push:
-    branches: [ '*' ]
   pull_request:
     branches: [ 'main' ]
 
@@ -12,8 +11,8 @@ on:
 jobs:
   # Nama job: build-and-test
   build-and-test:
-    # Gunakan runner (mesin virtual) Ubuntu terbaru
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
 
     # Langkah-langkah (steps) yang akan dijalankan
     steps:
@@ -21,12 +20,18 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # --- STEP BARU: INSTALL LLVM ---
-      # Step ini akan menginstall LLVM 14 dan Clang 14 yang dibutuhkan oleh inkwell
-      - name: Install LLVM and Polly
+      # Install LLVM via prebuilt binaries (avoids apt-get hangs)
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "14"
+
+      # Ensure llvm-config is available for llvm-sys
+      - name: Verify LLVM
         run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev
+          echo "LLVM_PATH=$LLVM_PATH"
+          "$LLVM_PATH/bin/llvm-config" --version
+          echo "LLVM_SYS_140_PREFIX=$LLVM_PATH" >> $GITHUB_ENV
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
@@ -42,8 +47,16 @@ jobs:
       # Step 4: Jalankan semua test yang ada
       # LLVM JIT tidak thread-safe — multiple Context::create() + JIT
       # secara paralel bisa SIGSEGV. Run single-threaded.
+      # RUST_BACKTRACE=full to capture LLVM-level segfaults.
       - name: Run tests
+        env:
+          RUST_BACKTRACE: "full"
         run: cargo test --verbose -- --test-threads=1
+
+      # Step 4b: Print compiler diag log if it exists (survives SIGSEGV)
+      - name: Print diag log
+        if: always()
+        run: cat /tmp/aha_diag.log 2>/dev/null || true
 
       # Step 5: Build aplikasi dalam mode release
       - name: Build project

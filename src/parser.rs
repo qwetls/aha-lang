@@ -6,8 +6,8 @@ use crate::ast::{
     Program, Statement, Expression, Identifier, IntegerLiteral, BooleanLiteral,
     StringLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement,
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
-    IndexExpression, StructDefinition, StructField, FieldAccess,
-    AssignmentExpression, FunctionLiteral,
+    IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess,
+    AssignmentExpression, FunctionLiteral, ImportStatement,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -17,6 +17,9 @@ pub struct Parser {
     current_token: Token,
     peek_token: Token,
     pub errors: Vec<String>,
+    /// Names of structs declared so far, so `Point { ... }` is parsed as a
+    /// struct literal instead of an identifier followed by a block.
+    struct_names: std::collections::HashSet<String>,
 }
 
 // Operator precedence levels (lowest to highest)
@@ -45,6 +48,7 @@ impl Parser {
             current_token,
             peek_token,
             errors: Vec::new(),
+            struct_names: std::collections::HashSet::new(),
         }
     }
 
@@ -67,6 +71,41 @@ impl Parser {
     fn next_token(&mut self) {
         self.current_token = self.peek_token.clone();
         self.peek_token = self.lexer.next_token();
+    }
+
+    /// Parse a type hint, supporting compound types like `List<int>` and
+    /// `Map<K,V>` (two comma-separated inner types).
+    /// Caller has already consumed the leading identifier (current_token is
+    /// the first identifier of the hint). Consumes the full hint and returns
+    /// the canonical hint string ("List<int>", "Map<string,int>", ...).
+    fn parse_type_hint(&mut self) -> Option<String> {
+        if !self.current_token_is(TokenType::Identifier) {
+            return None;
+        }
+        let hint = self.current_token.literal.clone();
+        // Compound hint: identifier followed by '<'.
+        if self.peek_token_is(TokenType::LT) {
+            self.next_token(); // current = '<', peek = first token of inner
+            self.next_token(); // current = inner hint start, peek = '>' or '<'
+            let first_hint = self.parse_type_hint()?;
+            if self.peek_token_is(TokenType::Comma) {
+                // Map<K, V>: after the key hint comes a comma, then the value hint.
+                self.next_token(); // current = ','
+                self.next_token(); // current = value hint start
+                let second_hint = self.parse_type_hint()?;
+                if !self.expect_peek(TokenType::GT) {
+                    self.errors.push("Expected '>' to close Map<K,V> type hint".to_string());
+                    return None;
+                }
+                return Some(format!("Map<{}, {}>", first_hint, second_hint));
+            }
+            if !self.expect_peek(TokenType::GT) {
+                self.errors.push("Expected '>' to close List<T> type hint".to_string());
+                return None;
+            }
+            return Some(format!("List<{}>", first_hint));
+        }
+        Some(hint)
     }
     
     fn current_token_is(&self, t: TokenType) -> bool {
@@ -94,6 +133,7 @@ impl Parser {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Struct => self.parse_struct_definition(),
+            TokenType::Use => self.parse_use_statement(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -106,7 +146,8 @@ impl Parser {
             return None;
         }
         let name = Identifier { value: self.current_token.literal.clone() };
-        
+        self.struct_names.insert(name.value.clone());
+
         if !self.expect_peek(TokenType::LeftBrace) {
             return None;
         }
@@ -124,7 +165,7 @@ impl Parser {
             let type_hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // Skip field name
                 self.next_token(); // Skip ':'
-                Some(self.current_token.literal.clone())
+                self.parse_type_hint()
             } else {
                 None
             };
@@ -142,6 +183,73 @@ impl Parser {
         Some(Statement::Struct(StructDefinition { name, fields }))
     }
 
+    // Parse a struct literal: TypeName { field: value, field2: value2 }
+    // The caller has already consumed the type name; current token is it.
+    fn parse_struct_literal(&mut self, name: Identifier) -> Expression {
+        // current token is the type name; peek is '{'
+        self.next_token(); // move to '{'
+
+        let mut fields: Vec<(Identifier, Expression)> = Vec::new();
+        self.next_token(); // move past '{'
+
+        while !self.current_token_is(TokenType::RightBrace)
+            && !self.current_token_is(TokenType::Eof)
+        {
+            if !self.current_token_is(TokenType::Identifier) {
+                self.errors.push("Expected field name in struct literal".to_string());
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            if !self.expect_peek(TokenType::Colon) {
+                self.errors.push("Expected ':' after field name in struct literal".to_string());
+                break;
+            }
+            self.next_token(); // move to value expression
+
+            let value = self.parse_expression(Precedence::Lowest);
+            fields.push((field_name, value));
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // move to ','
+                self.next_token(); // move to next field name
+            } else {
+                self.next_token(); // move to '}' (or whatever ends the literal)
+            }
+        }
+
+        if !self.current_token_is(TokenType::RightBrace) {
+            self.errors.push("Expected '}' to close struct literal".to_string());
+        }
+
+        Expression::StructLiteral(StructLiteral { name, fields })
+    }
+
+    /// Parse a `use "file"` statement.
+    /// Syntax: `use "path/to/file"` — imports all functions and structs from the file.
+    fn parse_use_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // Skip 'use'
+
+        if !self.current_token_is(TokenType::String) {
+            self.errors.push(format!(
+                "Expected file path string after 'use', got '{}'",
+                self.current_token.literal
+            ));
+            return None;
+        }
+
+        let path = self.current_token.literal.clone();
+
+        // Optional semicolon — consume if present, but do NOT advance past
+        // the string token. The parse_program loop calls next_token() after
+        // each statement, which handles the advance.
+        if self.peek_token_is(TokenType::Semicolon) {
+            self.next_token();
+        }
+
+        Some(Statement::Import(ImportStatement { path }))
+    }
+
     fn parse_let_statement(&mut self) -> Option<Statement> {
         self.next_token(); // Skip 'let'
 
@@ -154,6 +262,16 @@ impl Parser {
         }
         let name = Identifier { value: self.current_token.literal.clone() };
 
+        // Optional type annotation: `let x: int = 5`
+        let mut type_annotation: Option<String> = None;
+        if self.peek_token_is(TokenType::Colon) {
+            self.next_token(); // Skip ':'
+            if !self.expect_peek(TokenType::Identifier) {
+                return None;
+            }
+            type_annotation = self.parse_type_hint();
+        }
+
         if !self.expect_peek(TokenType::Assign) {
             return None;
         }
@@ -165,7 +283,7 @@ impl Parser {
             self.next_token(); // Skip ';'
         }
 
-        Some(Statement::Let(LetStatement { name, value }))
+        Some(Statement::Let(LetStatement { name, value, type_annotation }))
     }
 
     fn parse_return_statement(&mut self) -> Option<Statement> {
@@ -224,6 +342,19 @@ impl Parser {
                 });
                 continue;
             }
+
+            // Handle assignment: left = expr
+            // Left can be an identifier (x = 5) or a field access (p.x = 5)
+            if self.peek_token_is(TokenType::Assign) {
+                self.next_token(); // consume '='
+                self.next_token(); // consume '='
+                let value = self.parse_expression(Precedence::Lowest);
+                left = Expression::Assignment(AssignmentExpression {
+                    target: Box::new(left),
+                    value: Box::new(value),
+                });
+                continue;
+            }
             
             // Handle function call: expr(args)
             if self.peek_token_is(TokenType::LeftParen) {
@@ -270,15 +401,11 @@ impl Parser {
         match self.current_token.kind {
             TokenType::Identifier => {
                 let ident = Identifier { value: self.current_token.literal.clone() };
-                // Check if this is an assignment: x = expr
-                if self.peek_token_is(TokenType::Assign) {
-                    self.next_token(); // Skip identifier
-                    self.next_token(); // Skip '='
-                    let value = self.parse_expression(Precedence::Lowest);
-                    return Expression::Assignment(AssignmentExpression {
-                        name: ident,
-                        value: Box::new(value),
-                    });
+                // Struct literal: TypeName { field: value, ... }
+                if self.peek_token_is(TokenType::LeftBrace)
+                    && self.struct_names.contains(&ident.value)
+                {
+                    return self.parse_struct_literal(ident);
                 }
                 Expression::Identifier(ident)
             },
@@ -337,12 +464,37 @@ impl Parser {
             None
         };
 
-        if !self.expect_peek(TokenType::LeftParen) {
+        // Generic type parameters: fn max<T, U>(...) 
+        let mut type_params = Vec::new();
+        if self.peek_token_is(TokenType::LT) {
+            self.next_token(); // skip '<'
+            while !self.current_token_is(TokenType::GT) && !self.current_token_is(TokenType::Eof) {
+                if self.current_token_is(TokenType::Identifier) {
+                    type_params.push(self.current_token.literal.clone());
+                }
+                self.next_token(); // skip ',' or type name
+            }
+            if !self.expect_peek(TokenType::LeftParen) {
+                self.errors.push("Expected '(' after generic type params".to_string());
+                return Expression::Integer(IntegerLiteral { value: 0 });
+            }
+        } else if !self.expect_peek(TokenType::LeftParen) {
             self.errors.push("Expected '(' after function name".to_string());
             return Expression::Integer(IntegerLiteral { value: 0 });
         }
 
-        let parameters = self.parse_function_parameters();
+        let (parameters, param_type_hints) = self.parse_function_parameters();
+
+        // Optional return type annotation: fn f(...) -> T
+        let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
+            self.next_token(); // skip '->'
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after '->' in function return".to_string());
+            }
+            self.parse_type_hint()
+        } else {
+            None
+        };
 
         if !self.expect_peek(TokenType::LeftBrace) {
             self.errors.push("Expected '{' for function body".to_string());
@@ -351,32 +503,55 @@ impl Parser {
 
         let body = self.parse_block_statement();
 
-        Expression::Function(FunctionLiteral { name, parameters, body })
+        Expression::Function(FunctionLiteral { name, parameters, type_params, param_type_hints, return_type_hint, body })
     }
 
-    // Parse function parameters: (a, b, c)
-    fn parse_function_parameters(&mut self) -> Vec<Identifier> {
+    // Parse function parameters: (a, b, c) or (a: T, b: int)
+    fn parse_function_parameters(&mut self) -> (Vec<Identifier>, Vec<Option<String>>) {
         let mut params = Vec::new();
+        let mut hints = Vec::new();
 
         if self.peek_token_is(TokenType::RightParen) {
             self.next_token();
-            return params;
+            return (params, hints);
         }
 
         self.next_token(); // Skip '('
         params.push(Identifier { value: self.current_token.literal.clone() });
 
+        // Optional per-param type hint: name: Type
+        let hint = if self.peek_token_is(TokenType::Colon) {
+            self.next_token(); // skip ':'
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after ':' in parameter".to_string());
+            }
+            self.parse_type_hint()
+        } else {
+            None
+        };
+        hints.push(hint);
+
         while self.peek_token_is(TokenType::Comma) {
             self.next_token(); // Skip current param
             self.next_token(); // Skip ','
             params.push(Identifier { value: self.current_token.literal.clone() });
+            let hint = if self.peek_token_is(TokenType::Colon) {
+                self.next_token(); // skip ':'
+                if !self.expect_peek(TokenType::Identifier) {
+                    self.errors.push("Expected type after ':' in parameter".to_string());
+                }
+                self.parse_type_hint()
+            } else {
+                None
+            };
+            hints.push(hint);
         }
 
         if !self.expect_peek(TokenType::RightParen) {
             self.errors.push("Expected ')' after function parameters".to_string());
         }
 
-        params
+        (params, hints)
     }
 
     // Parse function call arguments: (expr, expr, ...)
@@ -547,6 +722,7 @@ impl Parser {
 
     fn precedence(&self, t: &TokenType) -> Precedence {
         match t {
+            TokenType::Assign => Precedence::Assign,
             TokenType::Eq => Precedence::Equals,
             TokenType::NotEq => Precedence::Equals,
             TokenType::And => Precedence::Logical,

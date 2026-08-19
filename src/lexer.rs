@@ -142,6 +142,7 @@ impl Lexer {
             "break" => TokenType::Break,
             "continue" => TokenType::Continue,
             "struct" => TokenType::Struct,
+            "use" => TokenType::Use,
             _ => TokenType::Identifier,
         }
     }
@@ -173,7 +174,14 @@ impl Lexer {
                 }
             }
             '+' => tok = Token::new(TokenType::Plus, self.ch.to_string(), line, column),
-            '-' => tok = Token::new(TokenType::Minus, self.ch.to_string(), line, column),
+            '-' => {
+                if self.peek_char() == '>' {
+                    self.read_char();
+                    tok = Token::new(TokenType::Arrow, "->".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::Minus, self.ch.to_string(), line, column);
+                }
+            }
             '*' => tok = Token::new(TokenType::Asterisk, self.ch.to_string(), line, column),
             '%' => tok = Token::new(TokenType::Percent, self.ch.to_string(), line, column),
             '&' => {

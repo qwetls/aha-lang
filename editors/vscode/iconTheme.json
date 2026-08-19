@@ -1,0 +1,21 @@
+{
+  "iconDefinitions": [
+    {
+      "id": "aha",
+      "iconPath": "./icons/aha.svg"
+    },
+    {
+      "id": "aha-light",
+      "iconPath": "./icons/aha-light.svg"
+    }
+  ],
+  "fileExtensions": {
+    "aha": "aha"
+  },
+  "fileNames": {},
+  "light": {
+    "fileExtensions": {
+      "aha": "aha-light"
+    }
+  }
+}

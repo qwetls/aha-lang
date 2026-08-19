@@ -23,6 +23,7 @@ pub enum TokenType {
     Break,
     Continue,
     Struct,
+    Use,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -51,6 +52,7 @@ pub enum TokenType {
     RightBracket, // ]
     DotDot,       // ..
     Dot,          // .
+    Arrow,        // ->
     // Special
     Eof,          // End of file
     Illegal,      // Unrecognized character
@@ -105,7 +107,7 @@ pub enum Expression {
 // Assignment expression: name = value
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssignmentExpression {
-    pub name: Identifier,
+    pub target: Box<Expression>,
     pub value: Box<Expression>,
 }
 
@@ -183,6 +185,12 @@ pub struct IndexExpression {
 pub struct FunctionLiteral {
     pub name: Option<Identifier>,
     pub parameters: Vec<Identifier>,
+    /// Generic type parameters: `fn max<T>(...)` → ["T"]
+    pub type_params: Vec<String>,
+    /// Per-parameter type hints: `fn f(a: T, b: int)` → [Some("T"), Some("int")]
+    pub param_type_hints: Vec<Option<String>>,
+    /// Optional return type annotation: `fn f(...) -> T`
+    pub return_type_hint: Option<String>,
     pub body: BlockStatement,
 }
 
@@ -199,12 +207,16 @@ pub enum Statement {
     Return(ReturnStatement),
     Expression(ExpressionStatement),
     Struct(StructDefinition),
+    Import(ImportStatement),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetStatement {
     pub name: Identifier,
     pub value: Expression,
+    /// Optional explicit type annotation: `let x: int = 5`.
+    /// Stored as the raw hint string ("int", "string", "bool", struct name).
+    pub type_annotation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +232,13 @@ pub struct ExpressionStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockStatement {
     pub statements: Vec<Statement>,
+}
+
+// --- Import Statement ---
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStatement {
+    /// The file path string literal, e.g. "math" or "utils/helper"
+    pub path: String,
 }
 
 // --- Root Node ---

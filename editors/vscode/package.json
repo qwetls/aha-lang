@@ -2,8 +2,9 @@
   "name": "aha-lang",
   "displayName": "AHA! Language",
   "description": "Syntax highlighting for AHA! programming language",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "ahalang-dev",
+  "icon": "icons/aha.svg",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -19,6 +20,11 @@
       "language": "aha",
       "scopeName": "source.aha",
       "path": "./syntaxes/aha.tmLanguage.json"
+    }],
+    "iconThemes": [{
+      "id": "aha",
+      "label": "AHA! Lang",
+      "path": "./iconTheme.json"
     }]
   }
 }
