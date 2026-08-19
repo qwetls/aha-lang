@@ -13,7 +13,7 @@ A modern programming language with an LLVM backend — designed to be understood
 [![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-571%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
+[![Tests](https://img.shields.io/badge/tests-581%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -236,16 +236,18 @@ let result = add(2, 3);
 - [x] CLI (`--file`, `--emit-ir`, `--version`)
 - [x] VS Code syntax-highlighting extension (`editors/vscode`)
 - [x] Module system: `use "file"` for multi-file compilation (v1.5.0)
-- [x] CI: `cargo check`, 571+ tests, `cargo build --release`
+- [x] CI: `cargo check`, 581+ tests, `cargo build --release`
 
 ### 🚧 Planned (Phase 2)
 
 - [x] Struct codegen & field access at runtime
 - [x] Type inference & annotations
-- [x] Generics / parametric types
+- [x] Generics / parametric types (List<T>, Map<K,V>)
 - [x] Module system (`use "file"` imports, multi-file compilation) — v1.5.0
+- [x] Resource lifetimes — compiler-inserted free, scope-based auto-free for Map/List (Phase 1)
 - [ ] Package manager (`aha install`)
-- [ ] Resource lifetimes — safe manual memory management, no GC overhead
+- [ ] Resource lifetimes Phase 2 — last-use analysis
+- [ ] Resource lifetimes Phase 3 — escape analysis (returned/passed allocations)
 - [ ] Actor-model concurrency (message passing, async/await)
 - [ ] Self-hosting — the AHA! compiler written in AHA!
 
