@@ -1756,47 +1756,304 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.build_unconditional_branch(cont).unwrap();
             self.builder.position_at_end(cont);
 
-            // Probe: find slot or empty position
-            let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
-            let grow_needed_block = self.context.append_basic_block(function, "grow_needed");
-            let probe_block = self.context.append_basic_block(function, "probe");
-            self.builder.build_conditional_branch(no_cap, grow_needed_block, probe_block).unwrap();
-
-            // If cap == 0, need to grow first
-            self.builder.position_at_end(grow_needed_block);
-            // new_cap = 4, alloc data, set cap, then probe
-            let new_cap = i64_type.const_int(4, false);
             let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+            let free_fn = *self.functions.get("free").expect("free not declared");
             let slot_size = i64_type.const_int(slot_sz, false);
-            let alloc_size = self.builder.build_int_mul(new_cap, slot_size, "alloc_sz").unwrap();
-            let new_data = self.builder.build_call(malloc_fn, &[alloc_size.into()], "new_data")
+
+            // Route: cap==0 → init_alloc, len>=cap → grow_rehash, else → probe
+            let no_cap = self.builder.build_int_compare(inkwell::IntPredicate::EQ, cap, zero, "no_cap").unwrap();
+            let needs_grow = self.builder.build_int_compare(inkwell::IntPredicate::SGE, len, cap, "needs_grow").unwrap();
+            let should_grow = self.builder.build_or(no_cap, needs_grow, "should_grow").unwrap();
+            let init_alloc = self.context.append_basic_block(function, "init_alloc");
+            let grow_rehash = self.context.append_basic_block(function, "grow_rehash");
+            let probe_block = self.context.append_basic_block(function, "probe");
+            self.builder.build_conditional_branch(should_grow, init_alloc, probe_block).unwrap();
+
+            // === init_alloc: cap==0, allocate initial4 slots, zero occupied ===
+            self.builder.position_at_end(init_alloc);
+            let new_cap_init = i64_type.const_int(4, false);
+            let alloc_size_init = self.builder.build_int_mul(new_cap_init, slot_size, "alloc_sz").unwrap();
+            let new_data_init = self.builder.build_call(malloc_fn, &[alloc_size_init.into()], "new_data_init")
                 .unwrap().try_as_basic_value().left().unwrap().into_pointer_value();
-            // Zero the occupied flag for each slot via a counted loop.
-            let zero_loop = self.context.append_basic_block(function, "zero_loop");
-            let zero_done = self.context.append_basic_block(function, "zero_done");
-            let zero_cond = self.context.append_basic_block(function, "zero_cond");
-            self.builder.build_unconditional_branch(zero_cond).unwrap();
-
-            self.builder.position_at_end(zero_cond);
+            let z_cond = self.context.append_basic_block(function, "z_cond");
+            let z_loop = self.context.append_basic_block(function, "z_loop");
+            let z_done = self.context.append_basic_block(function, "z_done");
+            self.builder.build_unconditional_branch(z_cond).unwrap();
+            self.builder.position_at_end(z_cond);
             let z_c = self.builder.build_load(z_counter, "z_c").unwrap().into_int_value();
-            let z_done_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, z_c, new_cap, "z_done_cmp").unwrap();
-            self.builder.build_conditional_branch(z_done_cmp, zero_loop, zero_done).unwrap();
-
-            self.builder.position_at_end(zero_loop);
+            let z_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, z_c, new_cap_init, "z_cmp").unwrap();
+            self.builder.build_conditional_branch(z_cmp, z_loop, z_done).unwrap();
+            self.builder.position_at_end(z_loop);
             let z_c2 = self.builder.build_load(z_counter, "z_c2").unwrap().into_int_value();
-            let z_byte_off = self.builder.build_int_mul(z_c2, slot_size, "z_byte_off").unwrap();
-            let z_occ_off = self.builder.build_int_add(z_byte_off, i64_type.const_int(key_sz + val_sz, false), "z_occ_off").unwrap();
-            let z_occ_ptr_raw = unsafe { self.builder.build_gep(new_data, &[z_occ_off], "z_occ_ptr").unwrap() };
-            let z_occ_ptr = self.builder.build_pointer_cast(z_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "z_occ_ptr_typed").unwrap();
-            self.builder.build_store(z_occ_ptr, zero).unwrap();
-            let z_c_next = self.builder.build_int_add(z_c2, one, "z_c_next").unwrap();
-            self.builder.build_store(z_counter, z_c_next).unwrap();
-            self.builder.build_unconditional_branch(zero_cond).unwrap();
+            let z_byte = self.builder.build_int_mul(z_c2, slot_size, "z_byte").unwrap();
+            let z_occ = self.builder.build_int_add(z_byte, i64_type.const_int(key_sz + val_sz, false), "z_occ").unwrap();
+            let z_ptr_raw = unsafe { self.builder.build_gep(new_data_init, &[z_occ], "z_ptr").unwrap() };
+            let z_ptr = self.builder.build_pointer_cast(z_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "z_ptr_t").unwrap();
+            self.builder.build_store(z_ptr, zero).unwrap();
+            let z_next = self.builder.build_int_add(z_c2, one, "z_next").unwrap();
+            self.builder.build_store(z_counter, z_next).unwrap();
+            self.builder.build_unconditional_branch(z_cond).unwrap();
+            self.builder.position_at_end(z_done);
+            self.builder.build_store(data_ptr, new_data_init).unwrap();
+            self.builder.build_store(cap_ptr, new_cap_init).unwrap();
+            self.builder.build_unconditional_branch(probe_block).unwrap();
 
-            self.builder.position_at_end(zero_done);
-            // Store new data and cap, then fall through to probe_block.
-            self.builder.build_store(data_ptr, new_data).unwrap();
-            self.builder.build_store(cap_ptr, new_cap).unwrap();
+            // === grow_rehash: len>=cap, alloc 2*cap, rehash, free old ===
+            self.builder.position_at_end(grow_rehash);
+            let new_cap_grow = self.builder.build_int_mul(cap, i64_type.const_int(2, false), "new_cap_grow").unwrap();
+            let alloc_sz_grow = self.builder.build_int_mul(new_cap_grow, slot_size, "alloc_sz_grow").unwrap();
+            let new_data_grow = self.builder.build_call(malloc_fn, &[alloc_sz_grow.into()], "new_data_grow")
+                .unwrap().try_as_basic_value().left().unwrap().into_pointer_value();
+            // Zero new buffer occupied flags.
+            let gz_cond = self.context.append_basic_block(function, "gz_cond");
+            let gz_loop = self.context.append_basic_block(function, "gz_loop");
+            let gz_done = self.context.append_basic_block(function, "gz_done");
+            self.builder.build_unconditional_branch(gz_cond).unwrap();
+            self.builder.position_at_end(gz_cond);
+            let gz_c = self.builder.build_load(z_counter, "gz_c").unwrap().into_int_value();
+            let gz_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, gz_c, new_cap_grow, "gz_cmp").unwrap();
+            self.builder.build_conditional_branch(gz_cmp, gz_loop, gz_done).unwrap();
+            self.builder.position_at_end(gz_loop);
+            let gz_c2 = self.builder.build_load(z_counter, "gz_c2").unwrap().into_int_value();
+            let gz_byte = self.builder.build_int_mul(gz_c2, slot_size, "gz_byte").unwrap();
+            let gz_occ = self.builder.build_int_add(gz_byte, i64_type.const_int(key_sz + val_sz, false), "gz_occ").unwrap();
+            let gz_ptr_raw = unsafe { self.builder.build_gep(new_data_grow, &[gz_occ], "gz_ptr").unwrap() };
+            let gz_ptr = self.builder.build_pointer_cast(gz_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "gz_ptr_t").unwrap();
+            self.builder.build_store(gz_ptr, zero).unwrap();
+            let gz_next = self.builder.build_int_add(gz_c2, one, "gz_next").unwrap();
+            self.builder.build_store(z_counter, gz_next).unwrap();
+            self.builder.build_unconditional_branch(gz_cond).unwrap();
+            self.builder.position_at_end(gz_done);
+
+            // Rehash loop: for each occupied slot in old buffer, read key, hash, insert into new.
+            let rh_i = self.builder.build_alloca(i64_type, "rh_i").unwrap();
+            self.builder.build_store(rh_i, zero).unwrap();
+            let rh_cond = self.context.append_basic_block(function, "rh_cond");
+            let rh_body = self.context.append_basic_block(function, "rh_body");
+            let rh_done = self.context.append_basic_block(function, "rh_done");
+            self.builder.build_unconditional_branch(rh_cond).unwrap();
+
+            self.builder.position_at_end(rh_cond);
+            let rh_c = self.builder.build_load(rh_i, "rh_c").unwrap().into_int_value();
+            let rh_cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, rh_c, cap, "rh_cmp").unwrap();
+            self.builder.build_conditional_branch(rh_cmp, rh_body, rh_done).unwrap();
+
+            self.builder.position_at_end(rh_body);
+            let rh_c2 = self.builder.build_load(rh_i, "rh_c2").unwrap().into_int_value();
+            let rh_byte = self.builder.build_int_mul(rh_c2, slot_size, "rh_byte").unwrap();
+            // Check if slot is occupied.
+            let rh_occ_off = self.builder.build_int_add(rh_byte, i64_type.const_int(key_sz + val_sz, false), "rh_occ_off").unwrap();
+            let rh_occ_ptr_raw = unsafe { self.builder.build_gep(data, &[rh_occ_off], "rh_occ_ptr").unwrap() };
+            let rh_occ_ptr = self.builder.build_pointer_cast(rh_occ_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rh_occ_ptr_t").unwrap();
+            let rh_occ = self.builder.build_load(rh_occ_ptr, "rh_occ").unwrap().into_int_value();
+            let rh_is_occ = self.builder.build_int_compare(inkwell::IntPredicate::EQ, rh_occ, one, "rh_is_occ").unwrap();
+            let rh_skip = self.context.append_basic_block(function, "rh_skip");
+            let rh_reinsert = self.context.append_basic_block(function, "rh_reinsert");
+            self.builder.build_conditional_branch(rh_is_occ, rh_reinsert, rh_skip).unwrap();
+
+            self.builder.position_at_end(rh_skip);
+            let rh_next = self.builder.build_int_add(rh_c2, one, "rh_next").unwrap();
+            self.builder.build_store(rh_i, rh_next).unwrap();
+            self.builder.build_unconditional_branch(rh_cond).unwrap();
+
+            // Reinsert occupied entry into new buffer.
+            self.builder.position_at_end(rh_reinsert);
+            let rh_slot = unsafe { self.builder.build_gep(data, &[rh_byte], "rh_slot").unwrap() };
+            // Read key from old slot, hash it, find empty in new buffer, copy key+val.
+            if key_is_str {
+                // String key: load {i8*, i64} from old slot.
+                let rk_ptr_raw = unsafe { self.builder.build_gep(rh_slot, &[i64_type.const_int(0, false)], "rk_ptr_raw").unwrap() };
+                let rk_ptr = self.builder.build_pointer_cast(rk_ptr_raw, i8_ptr, "rk_ptr").unwrap();
+                let rk_ptr_l = self.builder.build_load(rk_ptr, "rk_ptr_l").unwrap().into_pointer_value();
+                let rk_len_off = i64_type.const_int(8, false);
+                let rk_len_ptr_raw = unsafe { self.builder.build_gep(rh_slot, &[rk_len_off], "rk_len_ptr_raw").unwrap() };
+                let rk_len_ptr = self.builder.build_pointer_cast(rk_len_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rk_len_ptr").unwrap();
+                let rk_len = self.builder.build_load(rk_len_ptr, "rk_len").unwrap().into_int_value();
+                let rh_hash_val = self.builder.build_call(fnv_func, &[rk_ptr_l.into(), rk_len.into()], "rh_hash")
+                    .unwrap().try_as_basic_value().left().unwrap().into_int_value();
+                // Find empty slot in new buffer via linear probe.
+                let rh_idx = self.builder.build_int_unsigned_rem(rh_hash_val, new_cap_grow, "rh_idx").unwrap();
+                let rh_p = self.builder.build_alloca(i64_type, "rh_p").unwrap();
+                self.builder.build_store(rh_p, one).unwrap();
+                let rp_cond = self.context.append_basic_block(function, "rp_cond");
+                let rp_body = self.context.append_basic_block(function, "rp_body");
+                let rp_found = self.context.append_basic_block(function, "rp_found");
+                // Check initial slot.
+                let rh_boff0 = self.builder.build_int_mul(rh_idx, slot_size, "rh_boff0").unwrap();
+                let rh_occ0_off = self.builder.build_int_add(rh_boff0, i64_type.const_int(key_sz + val_sz, false), "rh_occ0_off").unwrap();
+                let rh_occ0_raw = unsafe { self.builder.build_gep(new_data_grow, &[rh_occ0_off], "rh_occ0").unwrap() };
+                let rh_occ0_ptr = self.builder.build_pointer_cast(rh_occ0_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rh_occ0_t").unwrap();
+                let rh_occ0 = self.builder.build_load(rh_occ0_ptr, "rh_occ0_v").unwrap().into_int_value();
+                let rh_empty0 = self.builder.build_int_compare(inkwell::IntPredicate::EQ, rh_occ0, zero, "rh_empty0").unwrap();
+                self.builder.build_conditional_branch(rh_empty0, rp_found, rp_cond).unwrap();
+                self.builder.position_at_end(rp_cond);
+                let rh_pc = self.builder.build_load(rh_p, "rh_pc").unwrap().into_int_value();
+                let rh_pd = self.builder.build_int_compare(inkwell::IntPredicate::SLT, rh_pc, new_cap_grow, "rh_pd").unwrap();
+                self.builder.build_conditional_branch(rh_pd, rp_body, rp_found).unwrap();
+                self.builder.position_at_end(rp_body);
+                let rh_pc2 = self.builder.build_load(rh_p, "rh_pc2").unwrap().into_int_value();
+                let rh_psum = self.builder.build_int_add(rh_idx, rh_pc2, "rh_psum").unwrap();
+                let rh_pidx = self.builder.build_int_unsigned_rem(rh_psum, new_cap_grow, "rh_pidx").unwrap();
+                let rh_pboff = self.builder.build_int_mul(rh_pidx, slot_size, "rh_pboff").unwrap();
+                let rh_pocc_off = self.builder.build_int_add(rh_pboff, i64_type.const_int(key_sz + val_sz, false), "rh_pocc_off").unwrap();
+                let rh_pocc_raw = unsafe { self.builder.build_gep(new_data_grow, &[rh_pocc_off], "rh_pocc").unwrap() };
+                let rh_pocc_ptr = self.builder.build_pointer_cast(rh_pocc_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rh_pocc_t").unwrap();
+                let rh_pocc = self.builder.build_load(rh_pocc_ptr, "rh_pocc_v").unwrap().into_int_value();
+                let rh_pempty = self.builder.build_int_compare(inkwell::IntPredicate::EQ, rh_pocc, zero, "rh_pempty").unwrap();
+                let rp_inc = self.context.append_basic_block(function, "rp_inc");
+                self.builder.build_conditional_branch(rh_pempty, rp_found, rp_inc).unwrap();
+                self.builder.position_at_end(rp_inc);
+                let rh_pn = self.builder.build_int_add(rh_pc2, one, "rh_pn").unwrap();
+                self.builder.build_store(rh_p, rh_pn).unwrap();
+                self.builder.build_unconditional_branch(rp_cond).unwrap();
+                self.builder.position_at_end(rp_found);
+                let rp_sum = self.builder.build_load(rh_p, "rp_sum").unwrap().into_int_value();
+                // Probe counter minus1 gives the offset from initial index.
+                let rp_idx = self.builder.build_int_sub(rp_sum, one, "rp_idx").unwrap();
+                let rp_final = self.builder.build_int_unsigned_rem(
+                    self.builder.build_int_add(rh_idx, rp_idx, "rp_final_sum").unwrap(),
+                    new_cap_grow, "rp_final"
+                ).unwrap();
+                let rp_boff = self.builder.build_int_mul(rp_final, slot_size, "rp_boff").unwrap();
+                let rp_slot = unsafe { self.builder.build_gep(new_data_grow, &[rp_boff], "rp_slot").unwrap() };
+                // Copy string key: store pointer and length.
+                let rk_dst_ptr_raw = unsafe { self.builder.build_gep(rp_slot, &[i64_type.const_int(0, false)], "rk_dst_raw").unwrap() };
+                let rk_dst_ptr = self.builder.build_pointer_cast(rk_dst_ptr_raw, i8_ptr, "rk_dst").unwrap();
+                self.builder.build_store(rk_dst_ptr, rk_ptr_l).unwrap();
+                let rk_dst_len_off = i64_type.const_int(8, false);
+                let rk_dst_len_raw = unsafe { self.builder.build_gep(rp_slot, &[rk_dst_len_off], "rk_dst_len_raw").unwrap() };
+                let rk_dst_len = self.builder.build_pointer_cast(rk_dst_len_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rk_dst_len").unwrap();
+                self.builder.build_store(rk_dst_len, rk_len).unwrap();
+                // Copy value (same approach for string or int val).
+                if val_is_str {
+                    let rv_off = i64_type.const_int(key_sz, false);
+                    let rv_slot = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_slot").unwrap() };
+                    let rv_dst_raw = unsafe { self.builder.build_gep(rv_slot, &[i64_type.const_int(0, false)], "rv_dst_raw").unwrap() };
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr, "rv_dst").unwrap();
+                    let rv_old_off = i64_type.const_int(key_sz, false);
+                    let rv_old_slot = unsafe { self.builder.build_gep(rh_slot, &[rv_old_off], "rv_old_slot").unwrap() };
+                    let rv_old_ptr_raw = unsafe { self.builder.build_gep(rv_old_slot, &[i64_type.const_int(0, false)], "rv_old_raw").unwrap() };
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_ptr_raw, i8_ptr, "rv_old_ptr").unwrap();
+                    let rv_old_ptr_l = self.builder.build_load(rv_old_ptr, "rv_old_ptr_l").unwrap().into_pointer_value();
+                    self.builder.build_store(rv_dst_ptr, rv_old_ptr_l).unwrap();
+                    let rv_old_len_off = i64_type.const_int(8, false);
+                    let rv_old_len_raw = unsafe { self.builder.build_gep(rv_old_slot, &[rv_old_len_off], "rv_old_len_raw").unwrap() };
+                    let rv_old_len_ptr = self.builder.build_pointer_cast(rv_old_len_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_old_len_ptr").unwrap();
+                    let rv_old_len = self.builder.build_load(rv_old_len_ptr, "rv_old_len").unwrap().into_int_value();
+                    let rv_dst_len_off2 = i64_type.const_int(8, false);
+                    let rv_dst_len_raw2 = unsafe { self.builder.build_gep(rv_slot, &[rv_dst_len_off2], "rv_dst_len_raw2").unwrap() };
+                    let rv_dst_len_ptr2 = self.builder.build_pointer_cast(rv_dst_len_raw2, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_dst_len_ptr2").unwrap();
+                    self.builder.build_store(rv_dst_len_ptr2, rv_old_len).unwrap();
+                } else {
+                    // Int val: copy i64.
+                    let rv_off = i64_type.const_int(key_sz, false);
+                    let rv_dst_raw = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_dst").unwrap() };
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_dst_t").unwrap();
+                    let rv_old_raw = unsafe { self.builder.build_gep(rh_slot, &[rv_off], "rv_old").unwrap() };
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_old_t").unwrap();
+                    let rv_old_val = self.builder.build_load(rv_old_ptr, "rv_old_val").unwrap().into_int_value();
+                    self.builder.build_store(rv_dst_ptr, rv_old_val).unwrap();
+                }
+                // Mark new slot occupied.
+                let rp_occ_off = self.builder.build_int_add(rp_boff, i64_type.const_int(key_sz + val_sz, false), "rp_occ_off").unwrap();
+                let rp_occ_raw = unsafe { self.builder.build_gep(new_data_grow, &[rp_occ_off], "rp_occ").unwrap() };
+                let rp_occ_ptr = self.builder.build_pointer_cast(rp_occ_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rp_occ_t").unwrap();
+                self.builder.build_store(rp_occ_ptr, one).unwrap();
+            } else {
+                // Int key: read i64, splitmix64 hash, find empty slot, copy key+val.
+                let rk_ptr_raw = unsafe { self.builder.build_gep(rh_slot, &[i64_type.const_int(0, false)], "rk_ptr_raw").unwrap() };
+                let rk_ptr = self.builder.build_pointer_cast(rk_ptr_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rk_ptr").unwrap();
+                let rk_val = self.builder.build_load(rk_ptr, "rk_val").unwrap().into_int_value();
+                let rh_hash_val = splitmix64(&self.builder, rk_val);
+                let rh_idx = self.builder.build_int_unsigned_rem(rh_hash_val, new_cap_grow, "rh_idx").unwrap();
+                let rh_p = self.builder.build_alloca(i64_type, "rh_p").unwrap();
+                self.builder.build_store(rh_p, one).unwrap();
+                let rp_cond = self.context.append_basic_block(function, "rp_cond");
+                let rp_body = self.context.append_basic_block(function, "rp_body");
+                let rp_found = self.context.append_basic_block(function, "rp_found");
+                let rh_boff0 = self.builder.build_int_mul(rh_idx, slot_size, "rh_boff0").unwrap();
+                let rh_occ0_off = self.builder.build_int_add(rh_boff0, i64_type.const_int(key_sz + val_sz, false), "rh_occ0_off").unwrap();
+                let rh_occ0_raw = unsafe { self.builder.build_gep(new_data_grow, &[rh_occ0_off], "rh_occ0").unwrap() };
+                let rh_occ0_ptr = self.builder.build_pointer_cast(rh_occ0_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rh_occ0_t").unwrap();
+                let rh_occ0 = self.builder.build_load(rh_occ0_ptr, "rh_occ0_v").unwrap().into_int_value();
+                let rh_empty0 = self.builder.build_int_compare(inkwell::IntPredicate::EQ, rh_occ0, zero, "rh_empty0").unwrap();
+                self.builder.build_conditional_branch(rh_empty0, rp_found, rp_cond).unwrap();
+                self.builder.position_at_end(rp_cond);
+                let rh_pc = self.builder.build_load(rh_p, "rh_pc").unwrap().into_int_value();
+                let rh_pd = self.builder.build_int_compare(inkwell::IntPredicate::SLT, rh_pc, new_cap_grow, "rh_pd").unwrap();
+                self.builder.build_conditional_branch(rh_pd, rp_body, rp_found).unwrap();
+                self.builder.position_at_end(rp_body);
+                let rh_pc2 = self.builder.build_load(rh_p, "rh_pc2").unwrap().into_int_value();
+                let rh_psum = self.builder.build_int_add(rh_idx, rh_pc2, "rh_psum").unwrap();
+                let rh_pidx = self.builder.build_int_unsigned_rem(rh_psum, new_cap_grow, "rh_pidx").unwrap();
+                let rh_pboff = self.builder.build_int_mul(rh_pidx, slot_size, "rh_pboff").unwrap();
+                let rh_pocc_off = self.builder.build_int_add(rh_pboff, i64_type.const_int(key_sz + val_sz, false), "rh_pocc_off").unwrap();
+                let rh_pocc_raw = unsafe { self.builder.build_gep(new_data_grow, &[rh_pocc_off], "rh_pocc").unwrap() };
+                let rh_pocc_ptr = self.builder.build_pointer_cast(rh_pocc_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rh_pocc_t").unwrap();
+                let rh_pocc = self.builder.build_load(rh_pocc_ptr, "rh_pocc_v").unwrap().into_int_value();
+                let rh_pempty = self.builder.build_int_compare(inkwell::IntPredicate::EQ, rh_pocc, zero, "rh_pempty").unwrap();
+                let rp_inc = self.context.append_basic_block(function, "rp_inc");
+                self.builder.build_conditional_branch(rh_pempty, rp_found, rp_inc).unwrap();
+                self.builder.position_at_end(rp_inc);
+                let rh_pn = self.builder.build_int_add(rh_pc2, one, "rh_pn").unwrap();
+                self.builder.build_store(rh_p, rh_pn).unwrap();
+                self.builder.build_unconditional_branch(rp_cond).unwrap();
+                self.builder.position_at_end(rp_found);
+                let rp_sum = self.builder.build_load(rh_p, "rp_sum").unwrap().into_int_value();
+                let rp_idx = self.builder.build_int_sub(rp_sum, one, "rp_idx").unwrap();
+                let rp_final = self.builder.build_int_unsigned_rem(
+                    self.builder.build_int_add(rh_idx, rp_idx, "rp_final_sum").unwrap(),
+                    new_cap_grow, "rp_final"
+                ).unwrap();
+                let rp_boff = self.builder.build_int_mul(rp_final, slot_size, "rp_boff").unwrap();
+                let rp_slot = unsafe { self.builder.build_gep(new_data_grow, &[rp_boff], "rp_slot").unwrap() };
+                // Store key (i64).
+                let rk_dst_raw = unsafe { self.builder.build_gep(rp_slot, &[i64_type.const_int(0, false)], "rk_dst_raw").unwrap() };
+                let rk_dst_ptr = self.builder.build_pointer_cast(rk_dst_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rk_dst").unwrap();
+                self.builder.build_store(rk_dst_ptr, rk_val).unwrap();
+                // Copy value.
+                if val_is_str {
+                    let rv_off = i64_type.const_int(key_sz, false);
+                    let rv_slot = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_slot").unwrap() };
+                    let rv_dst_raw = unsafe { self.builder.build_gep(rv_slot, &[i64_type.const_int(0, false)], "rv_dst_raw").unwrap() };
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i8_ptr, "rv_dst").unwrap();
+                    let rv_old_slot = unsafe { self.builder.build_gep(rh_slot, &[rv_off], "rv_old_slot").unwrap() };
+                    let rv_old_raw = unsafe { self.builder.build_gep(rv_old_slot, &[i64_type.const_int(0, false)], "rv_old_raw").unwrap() };
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_raw, i8_ptr, "rv_old_ptr").unwrap();
+                    let rv_old_ptr_l = self.builder.build_load(rv_old_ptr, "rv_old_ptr_l").unwrap().into_pointer_value();
+                    self.builder.build_store(rv_dst_ptr, rv_old_ptr_l).unwrap();
+                    let rv_old_len_off = i64_type.const_int(8, false);
+                    let rv_old_len_raw = unsafe { self.builder.build_gep(rv_old_slot, &[rv_old_len_off], "rv_old_len_raw").unwrap() };
+                    let rv_old_len_ptr = self.builder.build_pointer_cast(rv_old_len_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_old_len_ptr").unwrap();
+                    let rv_old_len = self.builder.build_load(rv_old_len_ptr, "rv_old_len").unwrap().into_int_value();
+                    let rv_dst_len_off = i64_type.const_int(8, false);
+                    let rv_dst_len_raw = unsafe { self.builder.build_gep(rv_slot, &[rv_dst_len_off], "rv_dst_len_raw").unwrap() };
+                    let rv_dst_len_ptr = self.builder.build_pointer_cast(rv_dst_len_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_dst_len_ptr").unwrap();
+                    self.builder.build_store(rv_dst_len_ptr, rv_old_len).unwrap();
+                } else {
+                    let rv_off = i64_type.const_int(key_sz, false);
+                    let rv_dst_raw = unsafe { self.builder.build_gep(rp_slot, &[rv_off], "rv_dst").unwrap() };
+                    let rv_dst_ptr = self.builder.build_pointer_cast(rv_dst_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_dst_t").unwrap();
+                    let rv_old_raw = unsafe { self.builder.build_gep(rh_slot, &[rv_off], "rv_old").unwrap() };
+                    let rv_old_ptr = self.builder.build_pointer_cast(rv_old_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rv_old_t").unwrap();
+                    let rv_old_val = self.builder.build_load(rv_old_ptr, "rv_old_val").unwrap().into_int_value();
+                    self.builder.build_store(rv_dst_ptr, rv_old_val).unwrap();
+                }
+                let rp_occ_off = self.builder.build_int_add(rp_boff, i64_type.const_int(key_sz + val_sz, false), "rp_occ_off").unwrap();
+                let rp_occ_raw = unsafe { self.builder.build_gep(new_data_grow, &[rp_occ_off], "rp_occ").unwrap() };
+                let rp_occ_ptr = self.builder.build_pointer_cast(rp_occ_raw, i64_type.ptr_type(inkwell::AddressSpace::default()), "rp_occ_t").unwrap();
+                self.builder.build_store(rp_occ_ptr, one).unwrap();
+            }
+            // Advance rehash counter and continue.
+            let rh_next2 = self.builder.build_int_add(rh_c2, one, "rh_next2").unwrap();
+            self.builder.build_store(rh_i, rh_next2).unwrap();
+            self.builder.build_unconditional_branch(rh_cond).unwrap();
+
+            self.builder.position_at_end(rh_done);
+            // Free old data buffer and update header.
+            self.builder.build_call(free_fn, &[data.into()], "free_old").unwrap();
+            self.builder.build_store(data_ptr, new_data_grow).unwrap();
+            self.builder.build_store(cap_ptr, new_cap_grow).unwrap();
             self.builder.build_unconditional_branch(probe_block).unwrap();
 
             // ==================================================================
