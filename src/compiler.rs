@@ -4,7 +4,7 @@
 // Handles `use "file"` statements by recursively parsing imported files
 // and merging their ASTs into a single compilation unit.
 
-use crate::ast::{ImportStatement, Program, Statement};
+use crate::ast::{Expression, ImportStatement, Program, Statement};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use std::collections::HashSet;
@@ -123,7 +123,7 @@ impl Compiler {
         for stmt in file_stmts {
             if is_main {
                 all_statements.push(stmt);
-            } else if Self::is_pub_item(stmt) {
+            } else if Self::is_pub_item(&stmt) {
                 all_statements.push(stmt);
             }
         }
@@ -133,7 +133,7 @@ impl Compiler {
     fn is_pub_item(stmt: &Statement) -> bool {
         match stmt {
             Statement::Expression(expr_stmt) => {
-                if let ast::Expression::Function(func) = &expr_stmt.expression {
+                if let Expression::Function(func) = &expr_stmt.expression {
                     func.is_pub
                 } else {
                     true // non-func expressions included (let, etc.)
