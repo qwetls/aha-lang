@@ -20,15 +20,18 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # --- STEP BARU: INSTALL LLVM ---
-      # Step ini akan menginstall LLVM 14 dan Clang 14 yang dibutuhkan oleh inkwell
-      # timeout 300s prevents infinite hangs on slow runners
-      - name: Install LLVM and Polly
-        timeout-minutes: 8
+      # Install LLVM via prebuilt binaries (avoids apt-get hangs)
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "14"
+
+      # Ensure llvm-config is available for llvm-sys
+      - name: Verify LLVM
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14
+          echo "LLVM_DIR=$LLVM_DIR"
+          "$LLVM_DIR/bin/llvm-config" --version
+          echo "LLVM_SYS_140_PREFIX=$LLVM_DIR" >> $GITHUB_ENV
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
