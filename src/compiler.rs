@@ -37,16 +37,66 @@ impl Compiler {
     }
 
     /// Compile a main file and all its imports into a single merged Program.
-    /// Returns the merged Program or a list of errors.
+    /// Two-phase: first parse imports to collect struct names, then parse
+    /// main file with those names available for struct literal parsing.
     pub fn compile(&self, main_path: &str) -> Result<Program, Vec<CompileError>> {
         let mut visited = HashSet::new();
         let mut all_statements = Vec::new();
+        let mut all_struct_names = HashSet::new();
         let mut errors = Vec::new();
 
-        self.compile_file(main_path, &mut visited, &mut all_statements, &mut errors);
+        // Phase 1: resolve and parse all imports, collect their struct names
+        let resolved_main = self.resolve_path(main_path);
+        let main_contents = match std::fs::read_to_string(&resolved_main) {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(vec![CompileError {
+                    message: format!("Failed to read file '{}': {}", main_path, e),
+                    file: resolved_main.to_string_lossy().to_string(),
+                }]);
+            }
+        };
+
+        // Extract imports from main file (parse it temporarily to get use statements)
+        let main_lexer = Lexer::new(main_contents.clone());
+        let mut main_pre_parser = Parser::new(main_lexer);
+        let main_pre_program = main_pre_parser.parse_program();
+        let mut main_imports = Vec::new();
+        for stmt in &main_pre_program.statements {
+            if let Statement::Import(import) = stmt {
+                main_imports.push(import.path.clone());
+            }
+        }
+
+        // Recursively parse imports and collect their struct names
+        for import_path in &main_imports {
+            self.compile_file(import_path, &mut visited, &mut all_statements, &mut all_struct_names, &mut errors);
+        }
 
         if !errors.is_empty() {
             return Err(errors);
+        }
+
+        // Phase 2: parse main file with known struct names from imports
+        let main_lexer2 = Lexer::new(main_contents);
+        let mut main_parser = Parser::with_structs(main_lexer2, all_struct_names);
+        let main_program = main_parser.parse_program();
+
+        if !main_parser.errors.is_empty() {
+            for err in &main_parser.errors {
+                errors.push(CompileError {
+                    message: err.clone(),
+                    file: resolved_main.to_string_lossy().to_string(),
+                });
+            }
+            return Err(errors);
+        }
+
+        // Append main file statements (skip imports, already handled)
+        for stmt in &main_program.statements {
+            if !matches!(stmt, Statement::Import(_)) {
+                all_statements.push(stmt.clone());
+            }
         }
 
         Ok(Program { statements: all_statements })
@@ -54,11 +104,13 @@ impl Compiler {
 
     /// Recursively compile a file and its imports.
     /// Appends non-import statements to `all_statements`.
+    /// Collects struct names into `all_struct_names`.
     fn compile_file(
         &self,
         file_path: &str,
         visited: &mut HashSet<String>,
         all_statements: &mut Vec<Statement>,
+        all_struct_names: &mut HashSet<String>,
         errors: &mut Vec<CompileError>,
     ) {
         // Resolve the file path
@@ -83,10 +135,15 @@ impl Compiler {
             }
         };
 
-        // Parse
+        // Parse — use known struct names from previously parsed imports
         let lexer = Lexer::new(contents);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::with_structs(lexer, all_struct_names.clone());
         let program = parser.parse_program();
+
+        // Collect struct names discovered during parsing
+        for name in parser.get_struct_names() {
+            all_struct_names.insert(name.clone());
+        }
 
         if !parser.errors.is_empty() {
             for err in &parser.errors {
@@ -114,7 +171,7 @@ impl Compiler {
 
         // Recursively compile imported files (imports come first in merge order)
         for import_path in &imports {
-            self.compile_file(import_path, visited, all_statements, errors);
+            self.compile_file(import_path, visited, all_statements, all_struct_names, errors);
         }
 
         // Append this file's own statements after imports.

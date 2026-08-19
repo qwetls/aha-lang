@@ -52,6 +52,25 @@ impl Parser {
         }
     }
 
+    /// Create a parser with pre-known struct names (from imported files).
+    pub fn with_structs(mut lexer: Lexer, known_structs: std::collections::HashSet<String>) -> Self {
+        let current_token = lexer.next_token();
+        let peek_token = lexer.next_token();
+
+        Parser {
+            lexer,
+            current_token,
+            peek_token,
+            errors: Vec::new(),
+            struct_names: known_structs,
+        }
+    }
+
+    /// Get the struct names discovered during parsing.
+    pub fn get_struct_names(&self) -> &std::collections::HashSet<String> {
+        &self.struct_names
+    }
+
     // Parse the entire program into an AST
     pub fn parse_program(&mut self) -> Program {
         let mut program = Program { statements: Vec::new() };

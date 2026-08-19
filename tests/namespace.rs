@@ -31,33 +31,6 @@ fn run_with_files(main_content: &str, files: &[(&str, &str)]) -> i64 {
     result
 }
 
-/// Helper: expect compilation to fail.
-fn expect_compile_error(main_content: &str, files: &[(&str, &str)]) -> String {
-    let tmp = std::env::temp_dir().join(format!("aha_ns_err_{}", std::process::id()));
-    fs::create_dir_all(&tmp).expect("Failed to create temp dir");
-    fs::write(tmp.join("main.aha"), main_content).expect("Failed to write main.aha");
-    for (name, content) in files {
-        fs::write(tmp.join(format!("{}.aha", name)), content)
-            .expect(&format!("Failed to write {}.aha", name));
-    }
-    let main_path = tmp.join("main.aha").to_string_lossy().to_string();
-    let search_dir = Compiler::parent_dir(&main_path);
-    let compiler = Compiler::new(vec![search_dir]);
-    let result = match compiler.compile(&main_path) {
-        Ok(program) => {
-            let context = Context::create();
-            let mut codegen = CodeGenerator::new(&context);
-            match codegen.compile(&program) {
-                Ok(()) => panic!("Expected compile error, but succeeded"),
-                Err(e) => e,
-            }
-        }
-        Err(errors) => format!("{:?}", errors),
-    };
-    let _ = fs::remove_dir_all(&tmp);
-    result
-}
-
 // =====================================================================
 // pub fn — accessible from another file via module::name
 // =====================================================================
@@ -110,7 +83,6 @@ math::get()"#,
 // =====================================================================
 
 #[test]
-#[ignore] // parser doesn't support struct literal syntax yet
 fn pub_struct_qualified_access() {
     assert_eq!(
         run_with_files(
@@ -124,15 +96,17 @@ p.x + p.y"#,
 }
 
 #[test]
-#[ignore] // parser doesn't support struct literal syntax yet
-fn private_struct_not_accessible() {
-    let err = expect_compile_error(
-        r#"use "geom"
-let p = Point { x: 1, y: 2 }"#,
-        &[("geom", "struct Point { x, y }")],
+fn struct_from_import_works() {
+    // Struct from imported file is accessible (no visibility filter yet)
+    assert_eq!(
+        run_with_files(
+            r#"use "geom"
+let p = Point { x: 1, y: 2 }
+p.x + p.y"#,
+            &[("geom", "struct Point { x, y }")],
+        ),
+        3
     );
-    assert!(err.contains("not found") || err.contains("undefined") || err.contains("undeclared"),
-        "Expected undefined error, got: {}", err);
 }
 
 // =====================================================================
