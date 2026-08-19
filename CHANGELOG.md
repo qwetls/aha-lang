@@ -2,6 +2,22 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.4] — 2026-08-20
+
+### Added
+
+- **F5 Phase 2 — Last-use analysis for auto-free:**
+  - `find_last_uses()` — pre-scan function body AST to find last statement index per heap variable.
+  - `scan_stmt_uses` / `scan_expr_uses` / `scan_block_uses` — recursive AST walkers.
+  - `insert_free_for_var()` — per-variable free call with `mark_freed` guard (no double-free).
+  - Both main and generic compilation loops use last-use analysis.
+  - Variables used in branches (if/else, while, for) conservatively freed at scope end.
+  - 7 new ownership tests: early free, different last-use points, explicit free no double-free, if-condition use, return statement use.
+
+### Changed
+
+- Scope-end cleanup remains as fallback for variables not reached by last-use analysis.
+
 ## [1.5.3] — 2026-08-20
 
 ### Added
