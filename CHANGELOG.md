@@ -2,6 +2,12 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.1] — 2026-08-20
+
+### Changed
+
+- **PRD v0.3:** F1-F4 all marked ✅ on `main` (571+ test). F5 (resource lifetimes) unfrozen — now active with Phase 1 (compiler-inserted free, scope-based) on `labs` branch. F3 Map<K,V> confirmed merged. Test counts updated throughout. Current status rewritten to reflect all features on `main`.
+
 ## [1.5.0] — 2026-08-19
 
 ### Added
