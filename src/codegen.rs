@@ -276,6 +276,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         })
                         .or_insert_with(|| types.clone());
+                } else if let ast::Expression::ModuleAccess(ma) = call.function.as_ref() {
+                    // module::name(args) — same as Identifier scan
+                    let types: Vec<AhaType> = call.arguments.iter()
+                        .map(|arg| self.infer_expr_type(arg))
+                        .collect();
+                    self.param_type_map.entry(ma.name.clone())
+                        .and_modify(|existing| {
+                            for (i, t) in types.iter().enumerate() {
+                                if i < existing.len() {
+                                    existing[i] = existing[i].unify_with(t);
+                                }
+                            }
+                        })
+                        .or_insert_with(|| types.clone());
                 }
                 for arg in &call.arguments {
                     self.scan_expr_for_calls(arg);
@@ -602,6 +616,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Identifier(id) => {
                 scope.get(&id.value).cloned().unwrap_or(AhaType::Int)
             }
+            ast::Expression::ModuleAccess(ma) => {
+                scope.get(&ma.name).cloned().unwrap_or(AhaType::Int)
+            }
             ast::Expression::Infix(infix) => {
                 let lt = self.infer_expr_type_with_scope(&infix.left, scope);
                 let rt = self.infer_expr_type_with_scope(&infix.right, scope);
@@ -619,13 +636,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             ast::Expression::Call(call) => {
-                if let ast::Expression::Identifier(id) = call.function.as_ref() {
-                    if id.value == "list_push" || id.value == "list_push_string" {
+                let call_name = match call.function.as_ref() {
+                    ast::Expression::Identifier(id) => Some(id.value.as_str()),
+                    ast::Expression::ModuleAccess(ma) => Some(ma.name.as_str()),
+                    _ => None,
+                };
+                if let Some(name) = call_name {
+                    if name == "list_push" || name == "list_push_string" {
                         if let Some(first) = call.arguments.first() {
                             return self.infer_expr_type_with_scope(first, scope);
                         }
                     }
-                    if id.value == "list_get" || id.value == "list_get_string" {
+                    if name == "list_get" || name == "list_get_string" {
                         if let Some(first) = call.arguments.first() {
                             let list_type = self.infer_expr_type_with_scope(first, scope);
                             if let AhaType::List(inner) = list_type {
@@ -634,10 +656,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                         return AhaType::Int;
                     }
-                    if id.value == "len" {
+                    if name == "len" {
                         return AhaType::Int;
                     }
-                    if let Some(rt) = self.fn_types.get(&id.value) {
+                    if let Some(rt) = self.fn_types.get(name) {
                         return rt.clone();
                     }
                 }
@@ -2737,6 +2759,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Assignment(assign) => self.compile_assignment(assign),
             ast::Expression::StructLiteral(struct_lit) => self.compile_struct_literal(struct_lit),
             ast::Expression::FieldAccess(field_access) => self.compile_field_access(field_access),
+            ast::Expression::ModuleAccess(ma) => {
+                // module::name — resolve to the flat function/variable name
+                // (compiler already merged pub items into global scope)
+                self.compile_expression(&ast::Expression::Identifier(
+                    ast::Identifier { value: ma.name.clone() }
+                ))
+            },
             ast::Expression::Break => {
                 if let Some(&(_, break_block)) = self.loop_stack.last() {
                     self.builder.build_unconditional_branch(break_block)
@@ -3209,6 +3238,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_call(&mut self, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
         let func_name = match call.function.as_ref() {
             ast::Expression::Identifier(id) => id.value.clone(),
+            ast::Expression::ModuleAccess(ma) => ma.name.clone(),
             _ => return Err("Can only call named functions".to_string()),
         };
         // Generic function call → monomorphize (lazy per call-site type).

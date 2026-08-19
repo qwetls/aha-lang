@@ -43,7 +43,7 @@ impl Compiler {
         let mut all_statements = Vec::new();
         let mut errors = Vec::new();
 
-        self.compile_file(main_path, &mut visited, &mut all_statements, &mut errors);
+        self.compile_file(main_path, true, &mut visited, &mut all_statements, &mut errors);
 
         if !errors.is_empty() {
             return Err(errors);
@@ -57,6 +57,7 @@ impl Compiler {
     fn compile_file(
         &self,
         file_path: &str,
+        is_main: bool,
         visited: &mut HashSet<String>,
         all_statements: &mut Vec<Statement>,
         errors: &mut Vec<CompileError>,
@@ -114,11 +115,33 @@ impl Compiler {
 
         // Recursively compile imported files (imports come first in merge order)
         for import_path in &imports {
-            self.compile_file(import_path, visited, all_statements, errors);
+            self.compile_file(import_path, false, visited, all_statements, errors);
         }
 
-        // Append this file's own statements after imports
-        all_statements.extend(file_stmts);
+        // Append this file's own statements after imports.
+        // For imported files, only include pub items.
+        for stmt in file_stmts {
+            if is_main {
+                all_statements.push(stmt);
+            } else if Self::is_pub_item(stmt) {
+                all_statements.push(stmt);
+            }
+        }
+    }
+
+    /// Check if a statement is a pub item (pub fn or pub struct).
+    fn is_pub_item(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Expression(expr_stmt) => {
+                if let ast::Expression::Function(func) = &expr_stmt.expression {
+                    func.is_pub
+                } else {
+                    true // non-func expressions included (let, etc.)
+                }
+            }
+            Statement::Struct(s) => s.is_pub,
+            _ => true, // imports, lets, returns always included
+        }
     }
 
     /// Resolve a `use` path to an absolute file path.

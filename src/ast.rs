@@ -24,6 +24,7 @@ pub enum TokenType {
     Continue,
     Struct,
     Use,
+    Pub,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -44,6 +45,7 @@ pub enum TokenType {
     Comma,        // ,
     Semicolon,    // ;
     Colon,        // :
+    ColonColon,   // ::
     LeftParen,    // (
     RightParen,   // )
     LeftBrace,    // {
@@ -99,6 +101,7 @@ pub enum Expression {
     Range(RangeExpression),
     StructLiteral(StructLiteral),
     FieldAccess(FieldAccess),
+    ModuleAccess(ModuleAccess),
     Assignment(AssignmentExpression),
     Break,
     Continue,
@@ -185,6 +188,7 @@ pub struct IndexExpression {
 pub struct FunctionLiteral {
     pub name: Option<Identifier>,
     pub parameters: Vec<Identifier>,
+    pub is_pub: bool,
     /// Generic type parameters: `fn max<T>(...)` → ["T"]
     pub type_params: Vec<String>,
     /// Per-parameter type hints: `fn f(a: T, b: int)` → [Some("T"), Some("int")]
@@ -251,6 +255,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
     pub name: Identifier,
+    pub is_pub: bool,
     pub fields: Vec<StructField>,
 }
 
@@ -270,4 +275,12 @@ pub struct StructLiteral {
 pub struct FieldAccess {
     pub object: Box<Expression>,
     pub field: Identifier,
+}
+
+// --- Module Access ---
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleAccess {
+    pub module: String,
+    pub name: String,
 }

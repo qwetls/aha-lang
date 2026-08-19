@@ -132,13 +132,31 @@ impl Parser {
         match self.current_token.kind {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
-            TokenType::Struct => self.parse_struct_definition(),
+            TokenType::Struct => self.parse_struct_definition(false),
             TokenType::Use => self.parse_use_statement(),
+            TokenType::Pub => self.parse_pub_statement(),
             _ => self.parse_expression_statement(),
         }
     }
 
-    fn parse_struct_definition(&mut self) -> Option<Statement> {
+    fn parse_pub_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // Skip 'pub'
+        match self.current_token.kind {
+            TokenType::Fn => self.parse_function_statement(true),
+            TokenType::Struct => self.parse_struct_definition(true),
+            _ => {
+                self.errors.push("Expected 'fn' or 'struct' after 'pub'".to_string());
+                None
+            }
+        }
+    }
+
+    fn parse_function_statement(&mut self, is_pub: bool) -> Option<Statement> {
+        let expr = self.parse_function_literal_with_pub(is_pub);
+        Some(Statement::Expression(ExpressionStatement { expression: expr }))
+    }
+
+    fn parse_struct_definition(&mut self, is_pub: bool) -> Option<Statement> {
         self.next_token(); // Skip 'struct'
         
         if !self.current_token_is(TokenType::Identifier) {
@@ -180,7 +198,7 @@ impl Parser {
             }
         }
         
-        Some(Statement::Struct(StructDefinition { name, fields }))
+        Some(Statement::Struct(StructDefinition { name, is_pub, fields }))
     }
 
     // Parse a struct literal: TypeName { field: value, field2: value2 }
@@ -407,6 +425,16 @@ impl Parser {
                 {
                     return self.parse_struct_literal(ident);
                 }
+                // Module access: module::name
+                if self.peek_token_is(TokenType::ColonColon) {
+                    self.next_token(); // skip '::'
+                    self.next_token(); // skip to name
+                    let name = self.current_token.literal.clone();
+                    return Expression::ModuleAccess(ModuleAccess {
+                        module: ident.value,
+                        name,
+                    });
+                }
                 Expression::Identifier(ident)
             },
             TokenType::Integer => {
@@ -429,7 +457,7 @@ impl Parser {
             TokenType::If => self.parse_if_expression(),
             TokenType::While => self.parse_while_expression(),
             TokenType::For => self.parse_for_expression(),
-            TokenType::Fn => self.parse_function_literal(),
+            TokenType::Fn => self.parse_function_literal_with_pub(false),
             TokenType::Break => Expression::Break,
             TokenType::Continue => Expression::Continue,
             TokenType::LeftBracket => self.parse_array_literal(),
@@ -456,7 +484,7 @@ impl Parser {
     }
 
     // Parse function literal: fn name(params) { body }
-    fn parse_function_literal(&mut self) -> Expression {
+    fn parse_function_literal_with_pub(&mut self, is_pub: bool) -> Expression {
         let name = if self.peek_token_is(TokenType::Identifier) {
             self.next_token();
             Some(Identifier { value: self.current_token.literal.clone() })
@@ -503,7 +531,7 @@ impl Parser {
 
         let body = self.parse_block_statement();
 
-        Expression::Function(FunctionLiteral { name, parameters, type_params, param_type_hints, return_type_hint, body })
+        Expression::Function(FunctionLiteral { name, parameters, is_pub, type_params, param_type_hints, return_type_hint, body })
     }
 
     // Parse function parameters: (a, b, c) or (a: T, b: int)

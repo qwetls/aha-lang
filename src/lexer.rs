@@ -143,6 +143,7 @@ impl Lexer {
             "continue" => TokenType::Continue,
             "struct" => TokenType::Struct,
             "use" => TokenType::Use,
+            "pub" => TokenType::Pub,
             _ => TokenType::Identifier,
         }
     }
@@ -242,7 +243,14 @@ impl Lexer {
             }
             ',' => tok = Token::new(TokenType::Comma, self.ch.to_string(), line, column),
             ';' => tok = Token::new(TokenType::Semicolon, self.ch.to_string(), line, column),
-            ':' => tok = Token::new(TokenType::Colon, self.ch.to_string(), line, column),
+            ':' => {
+                if self.peek_char() == ':' {
+                    self.read_char();
+                    tok = Token::new(TokenType::ColonColon, "::".to_string(), line, column);
+                } else {
+                    tok = Token::new(TokenType::Colon, self.ch.to_string(), line, column);
+                }
+            }
             '(' => tok = Token::new(TokenType::LeftParen, self.ch.to_string(), line, column),
             ')' => tok = Token::new(TokenType::RightParen, self.ch.to_string(), line, column),
             '{' => tok = Token::new(TokenType::LeftBrace, self.ch.to_string(), line, column),
