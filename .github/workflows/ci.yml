@@ -22,10 +22,16 @@ jobs:
 
       # --- STEP BARU: INSTALL LLVM ---
       # Step ini akan menginstall LLVM 14 dan Clang 14 yang dibutuhkan oleh inkwell
+      # timeout 300s prevents infinite hangs on slow runners
       - name: Install LLVM and Polly
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-14-dev clang-14 libpolly-14-dev
+          sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev || {
+            echo "apt-get failed, retrying with updated package lists..."
+            sudo rm -rf /var/lib/apt/lists/*
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
+          }
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
