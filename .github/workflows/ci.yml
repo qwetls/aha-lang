@@ -11,8 +11,7 @@ on:
 jobs:
   # Nama job: build-and-test
   build-and-test:
-    # Gunakan runner (mesin virtual) Ubuntu terbaru
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
 
     # Langkah-langkah (steps) yang akan dijalankan
@@ -26,13 +25,9 @@ jobs:
       # timeout 300s prevents infinite hangs on slow runners
       - name: Install LLVM and Polly
         run: |
-          sudo apt-get update
-          timeout 120 sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev || {
-            echo "First attempt failed, retrying..."
-            sudo rm -rf /var/lib/apt/lists/*
-            sudo apt-get update
-            timeout 120 sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
-          }
+          export DEBIAN_FRONTEND=noninteractive
+          timeout 60 sudo apt-get update -qq
+          timeout 180 sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
