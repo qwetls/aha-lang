@@ -481,6 +481,17 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// the function's own params in scope (so `a + b` is String when
     /// a and b are string params).
     fn infer_function_return_type(&self, func: &ast::FunctionLiteral, func_name: &str) -> AhaType {
+        // Prefer explicit return type annotation (e.g. `fn f() -> int`)
+        if let Some(ref hint) = func.return_type_hint {
+            // Resolve struct names against struct_defs, then fall back to from_hint.
+            let ty = if self.struct_defs.contains_key(hint.as_str()) {
+                AhaType::Struct(hint.clone())
+            } else {
+                AhaType::from_hint(hint).unwrap_or(AhaType::Int)
+            };
+            return ty;
+        }
+
         let param_types = self.infer_param_types_immutable(func_name, &func.parameters);
 
         // Build a synthetic scope so infer_expr_type_with_scope can resolve params.
@@ -3006,6 +3017,47 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_type = self.fn_types.get(&func_name)
             .cloned()
             .unwrap_or_else(|| self.infer_function_return_type(func, &func_name));
+
+        // If a return type annotation is present, validate it against the
+        // body's inferred return type to catch mismatches early.
+        if let Some(ref hint) = func.return_type_hint {
+            let param_aha_types_imm = self.infer_param_types_immutable(&func_name, &func.parameters);
+            let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
+                .map(|(i, p)| (p.value.clone(), param_aha_types_imm.get(i).cloned().unwrap_or(AhaType::Int)))
+                .collect();
+            let mut body_type = AhaType::Int;
+            for stmt in &func.body.statements {
+                if let ast::Statement::Return(ret) = stmt {
+                    body_type = self.infer_expr_type_with_scope(&ret.return_value, &scope);
+                    break;
+                }
+            }
+            if body_type == AhaType::Int {
+                for stmt in func.body.statements.iter().rev() {
+                    if let ast::Statement::Expression(expr_stmt) = stmt {
+                        body_type = self.infer_expr_type_with_scope(&expr_stmt.expression, &scope);
+                        break;
+                    }
+                }
+            }
+            let hint_type = if self.struct_defs.contains_key(hint.as_str()) {
+                AhaType::Struct(hint.clone())
+            } else {
+                AhaType::from_hint(hint).unwrap_or(AhaType::Int)
+            };
+            let compatible = match (&hint_type, &body_type) {
+                (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                (AhaType::Int, t) if t.is_bool() => true, // Int and Bool are both i64
+                (t, AhaType::Int) if t.is_bool() => true,
+                _ => hint_type == body_type,
+            };
+            if !compatible {
+                return Err(format!(
+                    "Return type annotation '{}' does not match actual return type '{}' in function '{}'",
+                    hint, body_type, func_name
+                ));
+            }
+        }
 
         // Reuse pre-declared function if it exists (for forward references)
         let function = if let Some(f) = self.functions.get(&func_name) {

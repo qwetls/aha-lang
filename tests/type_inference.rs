@@ -168,3 +168,46 @@ fn test_annotation_then_mutation() {
 fn test_annotation_string_then_mutation() {
     assert_eq!(run("let s: string = \"abc\"; s = s + \"d\"; len(s)"), 4);
 }
+
+// --- Function return type annotations (fn f() -> T) ---
+
+#[test]
+fn test_return_annotation_int() {
+    assert_eq!(run("fn add(a: int, b: int) -> int { return a + b } add(3, 4)"), 7);
+}
+
+#[test]
+fn test_return_annotation_string() {
+    assert_eq!(run("fn greet() -> string { return \"hello\" } len(greet())"), 5);
+}
+
+#[test]
+fn test_return_annotation_last_expr() {
+    assert_eq!(run("fn double(n: int) -> int { n * 2 } double(21)"), 42);
+}
+
+#[test]
+fn test_return_annotation_bool_as_int() {
+    assert_eq!(run("fn is_pos(n: int) -> int { n > 0 } is_pos(5)"), 1);
+}
+
+#[test]
+fn test_return_annotation_struct() {
+    let src = "
+struct Point { x: int, y: int }
+fn make_point(x: int, y: int) -> Point { Point { x: x, y: y } }
+fn main() { let p = make_point(3, 7); p.x + p.y }";
+    assert_eq!(run(src), 10);
+}
+
+#[test]
+fn test_return_annotation_mismatch_is_error() {
+    let err = expect_error("fn bad() -> string { 42 } bad()");
+    assert!(err.contains("does not match"), "Expected mismatch error, got: {}", err);
+}
+
+#[test]
+fn test_return_annotation_unused_infers_from_body() {
+    // No annotation — should still infer String from body
+    assert_eq!(run("fn name() { \"aha\" } len(name())"), 3);
+}
