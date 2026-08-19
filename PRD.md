@@ -1,7 +1,7 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.2
-**Tanggal:** 2026-08-16
+**Versi PRD:** 0.3
+**Tanggal:** 2026-08-20
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
 
@@ -85,9 +85,9 @@ diinginkan web, aman tanpa GC seperti yang dituntut safety-critical.
   di PRD v0.3+).
 - ❌ **Tidak menjanjikan** fitur yang belum ada. README & docs wajib jujur
   soal status implementasi (prinsip anti-overclaim).
-- ❌ **Resource lifetimes tidak disentuh** sebelum semua fondasi (F1-F4)
-  benar-benar stabil. Ini adalah keputusan desain permanen — F5 dikerjakan
-  hanya setelah F1-F4 selesai dan terverifikasi.
+- ~~❌ **Resource lifetimes tidak disentuh** sebelum semua fondasi (F1-F4)
+  benar-benar stabil.~~ — ✅ F1-F4 selesai & stabil (2026-08-20), F5
+  sekarang aktif dengan fase 1 (compiler-inserted free, scope-based).
 
 ---
 
@@ -126,15 +126,15 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**Keputusan: F5 (Resource lifetimes) di-freeze sampai F1-F4 stabil.**
+**F1-F4 stabil di `main`. F5 (Resource lifetimes) aktif sejak 2026-08-20.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
 | **F2** | Type inference & annotations | ✅ Selesai |
-| **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test); Map<K,V> ✅ di `experimental/map` (21 test) |
+| **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (571+ test) |
 | **F4** | Module system & package manager | ✅ Selesai (v1.5.0) |
-| **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
+| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1: Compiler-inserted free (labs) |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 
@@ -143,9 +143,9 @@ ke main. Tidak ada loncatan.
 
 ---
 
-## 8. Kondisi Saat Ini (Status Jujur, per 2026-08-16)
+## 8. Kondisi Saat Ini (Status Jujur, per 2026-08-20)
 
-### ✅ Sudah berjalan (di `main`, v1.x — 336 test)
+### ✅ Sudah stabil (di `main` — 571+ test)
 - Lexer, Pratt parser dengan error reporting penuh
 - Tipe `Int` (i64), `Bool`, `String` (struct `{ptr, len}`)
 - Operator aritmatika, perbandingan, `&&`/`||`, prefix, assignment
@@ -157,34 +157,57 @@ ke main. Tidak ada loncatan.
 - Builtin: `print`, `print_str`, `abs`, `min`, `max`, `len`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
-- CI: `cargo check`, 363 test, `cargo build --release`
+- CI: `cargo check`, 571+ test, `cargo build --release`
 
-### 🆕 Baru di branch `development` (belum di-merge ke `main`)
+### ✅ F1 — Struct (v1.5.0, di `main`)
 - Struct codegen & field access at runtime
-- Struct field type hints dihormati di runtime (`name: string` → layout
-  `{i8*, i64}`; type-check literal; akses field bertipe benar)
-- **Generic functions (F3):** `fn max<T>(a: T, b: T) -> T` — monomorphization
-  per call site (`max_Int`, `max_String`, ...), 417+ test hijau
-- **List<T> (F3e):** heap-allocated dynamic array (malloc/realloc/free) dengan
-  builtins `list_new`, `list_new_string`, `list_push`, `list_get`,
-  `list_get_string`, `list_len`, `list_free` + index read/write `xs[i]` —
-  **440 tests hijau, di-merge dari `experimental/list` (2026-08-17)**
-- List<String> didukung penuh (elem struct `{i8*, i64}`)
-- **Fungsi generik atas List:** `fn first<T>(xs: List<T>) -> T` — binding
-  type param T dari hint `List<T>`; monomorphization `first_Int`/`first_String`
-- Fix scan pass: binding `let xs = list_new()`/`list_new_string()` ter-track
-  sebagai `List<Int>`/`List<String>` (param fungsi ter-infer dengan benar)
-- Main entry point return i64 (String/struct sebagai last expression → main
-  return 0) — menyelesaikan verify abort `ret { i8*, i64 } %listidx / i64`
+- Struct field type hints dihormati di runtime
+- Mutasi field (`p.x = 5`) — lvalue field access
+- Struct sebagai parameter & return value fungsi
 
-### ❌ Belum ada (target setelah stabilisasi)
-- ~~Mutasi field struct (`p.x = 5`)~~ — ✅ selesai
-- ~~Struct sebagai parameter & return value~~ — ✅ selesai
-- Type inference penuh (variabel & fungsi) + anotasi eksplisit — 🔜 F2
-- ~~Module system~~ (`use "file"`) — ✅ selesai (v1.5.0)
+### ✅ F2 — Type Inference & Annotations
+- Inferensi tipe `let` tanpa anotasi (default Int, List/Map dari builtins)
+- Inferensi tipe return fungsi dari body (String, Struct, if-branches)
+- Anotasi tipe eksplisit `let x: int = 5`
+- Return type annotation `fn f() -> int` + validation
+
+### ✅ F3 — Generics / Parametric Types
+- Fungsi generik `fn max<T>(a: T, b: T) -> T` — monomorphization per call site
+- List<T> (F3e) — heap-allocated dynamic array + builtins + index read/write
+- `fn first<T>(xs: List<T>) -> T` — type param T ter-bind dari hint `List<T>`
+- Map<K,V> — deterministic hash table (open addressing, splitmix64/FNV-1a)
+- Map 4 combos: `<Int,Int>`, `<String,Int>`, `<Int,String>`, `<String,String>`
+- 21 Map tests, grow-on-load-factor + rehash + free old buffer
+
+### ✅ F4 — Module System (v1.5.0)
+- `use "file"` — modularitas antar file (recursive import, AST merge, cycle detection)
+- [ ] Namespace & visibilitas (belum)
+- [ ] `aha install` — registry sederhana (belum)
+
+### 🔄 F5 — Resource Lifetimes (Phase 1 in progress)
+**Pendekatan: Compiler-inserted free** — compiler secara otomatis menyisipkan
+panggilan `free()` saat variabel keluar scope. Tidak ada borrow checker, tidak
+ada GC, tidak ada reference counting.
+
+| Phase | Strategi | Status |
+|-------|----------|--------|
+| Fase 1 | Scope-based free — auto free Map/List di akhir scope | 🔄 `labs` branch |
+| Fase 2 | Last-use analysis — free di titik usage terakhir | ⏳ |
+| Fase 3 | Escape analysis — handle alokasi yang di-return/passed | ⏳ |
+
+Detail Fase 1 (di `labs`):
+- `VarInfo` extended: `freed: bool`, `is_param: bool`
+- `mark_param()` — exclude function params dari auto-free
+- `mark_freed()` — prevent double-free jika user manual call `list_free`/`map_free`
+- `has_heap_locals()` — cek apakah scope punya variabel heap yang belum free
+- `insert_cleanup_inline()` — insert free calls sebelum return terminator
+- String free belum diimplementasi (ponytail: `string_free` belum ada sebagai builtin)
+
+### ❌ Belum ada
 - AOT compile ke native binary (saat ini JIT-only)
-- **Resource lifetimes** (ditunda — menunggu F1-F4 stabil)
 - Self-hosting (compiler AHA! ditulis dalam AHA!)
+- Namespace & visibilitas (F4 sisa)
+- `aha install` registry (F4 sisa)
 
 ---
 
@@ -203,21 +226,33 @@ ke main. Tidak ada loncatan.
 - [x] Anotasi tipe eksplisit `let x: int = 5` (20 tests)
 - [x] Return type annotation `fn f() -> int` + validation (7 tests)
 
-### F3. Generics / parametric types — 🔄 SEBAGIAN SELESAI
-- [x] Fungsi generik `fn max<T>(a: T, b: T) -> T` (di `development`, 417 test)
+### F3. Generics / parametric types — ✅ SELESAI
+- [x] Fungsi generik `fn max<T>(a: T, b: T) -> T` — monomorphization per call site
 - [x] Monomorphization via LLVM (tanpa runtime cost)
-- [x] List<T> (F3e) — heap-allocated dynamic array + builtins + index read/write (di `development`, 440 test)
+- [x] List<T> (F3e) — heap-allocated dynamic array + builtins + index read/write
 - [x] `fn first<T>(xs: List<T>) -> T` — type param T ter-bind dari hint `List<T>`
-- [x] Map<K,V> — deterministic hash table (open addressing, splitmix64/FNV-1a, 4 combos, 21 tests) di `experimental/map`
+- [x] Map<K,V> — deterministic hash table (open addressing, splitmix64/FNV-1a, 4 combos, 21 tests)
+- [x] Map grow-on-load-factor + rehash + free old buffer
+- [x] Semua sub-fitur di `main` (571+ test)
 
 ### F4. Module system & package manager — ✅ SELESAI (v1.5.0)
 - [x] `use "file"` — modularitas antar file (recursive import resolution, AST merge, cycle detection)
 - [ ] Namespace & visibilitas
 - [ ] `aha install` — registry sederhana
 
-### ⛔ F5. Resource lifetimes — DI-FREEZE
-Fitur ini TIDAK akan disentuh sampai F1-F4 selesai, stabil, dan terverifikasi
-oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
+### F5. Resource lifetimes — 🔄 AKTIF (Phase 1)
+**Approach: Compiler-inserted free** — compiler otomatis insert `free()` calls.
+Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
+
+- [x] Desain: scope-based → last-use → escape analysis (3 fase)
+- [x] `VarInfo` extended: `freed`, `is_param` flags
+- [x] `mark_param()` — exclude function params dari auto-free
+- [x] `mark_freed()` — prevent double-free
+- [x] `has_heap_locals()` — cek scope untuk variabel heap belum free
+- [x] `insert_cleanup_inline()` — insert free calls sebelum return terminator
+- [ ] `string_free` builtin (belum — ponytail: add when string lifetime mgmt)
+- [ ] Phase 2: last-use analysis
+- [ ] Phase 3: escape analysis (returned/passed allocations)
 
 ### ⏳ F6. Actor-model concurrency
 - [ ] Message passing antar actor
@@ -286,8 +321,8 @@ oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
 3. README & docs wajib jujur: fitur yang belum ada TIDAK diclaim.
 4. **Tanpa GC adalah komitmen desain permanen** — setiap keputusan arsitektur
    diuji terhadap prinsip ini.
-5. **F5 (resource lifetimes) di-freeze** sampai F1-F4 stabil. Tidak ada
-   pengecualian.
+5. **F5 (resource lifetimes) aktif** sejak 2026-08-20 setelah F1-F4 stabil.
+   Phase 1 (scope-based free) di `labs`; phase 2-3 menyusul bertahap.
 6. PRD ini diperbarui saat keputusan besar diambil (bukan per commit kecil).
 
 ---
@@ -298,3 +333,4 @@ oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
 |---------|-------|-----------|
 | 2026-08-16 | 0.1 | PRD awal: visi 3 pilar, status jujur, roadmap terpetakan, metrik |
 | 2026-08-16 | 0.2 | Visi besar: web → aerospace; "Hybrid" dijelaskan; F5 di-freeze; strategi stabilisasi; target aerospace & embedded |
+| 2026-08-20 | 0.3 | F1-F4 semua ✅ di `main` (571+ test). F5 unfreeze — aktif Phase 1 (compiler-inserted free, `labs`). F3 Map<K,V> ✅. Status jujur diperbarui. |
