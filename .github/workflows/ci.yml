@@ -28,7 +28,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
+          sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
       - name: Install Rust
