@@ -130,10 +130,10 @@ kompromi.
 
 | Fase | Fokus | Status |
 |------|-------|--------|
-| **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Sebagian, lanjut |
+| **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
 | **F2** | Type inference & annotations | 🔜 Berikutnya |
 | **F3** | Generics / parametric types | 🔄 Fungsi generik ✅ di `development`; List<T> ✅ di `development` (F3e, 440 test); Map<K,V> ✅ di `experimental/map` (21 test) |
-| **F4** | Module system & package manager | ⏳ Nanti |
+| **F4** | Module system & package manager | ✅ Selesai (v1.5.0) |
 | **F5** | Resource lifetimes (ownership) | ❌ DI-FREEZE — belum stabil |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
@@ -178,10 +178,10 @@ ke main. Tidak ada loncatan.
   return 0) — menyelesaikan verify abort `ret { i8*, i64 } %listidx / i64`
 
 ### ❌ Belum ada (target setelah stabilisasi)
-- Mutasi field struct (`p.x = 5`)
-- Type inference penuh (variabel & fungsi) + anotasi eksplisit
-- Generics / parametric types
-- Module system & package manager (`aha install`)
+- ~~Mutasi field struct (`p.x = 5`)~~ — ✅ selesai
+- ~~Struct sebagai parameter & return value~~ — ✅ selesai
+- Type inference penuh (variabel & fungsi) + anotasi eksplisit — 🔜 F2
+- ~~Module system~~ (`use "file"`) — ✅ selesai (v1.5.0)
 - AOT compile ke native binary (saat ini JIT-only)
 - **Resource lifetimes** (ditunda — menunggu F1-F4 stabil)
 - Self-hosting (compiler AHA! ditulis dalam AHA!)
@@ -190,11 +190,11 @@ ke main. Tidak ada loncatan.
 
 ## 9. Persyaratan Fungsional — Prioritas Stabilisasi
 
-### F1. Struct codegen & field access — ✅ SEBAGIAN SELESAI
+### F1. Struct codegen & field access — ✅ SELESAI
 - [x] Literal struct, akses field, type hint field, type-check literal
 - [x] Typed struct field layout (Int → i64, String → {i8*, i64})
-- [ ] Mutasi field (`p.x = 5`) — lvalue field access
-- [ ] Struct sebagai parameter & return value fungsi
+- [x] Mutasi field (`p.x = 5`) — lvalue field access (7 tests)
+- [x] Struct sebagai parameter & return value fungsi (6 tests)
 
 ### F2. Type inference & annotations
 - [x] Field struct bertipe (slice pertama, selesai di `development`)
@@ -209,8 +209,8 @@ ke main. Tidak ada loncatan.
 - [x] `fn first<T>(xs: List<T>) -> T` — type param T ter-bind dari hint `List<T>`
 - [x] Map<K,V> — deterministic hash table (open addressing, splitmix64/FNV-1a, 4 combos, 21 tests) di `experimental/map`
 
-### F4. Module system & package manager
-- [ ] `import "file.aha"` — modularitas antar file
+### F4. Module system & package manager — ✅ SELESAI (v1.5.0)
+- [x] `use "file"` — modularitas antar file (recursive import resolution, AST merge, cycle detection)
 - [ ] Namespace & visibilitas
 - [ ] `aha install` — registry sederhana
 
@@ -266,7 +266,7 @@ oleh CI. Fondasi harus benar dulu sebelum menyentuh ownership.
    dulu — demi kesederhanaan.
 2. **Parameter fungsi:** by-value atau by-reference? (menghindari copy struct
    besar; butuh definisi ownership untuk param).
-3. **Mutasi field struct:** kapan `p.x = 5` didukung? (prioritas F1).
+3. **Mutasi field struct:** ~~kapan `p.x = 5` didukung?~~ — ✅ selesai di v1.5.0.
 4. **String:** tetap immutable `{ptr, len}`? Atau ada tipe builder?
 5. **AOT native binary:** kapan dirilis? (saat ini JIT-only; `--emit-ir` sudah
    ada, tinggal object code + linker).
