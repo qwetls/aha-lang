@@ -232,9 +232,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::scan_expr_uses(&let_stmt.value, last_uses, idx);
             }
             ast::Statement::Return(ret) => {
-                if let Some(ref value) = ret.value {
-                    Self::scan_expr_uses(value, last_uses, idx);
-                }
+                Self::scan_expr_uses(&ret.return_value, last_uses, idx);
             }
             _ => {}
         }
@@ -264,8 +262,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::scan_block_uses(&while_expr.body, last_uses, idx);
             }
             ast::Expression::For(for_expr) => {
-                Self::scan_expr_uses(&for_expr.start, last_uses, idx);
-                Self::scan_expr_uses(&for_expr.end, last_uses, idx);
+                Self::scan_expr_uses(&for_expr.iterable, last_uses, idx);
                 Self::scan_block_uses(&for_expr.body, last_uses, idx);
             }
             ast::Expression::Call(call) => {
@@ -274,11 +271,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::scan_expr_uses(arg, last_uses, idx);
                 }
             }
-            ast::Expression::Assign(assign) => {
-                Self::scan_expr_uses(&assign.value, last_uses, idx);
-            }
             ast::Expression::Index(idx_expr) => {
-                Self::scan_expr_uses(&idx_expr.object, last_uses, idx);
+                Self::scan_expr_uses(&idx_expr.left, last_uses, idx);
                 Self::scan_expr_uses(&idx_expr.index, last_uses, idx);
             }
             ast::Expression::FieldAccess(fa) => {
@@ -289,7 +283,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::scan_expr_uses(val, last_uses, idx);
                 }
             }
-            ast::Expression::ArrayLiteral(arr) => {
+            ast::Expression::Array(arr) => {
                 for elem in &arr.elements {
                     Self::scan_expr_uses(elem, last_uses, idx);
                 }
