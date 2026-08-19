@@ -13,6 +13,7 @@ jobs:
   build-and-test:
     # Gunakan runner (mesin virtual) Ubuntu terbaru
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     # Langkah-langkah (steps) yang akan dijalankan
     steps:
@@ -26,11 +27,11 @@ jobs:
       - name: Install LLVM and Polly
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev || {
-            echo "apt-get failed, retrying with updated package lists..."
+          timeout 120 sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev || {
+            echo "First attempt failed, retrying..."
             sudo rm -rf /var/lib/apt/lists/*
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
+            timeout 120 sudo apt-get install -y --no-install-recommends llvm-14-dev clang-14 libpolly-14-dev
           }
 
       # Step 2: Install Rust toolchain (compiler, cargo, dll)
