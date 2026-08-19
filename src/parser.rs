@@ -239,10 +239,11 @@ impl Parser {
         }
 
         let path = self.current_token.literal.clone();
-        self.next_token(); // move past the string
 
-        // Optional semicolon
-        if self.current_token_is(TokenType::Semicolon) {
+        // Optional semicolon — consume if present, but do NOT advance past
+        // the string token. The parse_program loop calls next_token() after
+        // each statement, which handles the advance.
+        if self.peek_token_is(TokenType::Semicolon) {
             self.next_token();
         }
 
