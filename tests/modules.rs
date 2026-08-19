@@ -50,7 +50,7 @@ fn run_with_files(main_content: &str, files: &[(&str, &str)]) -> i64 {
 #[test]
 fn import_single_function() {
     let math = r#"
-fn add(a, b) {
+pub fn add(a, b) {
     a + b
 }
 "#;
@@ -64,10 +64,10 @@ add(3, 4)
 #[test]
 fn import_multiple_functions() {
     let utils = r#"
-fn double(x) {
+pub fn double(x) {
     x * 2
 }
-fn triple(x) {
+pub fn triple(x) {
     x * 3
 }
 "#;
@@ -85,14 +85,14 @@ double(5) + triple(5)
 #[test]
 fn import_mutual_recursion() {
     let math = r#"
-fn is_even(n) {
+pub fn is_even(n) {
     if n == 0 {
         1
     } else {
         is_odd(n - 1)
     }
 }
-fn is_odd(n) {
+pub fn is_odd(n) {
     if n == 0 {
         0
     } else {
@@ -114,11 +114,11 @@ is_even(4)
 #[test]
 fn import_struct() {
     let geo = r#"
-struct Point {
+pub struct Point {
     x: int
     y: int
 }
-fn make_point(px, py) {
+pub fn make_point(px, py) {
     Point { x: px, y: py }
 }
 "#;
@@ -137,7 +137,7 @@ p.x + p.y
 #[test]
 fn import_string_function() {
     let greet = r#"
-fn greet(name) {
+pub fn greet(name) {
     "hello " + name
 }
 "#;
@@ -156,12 +156,12 @@ len(s)
 #[test]
 fn import_multiple_files() {
     let math = r#"
-fn add(a, b) {
+pub fn add(a, b) {
     a + b
 }
 "#;
     let strings = r#"
-fn shout(s) {
+pub fn shout(s) {
     s + "!!!"
 }
 "#;
@@ -182,13 +182,13 @@ x + len(s)
 #[test]
 fn import_chain() {
     let base = r#"
-fn inc(x) {
+pub fn inc(x) {
     x + 1
 }
 "#;
     let mid = r#"
 use "base"
-fn double_inc(x) {
+pub fn double_inc(x) {
     inc(inc(x))
 }
 "#;
@@ -206,7 +206,7 @@ double_inc(5)
 #[test]
 fn import_with_semicolon() {
     let math = r#"
-fn add(a, b) {
+pub fn add(a, b) {
     a + b
 }
 "#;
