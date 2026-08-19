@@ -14,6 +14,8 @@ use std::collections::HashMap;
 struct VarInfo<'ctx> {
     ptr: PointerValue<'ctx>,
     var_type: AhaType,
+    freed: bool,
+    is_param: bool,
 }
 
 pub struct CodeGenerator<'ctx> {
@@ -116,7 +118,70 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn insert_variable(&mut self, name: String, ptr: PointerValue<'ctx>, var_type: AhaType) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, VarInfo { ptr, var_type });
+            scope.insert(name, VarInfo { ptr, var_type, freed: false, is_param: false });
+        }
+    }
+
+    /// Mark a variable as a function parameter (excluded from auto-free).
+    fn mark_param(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                info.is_param = true;
+                return;
+            }
+        }
+    }
+
+    /// Mark a variable as freed so automatic cleanup won't double-free.
+    fn mark_freed(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                info.freed = true;
+                return;
+            }
+        }
+    }
+
+    /// Check if current scope has any unfreed heap-allocated local variables.
+    /// Excludes function parameters — they're owned by the caller.
+    fn has_heap_locals(&self) -> bool {
+        if let Some(scope) = self.scopes.last() {
+            scope.values().any(|v| !v.is_param && !v.freed && matches!(
+                v.var_type,
+                AhaType::Map(_, _) | AhaType::List(_) | AhaType::String
+            ))
+        } else {
+            false
+        }
+    }
+
+    /// Insert free calls for all heap-allocated local variables directly
+    /// into the current basic block (no new blocks created).
+    /// Must be called BEFORE the return terminator is built.
+    fn insert_cleanup_inline(&mut self) {
+        if let Some(scope) = self.scopes.last() {
+            for (_, var_info) in scope {
+                if var_info.is_param || var_info.freed { continue; }
+                match &var_info.var_type {
+                    AhaType::Map(_, _) => {
+                        if let Some(f) = self.module.get_function("map_free") {
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "map_handle") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
+                        }
+                    }
+                    AhaType::List(_) => {
+                        if let Some(f) = self.module.get_function("list_free") {
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "list_handle") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
+                        }
+                    }
+                    // ponytail: string_free not yet declared as builtin —
+                    // add when string lifetime management is implemented.
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -2621,6 +2686,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             ast::Statement::Return(ret_stmt) => {
                 let typed_val = self.compile_expression(&ret_stmt.return_value)?;
+                if self.has_heap_locals() {
+                    self.insert_cleanup_inline();
+                }
                 self.builder.build_return(Some(&typed_val.value))
                     .map_err(|e| e.to_string())?;
             },
@@ -3093,6 +3161,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_store(alloca, param_value)
                     .map_err(|e| e.to_string())?;
                 self.insert_variable(param.value.clone(), alloca, aha_type.clone());
+                self.mark_param(&param.value);
             }
 
             let mut has_return = false;
@@ -3103,7 +3172,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 _ => self.i64_type.const_int(0, false).into(),
             };
-            
+
             for stmt in &func.body.statements {
                 if let ast::Statement::Return(_) = stmt {
                     self.compile_statement(stmt)?;
@@ -3116,8 +3185,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.compile_statement(stmt)?;
                 }
             }
-            
-            if !has_return {
+
+            if !has_return && self.has_heap_locals() {
+                self.insert_cleanup_inline();
+                self.builder.build_return(Some(&last_value))
+                    .map_err(|e| e.to_string())?;
+            } else if !has_return {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             }
@@ -3196,6 +3269,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         match func_name {
             "list_len" | "list_free" => {
+                if func_name == "list_free" {
+                    if let ast::Expression::Identifier(id) = &call.arguments[0] {
+                        self.mark_freed(&id.value);
+                    }
+                }
                 let args_meta: Vec<_> = [list_handle.into()].iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                 let function = *self.functions.get(func_name).expect("list builtin not declared");
                 let call_result = self.builder.build_call(function, &args_meta, "calltmp")
@@ -3304,6 +3382,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             "map_len" | "map_free" | "map_string_key_len" | "map_string_key_free"
             | "map_string_val_len" | "map_string_val_free"
             | "map_strings_len" | "map_strings_free" => {
+                if func_name.contains("free") {
+                    if let ast::Expression::Identifier(id) = &call.arguments[0] {
+                        self.mark_freed(&id.value);
+                    }
+                }
                 let args_meta: Vec<_> = [map_handle.into()]
                     .iter().map(|a: &inkwell::values::BasicValueEnum| (*a).into()).collect();
                 let function = *self.functions.get(func_name).expect("map builtin not declared");
@@ -3546,6 +3629,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_store(alloca, param_value)
                     .map_err(|e| e.to_string())?;
                 self.insert_variable(param.value.clone(), alloca, aha_type.clone());
+                self.mark_param(&param.value);
             }
 
             let mut has_return = false;
@@ -3570,7 +3654,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
-            if !has_return {
+            if !has_return && self.has_heap_locals() {
+                self.insert_cleanup_inline();
+                self.builder.build_return(Some(&last_value))
+                    .map_err(|e| e.to_string())?;
+            } else if !has_return {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             }
