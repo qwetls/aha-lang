@@ -134,6 +134,42 @@ person.name
 point.x
 ```
 
+### Modules (v1.5.0)
+
+Import functions and structs from another `.aha` file:
+
+```aha
+// math.aha
+fn add(a, b) {
+    a + b
+}
+
+struct Vector {
+    x: int,
+    y: int
+}
+```
+
+```aha
+// main.aha
+use "math"
+
+let sum = add(2, 3);   // 5
+let v = Vector { x: 1, y: 2 };
+```
+
+- `use "filename"` — no `.aha` extension needed
+- Resolves to the same directory as the importing file
+- Recursive: if `math.aha` itself uses `"helper"`, that is resolved too
+- Cycle detection prevents infinite import loops
+- All imported names are available directly in the current scope
+
+**Running multi-file programs:**
+
+```bash
+aha run main.aha --dir ./src
+```
+
 ---
 
 ## 🏗️ Architecture
@@ -176,15 +212,18 @@ Source Code (.aha)
 | While | ✅ | ✅ | ✅ |
 | For | ✅ | ✅ | ⏳ |
 | Functions | ✅ | ✅ | ✅ |
-| Structs | ✅ | ✅ | ⏳ |
+| Structs | ✅ | ✅ | ✅ |
+| Generics | ✅ | ✅ | ✅ |
+| Type Inference | ✅ | ✅ | ✅ |
+| Modules (`use`) | ✅ | ✅ | ✅ |
 
 ---
 
 ## 🔜 Coming Soon
 
+- **Package Manager**: `aha install` for dependency management
 - **Resource Lifetimes**: Memory safety without GC
 - **Actor Model**: Safe concurrency
-- **Package Manager**: Dependency management
 
 ---
 

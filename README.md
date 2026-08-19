@@ -28,6 +28,7 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **🔢 Boolean Algebra That Composes:** All boolean-producing operators (`==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`) return `Int` `0`/`1` — so logic results flow straight into arithmetic: `is_even(n) * 100` just works.
 - **📦 Strings Done Right:** Strings are a real `{pointer, length}` struct — safe concatenation, `==`/`!=` comparison, and an O(1) `len()` builtin.
 - **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
+- **🔗 Module System:** `use "file"` imports functions and structs from another `.aha` file — recursive resolution, cycle detection, zero config.
 - **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 336+ tests on every commit.
 
 ---
@@ -65,6 +66,7 @@ cargo run --release -- --file example.aha
 | Option | Description |
 |--------|-------------|
 | `--file <path>` | Source file to compile and execute |
+| `--dir <path>` | Directory for module resolution (default: `.`) |
 | `--emit-ir <path>` | Save the generated LLVM IR to a file |
 | `--version` | Print the compiler version |
 | `--help` | Show usage information |
@@ -199,6 +201,22 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 | `len(string)` | Length in O(1) |
 | `abs(x)`, `min(a, b)`, `max(a, b)` | Numeric helpers |
 
+### Modules (v1.5.0)
+
+Import functions and structs from another `.aha` file:
+
+```aha
+use "math"
+use "utils"
+
+let result = add(2, 3);
+```
+
+- `use "math"` resolves to `math.aha` in the same directory
+- Imports are recursive — if `math.aha` uses `"helper"`, that file is resolved too
+- Cycle detection prevents infinite loops
+- CLI: `aha run main.aha --dir ./src`
+
 ---
 
 ## 🗺️ Roadmap
@@ -217,14 +235,16 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 - [x] JIT execution via LLVM
 - [x] CLI (`--file`, `--emit-ir`, `--version`)
 - [x] VS Code syntax-highlighting extension (`editors/vscode`)
+- [x] Module system: `use "file"` for multi-file compilation (v1.5.0)
 - [x] CI: `cargo check`, 336+ tests, `cargo build --release`
 
 ### 🚧 Planned (Phase 2)
 
-- [ ] Struct codegen & field access at runtime (currently parsed only)
-- [ ] Type inference & annotations
-- [ ] Generics / parametric types
-- [ ] Module system & package manager (`aha install`)
+- [x] Struct codegen & field access at runtime
+- [x] Type inference & annotations
+- [x] Generics / parametric types
+- [x] Module system (`use "file"` imports, multi-file compilation) — v1.5.0
+- [ ] Package manager (`aha install`)
 - [ ] Resource lifetimes — safe manual memory management, no GC overhead
 - [ ] Actor-model concurrency (message passing, async/await)
 - [ ] Self-hosting — the AHA! compiler written in AHA!
