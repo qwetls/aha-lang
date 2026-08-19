@@ -5,11 +5,12 @@ use std::fs;
 use aha_lang::lexer::Lexer;
 use aha_lang::parser::Parser as AhaParser;
 use aha_lang::codegen::CodeGenerator;
+use aha_lang::compiler::Compiler;
 use inkwell::context::Context;
 
-/// AHA! Lang Compiler v1.4
+/// AHA! Lang Compiler v1.5
 #[derive(Parser, Debug)]
-#[command(author = "AHA! Lang Team", version = "1.4.0", about = "AHA! Lang Compiler", long_about = None)]
+#[command(author = "AHA! Lang Team", version = "1.5.0", about = "AHA! Lang Compiler", long_about = None)]
 struct Args {
     /// Source file to compile
     #[arg(short, long)]
@@ -22,42 +23,54 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    println!("--- AHA! COMPILER v1.4 ---");
+    println!("--- AHA! COMPILER v1.5 ---");
     println!("Reading file: {}", args.file);
 
-    let contents = fs::read_to_string(&args.file)
-        .expect("Failed to read file.");
+    // 0. RESOLVE IMPORTS (multi-file compilation)
+    println!("\n[0] RESOLVING IMPORTS...");
+    let search_dir = Compiler::parent_dir(&args.file);
+    let compiler = Compiler::new(vec![search_dir]);
 
-    // 1. LEXING
-    println!("\n[1] LEXING...");
-    let lexer = Lexer::new(contents);
-
-    // 2. PARSING
-    println!("[2] PARSING...");
-    let mut parser = AhaParser::new(lexer);
-    let program = parser.parse_program();
-
-    if !parser.errors.is_empty() {
-        eprintln!("\n[ERROR] Parsing failed with {} error(s):", parser.errors.len());
-        for error in parser.errors {
-            eprintln!("- {}", error);
+    let program = match compiler.compile(&args.file) {
+        Ok(program) => {
+            println!("Imports resolved!");
+            program
         }
-        return;
-    }
+        Err(errors) => {
+            eprintln!("\n[ERROR] Compilation failed with {} error(s):", errors.len());
+            for error in &errors {
+                eprintln!("- {}", error);
+            }
+            return;
+        }
+    };
+
+    // 1. LEXING & PARSING (already done during import resolution)
+    println!("[1] LEXING & PARSING...");
+
+    // For single-file programs (no imports), parse directly for better error messages
+    // For multi-file programs, the Compiler already parsed everything
+    let program = if program.statements.is_empty() {
+        // This shouldn't happen, but handle it
+        program
+    } else {
+        program
+    };
+
     println!("Parsing successful!");
 
-    // 3. CODE GENERATION
-    println!("[3] CODE GENERATION...");
+    // 2. CODE GENERATION
+    println!("[2] CODE GENERATION...");
     let context = Context::create();
     let mut codegen = CodeGenerator::new(&context);
-    
+
     if let Err(e) = codegen.compile(&program) {
         eprintln!("\n[ERROR] Code generation failed: {}", e);
         return;
     }
     println!("LLVM IR generated successfully!\n");
 
-    // 4. OUTPUT & EMIT IR
+    // 3. OUTPUT & EMIT IR
     println!("--- LLVM IR OUTPUT ---");
     codegen.print_llvm_ir();
     println!("----------------------\n");
@@ -72,8 +85,8 @@ fn main() {
         }
     }
 
-    // 5. EXECUTION (JIT)
-    println!("[4] EXECUTION (JIT)...");
+    // 4. EXECUTION (JIT)
+    println!("[3] EXECUTION (JIT)...");
     match codegen.run_jit() {
         Ok(result) => println!("Program executed successfully. Result: {}", result),
         Err(e) => eprintln!("[ERROR] Failed to execute program: {}", e),

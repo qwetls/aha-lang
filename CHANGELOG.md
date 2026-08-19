@@ -2,6 +2,15 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.0] — 2026-08-19
+
+### Added
+
+- **Module system (`use`):** `use "file"` imports all functions and structs from another `.aha` file into the current scope. Recursively resolves imports with cycle detection. Path resolution: `"math"` → `math.aha` in the same directory.
+- **Compiler orchestrator** (`src/compiler.rs`): multi-file compilation that parses imported files, merges their ASTs, and compiles everything as a single LLVM module.
+- **New keyword:** `use` — 14th keyword in the language.
+- **Test suite:** 10 new module tests covering single import, multiple imports, mutual recursion across files, struct imports, string functions, chain imports, semicolon syntax, and empty imports.
+
 ## [1.4.9] — 2026-08-19
 
 ### Fixed

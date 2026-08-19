@@ -7,7 +7,7 @@ use crate::ast::{
     StringLiteral, PrefixExpression, InfixExpression, LetStatement, ReturnStatement,
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
     IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess,
-    AssignmentExpression, FunctionLiteral,
+    AssignmentExpression, FunctionLiteral, ImportStatement,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -133,6 +133,7 @@ impl Parser {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Struct => self.parse_struct_definition(),
+            TokenType::Use => self.parse_use_statement(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -222,6 +223,30 @@ impl Parser {
         }
 
         Expression::StructLiteral(StructLiteral { name, fields })
+    }
+
+    /// Parse a `use "file"` statement.
+    /// Syntax: `use "path/to/file"` — imports all functions and structs from the file.
+    fn parse_use_statement(&mut self) -> Option<Statement> {
+        self.next_token(); // Skip 'use'
+
+        if !self.current_token_is(TokenType::String) {
+            self.errors.push(format!(
+                "Expected file path string after 'use', got '{}'",
+                self.current_token.literal
+            ));
+            return None;
+        }
+
+        let path = self.current_token.literal.clone();
+        self.next_token(); // move past the string
+
+        // Optional semicolon
+        if self.current_token_is(TokenType::Semicolon) {
+            self.next_token();
+        }
+
+        Some(Statement::Import(ImportStatement { path }))
     }
 
     fn parse_let_statement(&mut self) -> Option<Statement> {

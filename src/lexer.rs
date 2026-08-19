@@ -142,6 +142,7 @@ impl Lexer {
             "break" => TokenType::Break,
             "continue" => TokenType::Continue,
             "struct" => TokenType::Struct,
+            "use" => TokenType::Use,
             _ => TokenType::Identifier,
         }
     }

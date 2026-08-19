@@ -190,6 +190,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&ret_stmt.return_value);
                 }
                 ast::Statement::Struct(_) => {}
+                ast::Statement::Import(_) => {}
             }
         }
     }
@@ -2614,6 +2615,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             ast::Statement::Struct(_struct_def) => {
                 // Struct definitions are compile-time metadata
+            }
+            ast::Statement::Import(_) => {
+                // Import statements are handled by the compiler orchestrator
             }
         }
         Ok(())

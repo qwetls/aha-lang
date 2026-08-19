@@ -23,6 +23,7 @@ pub enum TokenType {
     Break,
     Continue,
     Struct,
+    Use,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -206,6 +207,7 @@ pub enum Statement {
     Return(ReturnStatement),
     Expression(ExpressionStatement),
     Struct(StructDefinition),
+    Import(ImportStatement),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +232,13 @@ pub struct ExpressionStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockStatement {
     pub statements: Vec<Statement>,
+}
+
+// --- Import Statement ---
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStatement {
+    /// The file path string literal, e.g. "math" or "utils/helper"
+    pub path: String,
 }
 
 // --- Root Node ---
