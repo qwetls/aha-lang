@@ -126,17 +126,18 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F3 stabil di `main`. F4 module system selesai, package manager & namespace belum. F5 aktif sejak 2026-08-20.**
+**F1-F3 stabil di `main`. F4 namespace belum. F5 Phase 1 selesai.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
 | **F2** | Type inference & annotations | ✅ Selesai |
-| **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (571+ test) |
-| **F4** | Module system & package manager | ⚠️ `use "file"` ✅ (v1.5.0); namespace & `aha install` belum |
-| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1: Compiler-inserted free (f5-ownership branch) |
+| **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (581+ test) |
+| **F4** | Module system — namespace & visibilitas | ⚠️ `use "file"` ✅ (v1.5.0); namespace & visibilitas belum |
+| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1 ✅ (scope-based auto-free); Phase 2-3 belum |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
+| **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
 
 Setiap langkah: development → test → CI hijau → review → (jika mantap) merge
 ke main. Tidak ada loncatan.
@@ -181,8 +182,7 @@ ke main. Tidak ada loncatan.
 
 ### ⚠️ F4 — Module System (partial, v1.5.0)
 - `use "file"` — modularitas antar file (recursive import, AST merge, cycle detection) ✅
-- [ ] Namespace & visibilitas (belum)
-- [ ] `aha install` — registry sederhana (belum)
+- [ ] Namespace & visibilitas (`pub`, `module::name` prefix) — belum
 
 ### 🔄 F5 — Resource Lifetimes (Phase 1 in progress)
 **Pendekatan: Compiler-inserted free** — compiler secara otomatis menyisipkan
@@ -207,7 +207,7 @@ Detail Fase 1 (di `labs`):
 - AOT compile ke native binary (saat ini JIT-only)
 - Self-hosting (compiler AHA! ditulis dalam AHA!)
 - Namespace & visibilitas (F4 sisa)
-- `aha install` registry (F4 sisa)
+- Package manager `aha install` (F8 — setelah AOT + komunitas)
 
 ---
 
@@ -235,10 +235,10 @@ Detail Fase 1 (di `labs`):
 - [x] Map grow-on-load-factor + rehash + free old buffer
 - [x] Semua sub-fitur di `main` (571+ test)
 
-### F4. Module system & package manager — ✅ SELESAI (v1.5.0)
+### F4. Module system — ⚠️ PARTIAL (v1.5.0)
 - [x] `use "file"` — modularitas antar file (recursive import resolution, AST merge, cycle detection)
-- [ ] Namespace & visibilitas
-- [ ] `aha install` — registry sederhana
+- [ ] Namespace & visibilitas (`pub`, `module::name` prefix)
+- [ ] ~~`aha install` — registry sederhana~~ → dipindah ke F8 (setelah AOT binary + komunitas)
 
 ### F5. Resource lifetimes — 🔄 AKTIF (Phase 1)
 **Approach: Compiler-inserted free** — compiler otomatis insert `free()` calls.
@@ -333,4 +333,5 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 |---------|-------|-----------|
 | 2026-08-16 | 0.1 | PRD awal: visi 3 pilar, status jujur, roadmap terpetakan, metrik |
 | 2026-08-16 | 0.2 | Visi besar: web → aerospace; "Hybrid" dijelaskan; F5 di-freeze; strategi stabilisasi; target aerospace & embedded |
-| 2026-08-20 | 0.3 | F1-F4 semua ✅ di `main` (571+ test). F5 unfreeze — aktif Phase 1 (compiler-inserted free, `labs`). F3 Map<K,V> ✅. Status jujur diperbarui. |
+| 2026-08-20 | 0.3 | F1-F3 semua ✅ di `main`. F5 unfreeze — Phase 1 selesai. F4: `use "file"` ✅, namespace belum. `aha install` dipindah ke F8 (post-AOT). |
+| 2026-08-20 | 0.3.1 | F5 Phase 1 merged (compiler-inserted free, 581+ test). `aha install` dipindah dari F4 ke F8 — terlalu dini tanpa binary release & komunitas. |

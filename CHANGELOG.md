@@ -2,11 +2,18 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.2] — 2026-08-20
+
+### Changed
+
+- **PRD roadmap restructure:** `aha install` (package manager) moved from F4 to new F8 — too early without AOT binary release and community. F4 now scoped to namespace & visibilitas only.
+- **PRD v0.3.1:** F5 Phase 1 confirmed merged (compiler-inserted free, 581+ tests). F4 status clarified as partial.
+
 ## [1.5.1] — 2026-08-20
 
 ### Changed
 
-- **PRD v0.3:** F1-F4 all marked ✅ on `main` (571+ test). F5 (resource lifetimes) unfrozen — now active with Phase 1 (compiler-inserted free, scope-based) on `labs` branch. F3 Map<K,V> confirmed merged. Test counts updated throughout. Current status rewritten to reflect all features on `main`.
+- **PRD v0.3:** F1-F3 all ✅ on `main`. F5 unfrozen — Phase 1 (compiler-inserted free, scope-based). F4: `use "file"` done, namespace & package manager pending. F3 Map<K,V> confirmed merged. Test counts updated.
 
 ## [1.5.0] — 2026-08-19
 
