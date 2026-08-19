@@ -100,13 +100,14 @@ impl Compiler {
 
         // Extract imports and collect other statements
         let mut imports = Vec::new();
+        let mut file_stmts = Vec::new();
         for stmt in &program.statements {
             match stmt {
                 Statement::Import(import) => {
                     imports.push(import.path.clone());
                 }
                 _ => {
-                    all_statements.push(stmt.clone());
+                    file_stmts.push(stmt.clone());
                 }
             }
         }
@@ -115,6 +116,9 @@ impl Compiler {
         for import_path in &imports {
             self.compile_file(import_path, visited, all_statements, errors);
         }
+
+        // Append this file's own statements after imports
+        all_statements.extend(file_stmts);
     }
 
     /// Resolve a `use` path to an absolute file path.
