@@ -185,6 +185,128 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Insert a free call for a specific variable.
+    fn insert_free_for_var(&mut self, name: &str) {
+        if let Some(scope) = self.scopes.last() {
+            if let Some(var_info) = scope.get(name) {
+                if var_info.is_param || var_info.freed { return; }
+                match &var_info.var_type {
+                    AhaType::Map(_, _) => {
+                        if let Some(f) = self.module.get_function("map_free") {
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "map_cleanup") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
+                        }
+                        self.mark_freed(name);
+                    }
+                    AhaType::List(_) => {
+                        if let Some(f) = self.module.get_function("list_free") {
+                            if let Ok(handle) = self.builder.build_load(var_info.ptr, "list_cleanup") {
+                                let _ = self.builder.build_call(f, &[handle.into()], "cleanup");
+                            }
+                        }
+                        self.mark_freed(name);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Pre-scan: find the last statement index where each heap variable is used.
+    /// Returns a map of variable name → last-use statement index.
+    fn find_last_uses(body: &[ast::Statement]) -> std::collections::HashMap<String, usize> {
+        let mut last_uses: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (idx, stmt) in body.iter().enumerate() {
+            Self::scan_stmt_uses(stmt, &mut last_uses, idx);
+        }
+        last_uses
+    }
+
+    fn scan_stmt_uses(stmt: &ast::Statement, last_uses: &mut std::collections::HashMap<String, usize>, idx: usize) {
+        match stmt {
+            ast::Statement::Expression(expr_stmt) => {
+                Self::scan_expr_uses(&expr_stmt.expression, last_uses, idx);
+            }
+            ast::Statement::Let(let_stmt) => {
+                Self::scan_expr_uses(&let_stmt.value, last_uses, idx);
+            }
+            ast::Statement::Return(ret) => {
+                if let Some(ref value) = ret.value {
+                    Self::scan_expr_uses(value, last_uses, idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn scan_expr_uses(expr: &ast::Expression, last_uses: &mut std::collections::HashMap<String, usize>, idx: usize) {
+        match expr {
+            ast::Expression::Identifier(id) => {
+                last_uses.insert(id.value.clone(), idx);
+            }
+            ast::Expression::Infix(infix) => {
+                Self::scan_expr_uses(&infix.left, last_uses, idx);
+                Self::scan_expr_uses(&infix.right, last_uses, idx);
+            }
+            ast::Expression::Prefix(prefix) => {
+                Self::scan_expr_uses(&prefix.right, last_uses, idx);
+            }
+            ast::Expression::If(if_expr) => {
+                Self::scan_expr_uses(&if_expr.condition, last_uses, idx);
+                Self::scan_block_uses(&if_expr.consequence, last_uses, idx);
+                if let Some(ref alt) = if_expr.alternative {
+                    Self::scan_block_uses(alt, last_uses, idx);
+                }
+            }
+            ast::Expression::While(while_expr) => {
+                Self::scan_expr_uses(&while_expr.condition, last_uses, idx);
+                Self::scan_block_uses(&while_expr.body, last_uses, idx);
+            }
+            ast::Expression::For(for_expr) => {
+                Self::scan_expr_uses(&for_expr.start, last_uses, idx);
+                Self::scan_expr_uses(&for_expr.end, last_uses, idx);
+                Self::scan_block_uses(&for_expr.body, last_uses, idx);
+            }
+            ast::Expression::Call(call) => {
+                Self::scan_expr_uses(&call.function, last_uses, idx);
+                for arg in &call.arguments {
+                    Self::scan_expr_uses(arg, last_uses, idx);
+                }
+            }
+            ast::Expression::Assign(assign) => {
+                Self::scan_expr_uses(&assign.value, last_uses, idx);
+            }
+            ast::Expression::Index(idx_expr) => {
+                Self::scan_expr_uses(&idx_expr.object, last_uses, idx);
+                Self::scan_expr_uses(&idx_expr.index, last_uses, idx);
+            }
+            ast::Expression::FieldAccess(fa) => {
+                Self::scan_expr_uses(&fa.object, last_uses, idx);
+            }
+            ast::Expression::StructLiteral(sl) => {
+                for (_, val) in &sl.fields {
+                    Self::scan_expr_uses(val, last_uses, idx);
+                }
+            }
+            ast::Expression::ArrayLiteral(arr) => {
+                for elem in &arr.elements {
+                    Self::scan_expr_uses(elem, last_uses, idx);
+                }
+            }
+            ast::Expression::Assignment(assign) => {
+                Self::scan_expr_uses(&assign.value, last_uses, idx);
+            }
+            _ => {} // literals, module access — no heap var uses
+        }
+    }
+
+    fn scan_block_uses(block: &ast::BlockStatement, last_uses: &mut std::collections::HashMap<String, usize>, idx: usize) {
+        for stmt in &block.statements {
+            Self::scan_stmt_uses(stmt, last_uses, idx);
+        }
+    }
+
     /// Pre-pass: walk all statements to find call expressions and infer
     /// parameter types. If a string literal is passed as argument N,
     /// param N is marked as String.
@@ -3193,6 +3315,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.mark_param(&param.value);
             }
 
+            // Pre-scan: find last-use points for each heap variable
+            let last_uses = Self::find_last_uses(&func.body.statements);
+
             let mut has_return = false;
             let mut last_value: BasicValueEnum<'ctx> = match &return_type {
                 AhaType::String => self.string_type.const_zero().into(),
@@ -3202,7 +3327,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 _ => self.i64_type.const_int(0, false).into(),
             };
 
-            for stmt in &func.body.statements {
+            for (stmt_idx, stmt) in func.body.statements.iter().enumerate() {
                 if let ast::Statement::Return(_) = stmt {
                     self.compile_statement(stmt)?;
                     has_return = true;
@@ -3212,6 +3337,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     last_value = tv.value;
                 } else {
                     self.compile_statement(stmt)?;
+                }
+                // Phase 2: insert free calls at last-use points
+                for (var_name, &last_idx) in &last_uses {
+                    if last_idx == stmt_idx {
+                        self.insert_free_for_var(var_name);
+                    }
                 }
             }
 
@@ -3662,6 +3793,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.mark_param(&param.value);
             }
 
+            // Pre-scan: find last-use points for each heap variable
+            let last_uses = Self::find_last_uses(&generic.body.statements);
+
             let mut has_return = false;
             let mut last_value: BasicValueEnum<'ctx> = match &return_type {
                 AhaType::String => self.string_type.const_zero().into(),
@@ -3671,7 +3805,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 _ => self.i64_type.const_int(0, false).into(),
             };
 
-            for stmt in &generic.body.statements {
+            for (stmt_idx, stmt) in generic.body.statements.iter().enumerate() {
                 if let ast::Statement::Return(_) = stmt {
                     self.compile_statement(stmt)?;
                     has_return = true;
@@ -3681,6 +3815,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     last_value = tv.value;
                 } else {
                     self.compile_statement(stmt)?;
+                }
+                // Phase 2: insert free calls at last-use points
+                for (var_name, &last_idx) in &last_uses {
+                    if last_idx == stmt_idx {
+                        self.insert_free_for_var(var_name);
+                    }
                 }
             }
 

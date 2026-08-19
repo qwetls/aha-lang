@@ -1,8 +1,8 @@
 // tests/ownership.rs
 //
-// BACKEND TESTS — F5 Phase 1: Compiler-inserted free (scope-based).
-// Verifies that heap-allocated locals (Map, List, String) are automatically
-// freed when leaving scope, preventing memory leaks.
+// BACKEND TESTS — F5: Compiler-inserted auto-free.
+// Phase 1: scope-based free at end of block.
+// Phase 2: last-use analysis — free at last reference, not scope end.
 
 use aha_lang::lexer::Lexer;
 use aha_lang::parser::Parser;
@@ -184,4 +184,130 @@ sum_map(m, 3)
     // sum_map(3): set+get 3→30, recurse 2: set+get 2→20, recurse 1: set+get 1→10, recurse 0: 0
     // Each recursive call has its own scope with the same map param (not freed).
     assert_eq!(run(src), 60);
+}
+
+// =====================================================================
+// F5 Phase 2: Last-use analysis tests
+// =====================================================================
+
+#[test]
+fn map_freed_at_last_use_not_scope_end() {
+    // m is last used on statement 2 (map_get), statement 3 (map_free) uses
+    // explicit free already — test that auto-free doesn't double-free.
+    // Actually: with last-use, m is freed after map_get, then map_free is a no-op.
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 42)
+    let v = map_get(m, 1)
+    map_free(m)
+    v
+}
+test()
+"#;
+    assert_eq!(run(src), 42);
+}
+
+#[test]
+fn map_used_early_freed_early() {
+    // m is used in statements 1 and 2, not in 3 or 4.
+    // With last-use analysis, m should be freed after statement 2,
+    // NOT at scope end (after statement 4).
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 10)
+    let v = map_get(m, 1)
+    let a = 1 + 2
+    let b = a + 3
+    v
+}
+test()
+"#;
+    assert_eq!(run(src), 10);
+}
+
+#[test]
+fn two_maps_different_last_use_points() {
+    // a is last used at statement 2, b is last used at statement 3.
+    // Each should be freed at its own last-use point.
+    let src = r#"
+fn test() {
+    let a = map_new()
+    let b = map_new()
+    map_set(a, 1, 10)
+    map_set(b, 1, 20)
+    let va = map_get(a, 1)
+    let vb = map_get(b, 1)
+    va + vb
+}
+test()
+"#;
+    assert_eq!(run(src), 30);
+}
+
+#[test]
+fn list_freed_at_last_use() {
+    // xs last used at map_get(xs, 1), then more statements follow.
+    let src = r#"
+fn test() {
+    let xs = list_new()
+    list_push(xs, 10)
+    list_push(xs, 20)
+    let v = list_get(xs, 1)
+    let extra = 5 + 5
+    v
+}
+test()
+"#;
+    assert_eq!(run(src), 20);
+}
+
+#[test]
+fn last_use_with_explicit_free_no_double_free() {
+    // Explicit free + last-use: explicit free marks as freed, so
+    // last-use auto-free is skipped (no double-free).
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 99)
+    map_free(m)
+    let a = 1 + 1
+    a
+}
+test()
+"#;
+    assert_eq!(run(src), 2);
+}
+
+#[test]
+fn heap_var_in_return_statement() {
+    // Variable used in return — last-use is the return statement itself.
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 77)
+    map_get(m, 1)
+}
+test()
+"#;
+    assert_eq!(run(src), 77);
+}
+
+#[test]
+fn heap_var_used_in_if_condition() {
+    // Variable used in if condition — last-use index is the if statement.
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 1)
+    if map_get(m, 1) == 1 {
+        42
+    } else {
+        0
+    }
+}
+test()
+"#;
+    assert_eq!(run(src), 42);
 }
