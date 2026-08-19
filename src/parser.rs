@@ -449,6 +449,13 @@ impl Parser {
                     self.next_token(); // skip '::'
                     self.next_token(); // skip to name
                     let name = self.current_token.literal.clone();
+                    // Qualified struct literal: module::Name { field: value, ... }
+                    if self.peek_token_is(TokenType::LeftBrace)
+                        && self.struct_names.contains(&name)
+                    {
+                        let name_ident = Identifier { value: name };
+                        return self.parse_struct_literal(name_ident);
+                    }
                     return Expression::ModuleAccess(ModuleAccess {
                         module: ident.value,
                         name,
