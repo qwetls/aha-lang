@@ -2,6 +2,27 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.3] — 2026-08-20
+
+### Added
+
+- **F4 Namespace & Visibilitas:**
+  - `pub` keyword — lexer (`TokenType::Pub`), parser (`parse_pub_statement`), AST (`is_pub` on `FunctionLiteral` & `StructDefinition`).
+  - `::` token — `ColonColon` in lexer (peek-on-`:` like `..` handler).
+  - `ModuleAccess` expression — `module::name` qualified access in AST.
+  - Parser: `pub fn` / `pub struct` dispatch, `module::name` prefix parsing in identifier expressions.
+  - Codegen: `ModuleAccess` handled in `compile_expression`, `compile_call`, `scan_expr_for_calls`, `infer_expr_type_with_scope`.
+  - 10 namespace tests (`tests/namespace.rs`): pub fn/struct qualified access, flat access backward compat, private fn internal calls, mixed pub/private, string params, `::` syntax.
+- **PRD v0.3.2:** F4 namespace progress documented. Visibility filter deferred.
+
+### Changed
+
+- `compile_file` in `compiler.rs`: removed `is_main` parameter and `is_pub_item` filtering — all items from imports are included (backward compatible). `pub` flag stored in AST for future enforcement.
+
+### Known Limitations
+
+- Visibility filter not enforced: all imported items accessible regardless of `pub`. Deferred until struct literal parsing is implemented (needed for proper struct tests).
+
 ## [1.5.2] — 2026-08-20
 
 ### Changed
