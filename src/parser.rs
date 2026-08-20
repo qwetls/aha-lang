@@ -858,7 +858,13 @@ impl Parser {
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
             let pattern = self.parse_pattern();
 
-            if !self.expect_peek(TokenType::FatArrow) {
+            // parse_pattern leaves current_token on the token AFTER the
+            // pattern (the FatArrow `=>`). Check it directly, not peek.
+            if !self.current_token_is(TokenType::FatArrow) {
+                self.errors.push(format!(
+                    "Expected => after pattern, got {:?}",
+                    self.current_token.kind
+                ));
                 self.next_token();
                 continue;
             }
@@ -868,7 +874,6 @@ impl Parser {
             arms.push(MatchArm { pattern, body });
 
             if self.peek_token_is(TokenType::Comma) {
-                self.next_token(); // Skip body
                 self.next_token(); // Skip ','
             }
         }
@@ -908,6 +913,7 @@ impl Parser {
                 }
                 self.next_token();
             }
+            self.next_token(); // Skip ')'
             Pattern::EnumTuple(name, bindings)
         } else {
             self.next_token(); // Skip variant name
