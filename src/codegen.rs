@@ -3984,17 +3984,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             } else if !has_return {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
-            }
-            // Ensure entry block has a terminator. When the body ends with
-            // a return statement, compile_match_expression may have moved
-            // the builder to merge_block, leaving entry unterminated.
-            if entry_block.get_terminator().is_none() {
-                let current = self.builder.get_insert_block()
-                    .ok_or("No current block")?;
-                self.builder.position_at_end(entry_block);
-                self.builder.build_unconditional_branch(current)
-                    .map_err(|e| e.to_string())?;
-                self.builder.position_at_end(current);
+            } else {
+                // has_return = true: the return statement's build_return
+                // went into merge_block (after match). The entry block
+                // is still unterminated. Add build_return in entry block
+                // so LLVM has a valid entry point. This is dead code in
+                // practice (switch dispatches to arm blocks first).
+                if entry_block.get_terminator().is_none() {
+                    let return_val = self.i64_type.const_int(0, false);
+                    self.builder.position_at_end(entry_block);
+                    self.builder.build_return(Some(&return_val.into()))
+                        .map_err(|e| e.to_string())?;
+                }
             }
             Ok(())
         })();
