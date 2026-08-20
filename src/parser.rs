@@ -311,6 +311,7 @@ impl Parser {
                     }
                     self.next_token();
                 }
+                self.next_token(); // skip ')'
                 types
             } else {
                 Vec::new()
