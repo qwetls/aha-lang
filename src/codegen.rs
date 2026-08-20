@@ -785,7 +785,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return ty;
         }
 
-        let param_types = self.infer_param_types_immutable(func_name, &func.parameters);
+        let param_types = self.infer_param_types_immutable(func_name, &func.parameters, &func.param_type_hints);
 
         // Build a synthetic scope so infer_expr_type_with_scope can resolve params.
         let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
@@ -808,8 +808,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Immutable variant of infer_param_types for the pre-pass (when we
     /// cannot call the &mut self version). Reads from param_type_map.
-    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier], hints: &[Option<String>]) -> Vec<AhaType> {
         let mut types = vec![AhaType::Int; params.len()];
+        for (i, hint) in hints.iter().enumerate() {
+            if i < types.len() {
+                if let Some(h) = hint {
+                    types[i] = if self.enum_defs.contains_key(h.as_str()) {
+                        AhaType::Enum(h.clone())
+                    } else if self.struct_defs.contains_key(h.as_str()) {
+                        AhaType::Struct(h.clone())
+                    } else {
+                        AhaType::from_hint(h).unwrap_or(AhaType::Int)
+                    };
+                }
+            }
+        }
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
@@ -3723,8 +3736,23 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Infer parameter types by scanning call expressions in the program.
     /// If a call passes a string arg, that param is String. Otherwise Int.
-    fn infer_param_types(&mut self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+    fn infer_param_types(&mut self, func_name: &str, params: &[ast::Identifier], hints: &[Option<String>]) -> Vec<AhaType> {
         let mut types = vec![AhaType::Int; params.len()];
+        // Use type hints first (e.g. `d: Day` → Enum("Day"))
+        for (i, hint) in hints.iter().enumerate() {
+            if i < types.len() {
+                if let Some(h) = hint {
+                    types[i] = if self.enum_defs.contains_key(h.as_str()) {
+                        AhaType::Enum(h.clone())
+                    } else if self.struct_defs.contains_key(h.as_str()) {
+                        AhaType::Struct(h.clone())
+                    } else {
+                        AhaType::from_hint(h).unwrap_or(AhaType::Int)
+                    };
+                }
+            }
+        }
+        // Override with call-site inference when available
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
@@ -3747,7 +3775,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Infer param types from call sites: scan all call expressions
         // in already-compiled code for this function name
-        let param_aha_types = self.infer_param_types(&func_name, &func.parameters);
+        let param_aha_types = self.infer_param_types(&func_name, &func.parameters, &func.param_type_hints);
 
         // Determine return type — reuse the pre-declared type if present
         // (set by predeclare_functions), otherwise infer it now.
@@ -3758,7 +3786,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // If a return type annotation is present, validate it against the
         // body's inferred return type to catch mismatches early.
         if let Some(ref hint) = func.return_type_hint {
-            let param_aha_types_imm = self.infer_param_types_immutable(&func_name, &func.parameters);
+            let param_aha_types_imm = self.infer_param_types_immutable(&func_name, &func.parameters, &func.param_type_hints);
             let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
                 .map(|(i, p)| (p.value.clone(), param_aha_types_imm.get(i).cloned().unwrap_or(AhaType::Int)))
                 .collect();
@@ -4857,7 +4885,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let variants: Vec<(String, Vec<AhaType>)> = def.variants.iter()
                     .map(|v| {
                         let types: Vec<AhaType> = v.payload_types.iter()
-                            .map(|t| AhaType::from_hint(t).unwrap_or(AhaType::Int))
+                            .map(|t| {
+                                // Check if t is a known enum name (nested enum)
+                                if self.enum_defs.contains_key(t.as_str()) {
+                                    AhaType::Enum(t.clone())
+                                } else {
+                                    AhaType::from_hint(t).unwrap_or(AhaType::Int)
+                                }
+                            })
                             .collect();
                         (v.name.value.clone(), types)
                     })
@@ -4882,8 +4917,20 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn enum_llvm_type(&self, name: &str) -> Result<inkwell::types::StructType<'ctx>, String> {
         let variants = self.enum_defs.get(name)
             .ok_or_else(|| format!("Unknown enum type '{}'", name))?;
-        let max_payload = variants.iter()
-            .map(|(_, types)| types.len())
+        // Count total payload slots, expanding nested enums recursively.
+        let max_payload: usize = variants.iter()
+            .map(|(_, types)| -> usize {
+                types.iter().map(|t| match t {
+                    AhaType::Enum(inner) => {
+                        // Nested enum: tag + its own payload slots
+                        let inner_variants = self.enum_defs.get(inner).map_or(1, |v| {
+                            1 + v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                        });
+                        inner_variants
+                    }
+                    _ => 1,
+                }).sum()
+            })
             .max()
             .unwrap_or(0);
         let mut field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
@@ -4937,9 +4984,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             .into_struct_value();
 
         // Set payload fields (field 1, 2, ...).
+        let mut field_idx: u32 = 1;
         for (i, arg) in call.arguments.iter().enumerate() {
             let tv = self.compile_expression(arg)?;
-            // Type-check payload.
             let expected = &payload_types[i];
             if !Self::types_compatible(&tv.aha_type, expected) {
                 return Err(format!(
@@ -4947,9 +4994,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                     enum_name, variant_name, i, expected, tv.aha_type
                 ));
             }
-            val = self.builder.build_insert_value(val, tv.value, (i + 1) as u32, "payload")
-                .map_err(|e| e.to_string())?
-                .into_struct_value();
+            if let AhaType::Enum(_) = &tv.aha_type {
+                // Flatten nested enum: extract tag + payload fields as separate i64s
+                let inner_struct = tv.value.into_struct_value();
+                let inner_tag = self.builder.build_extract_value(inner_struct, 0, "inner_tag")
+                    .map_err(|e| e.to_string())?;
+                val = self.builder.build_insert_value(val, inner_tag, field_idx, "payload")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                field_idx += 1;
+                // Extract inner payload slots
+                let inner_variants = self.enum_defs.get(match &tv.aha_type {
+                    AhaType::Enum(n) => n.as_str(),
+                    _ => unreachable!(),
+                });
+                let inner_max_payload = inner_variants.map_or(0, |v| {
+                    v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                });
+                for j in 0..inner_max_payload {
+                    let slot = self.builder.build_extract_value(inner_struct, (j + 1) as u32, "inner_payload")
+                        .map_err(|e| e.to_string())?;
+                    val = self.builder.build_insert_value(val, slot, field_idx, "payload")
+                        .map_err(|e| e.to_string())?
+                        .into_struct_value();
+                    field_idx += 1;
+                }
+            } else {
+                val = self.builder.build_insert_value(val, tv.value, field_idx, "payload")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                field_idx += 1;
+            }
         }
 
         Ok(TypedValue::new(val.into(), AhaType::Enum(enum_name.to_string())))
@@ -4983,25 +5058,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(|e| e.to_string())?
             .into_int_value();
 
-        // Create blocks for each arm + default.
+        // Create blocks for each arm.
         let arm_count = m.arms.len();
         let mut arm_blocks = Vec::with_capacity(arm_count);
-        let mut has_default = false;
-        for arm in &m.arms {
-            if matches!(arm.pattern, ast::Pattern::Wildcard) {
-                has_default = true;
-            }
+        for _ in &m.arms {
             let bb = self.context.append_basic_block(current_fn, "match.arm");
             arm_blocks.push(bb);
         }
-        if !has_default {
-            return Err(format!(
-                "match on '{}' must have a wildcard '_' arm", enum_name
-            ));
-        }
 
         // Build switch cases: collect all (IntValue, BasicBlock) pairs.
-        let default_bb = *arm_blocks.last().unwrap();
+        // For exhaustive matches (no wildcard), default goes to merge_block
+        // (unreachable in practice — all variants are covered).
+        let default_bb = if let Some(wi) = m.arms.iter().position(|a| matches!(a.pattern, ast::Pattern::Wildcard)) {
+            arm_blocks[wi]
+        } else {
+            merge_block
+        };
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
         for (i, arm) in m.arms.iter().enumerate() {
             if let ast::Pattern::EnumUnit(name) | ast::Pattern::EnumTuple(name, _) = &arm.pattern {
@@ -5022,19 +5094,57 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Destructure bindings for tuple patterns.
             if let ast::Pattern::EnumTuple(name, bindings) = &arm.pattern {
                 let payload = self.variant_payload(&enum_name, name)?;
+                let mut field_idx: u32 = 1;
                 for (j, binding) in bindings.iter().enumerate() {
                     if j >= payload.len() { break; }
-                    let field_val = self.builder.build_extract_value(
-                        scrutinee.value.into_struct_value(),
-                        (j + 1) as u32,
-                        "destructure",
-                    ).map_err(|e| e.to_string())?;
-                    let ptr = self.builder.build_alloca(
-                        self.aha_type_to_llvm_type(&payload[j])?,
-                        binding,
-                    ).map_err(|e| e.to_string())?;
-                    self.builder.build_store(ptr, field_val).map_err(|e| e.to_string())?;
-                    self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                    if let AhaType::Enum(inner_name) = &payload[j] {
+                        // Reconstruct nested enum from flattened fields
+                        let inner_type = self.enum_llvm_type(inner_name)?;
+                        let mut inner_val = inner_type.const_zero();
+                        // Extract inner tag
+                        let inner_tag = self.builder.build_extract_value(
+                            scrutinee.value.into_struct_value(),
+                            field_idx,
+                            "inner_tag",
+                        ).map_err(|e| e.to_string())?;
+                        inner_val = self.builder.build_insert_value(inner_val, inner_tag, 0, "tag")
+                            .map_err(|e| e.to_string())?
+                            .into_struct_value();
+                        field_idx += 1;
+                        // Extract inner payload slots
+                        let inner_variants = self.enum_defs.get(inner_name.as_str());
+                        let inner_max_payload = inner_variants.map_or(0, |v| {
+                            v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                        });
+                        for k in 0..inner_max_payload {
+                            let slot = self.builder.build_extract_value(
+                                scrutinee.value.into_struct_value(),
+                                field_idx,
+                                "inner_payload",
+                            ).map_err(|e| e.to_string())?;
+                            inner_val = self.builder.build_insert_value(inner_val, slot, (k + 1) as u32, "payload")
+                                .map_err(|e| e.to_string())?
+                                .into_struct_value();
+                            field_idx += 1;
+                        }
+                        let ptr = self.builder.build_alloca(inner_type, binding)
+                            .map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, inner_val.into()).map_err(|e| e.to_string())?;
+                        self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                    } else {
+                        let field_val = self.builder.build_extract_value(
+                            scrutinee.value.into_struct_value(),
+                            field_idx,
+                            "destructure",
+                        ).map_err(|e| e.to_string())?;
+                        let ptr = self.builder.build_alloca(
+                            self.aha_type_to_llvm_type(&payload[j])?,
+                            binding,
+                        ).map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, field_val).map_err(|e| e.to_string())?;
+                        self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                        field_idx += 1;
+                    }
                 }
             }
 
