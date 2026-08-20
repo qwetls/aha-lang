@@ -3531,7 +3531,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let func_name = match call.function.as_ref() {
             ast::Expression::Identifier(id) => id.value.clone(),
             ast::Expression::ModuleAccess(ma) => ma.name.clone(),
-            _ => return Err(format!("Can only call named functions, got: {:?}", call.function)),
+            _ => return Err("Can only call named functions".to_string()),
         };
         // Generic function call → monomorphize (lazy per call-site type).
         if self.generic_defs.contains_key(&func_name) {

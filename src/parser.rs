@@ -311,9 +311,11 @@ impl Parser {
             }
         }
 
-        // current token is already '}' — consume it
-        if self.current_token_is(TokenType::RightBrace) {
-            self.next_token();
+        // current token should be '}' — check and consume it
+        if !self.current_token_is(TokenType::RightBrace) {
+            self.errors.push("Expected '}' to close spawn expression".to_string());
+        } else {
+            self.next_token(); // consume '}'
         }
 
         Expression::Spawn(SpawnExpression { actor_name, fields })
@@ -353,9 +355,11 @@ impl Parser {
             }
         }
 
-        // consume the closing '}'
-        if self.current_token_is(TokenType::RightBrace) {
-            self.next_token();
+        // current token should be '}' — check and consume it
+        if !self.current_token_is(TokenType::RightBrace) {
+            self.errors.push("Expected '}' to close struct literal".to_string());
+        } else {
+            self.next_token(); // consume '}'
         }
 
         Expression::StructLiteral(StructLiteral { name, fields })
