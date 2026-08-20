@@ -5067,12 +5067,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Build switch cases: collect all (IntValue, BasicBlock) pairs.
-        // For exhaustive matches (no wildcard), default goes to merge_block
-        // (unreachable in practice — all variants are covered).
+        // For exhaustive matches (no wildcard), default goes to an unreachable
+        // dead block — never executed but satisfies LLVM IR predecessor requirements.
         let default_bb = if let Some(wi) = m.arms.iter().position(|a| matches!(a.pattern, ast::Pattern::Wildcard)) {
             arm_blocks[wi]
         } else {
-            merge_block
+            let dead = self.context.append_basic_block(current_fn, "match.dead");
+            self.builder.position_at_end(dead);
+            self.builder.build_unreachable().map_err(|e| e.to_string())?;
+            dead
         };
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
         for (i, arm) in m.arms.iter().enumerate() {
