@@ -2,6 +2,24 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.7] — 2026-08-20
+
+### Added
+
+- **F6 Phase 1 — Actor-model concurrency (synchronous):**
+  - `actor` keyword — parser (`parse_actor_definition`), AST (`ActorDefinition`, `Actor` token), codegen (registers as struct).
+  - `spawn` expression — allocates actor struct on heap via `malloc`, returns heap pointer as i64 handle.
+  - `call(handle, msg)` — compiles to direct JIT call `handle(state, msg)`.
+  - `send(handle, msg)` — no-op in Phase 1 (fire-and-forget, Phase 2 will add mailbox + threading).
+  - Convention: `fn handle(state, msg) -> int` is the message handler.
+  - 4 actor tests: `actor_basic_call`, `actor_multiple_calls`, `actor_send_then_call`, `actor_state_ignored_by_handler`.
+
+### Design note
+
+- Phase 1 is purely synchronous — no `std::thread::spawn`, no runtime actor registry.
+- The handle IS the heap-allocated struct pointer (as i64). `call()` passes it directly to `handle()`.
+- Phase 2 will add threading, mpsc mailbox, and Condvar-based request-response.
+
 ## [1.5.6] — 2026-08-20
 
 ### Added
