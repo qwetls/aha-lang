@@ -348,10 +348,8 @@ impl Parser {
                 }
             }
         }
+        // ponytail: current stays on '}' — parse_program advances past it
 
-        if self.current_token_is(TokenType::RightBrace) {
-            self.next_token(); // skip '}'
-        }
         Some(Statement::Enum(EnumDefinition { name, is_pub, variants }))
     }
 
@@ -908,6 +906,7 @@ impl Parser {
                 self.next_token(); // advance to ','
                 self.next_token(); // advance past ',' to next arm
             } else if self.peek_token_is(TokenType::RightBrace) {
+                self.next_token(); // advance to '}'
                 break; // last arm, exit loop
             }
         }
