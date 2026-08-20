@@ -1093,18 +1093,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             self.compile_statement(statement)?;
         }
-        let return_val = if has_user_main {
-            self.i64_type.const_int(0, false).into()
+        if has_user_main {
+            // User's fn main() already has a return. The build_return below
+            // would be unreachable (second terminator). Skip it.
         } else {
-            match last_value {
+            let return_val = match last_value {
                 Some(tv) => match tv.aha_type {
                     AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
                     _ => tv.value,
                 },
                 None => self.i64_type.const_int(0, false).into(),
-            }
-        };
-        let _ = self.builder.build_return(Some(&return_val));
+            };
+            let _ = self.builder.build_return(Some(&return_val));
+        }
 
         Self::diag_mark("5: main compiled");
 
