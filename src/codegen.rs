@@ -3991,9 +3991,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // so LLVM has a valid entry point. This is dead code in
                 // practice (switch dispatches to arm blocks first).
                 if entry_block.get_terminator().is_none() {
-                    let return_val = self.i64_type.const_int(0, false);
+                    let return_val: inkwell::values::BasicValueEnum = self.i64_type.const_int(0, false).into();
                     self.builder.position_at_end(entry_block);
-                    self.builder.build_return(Some(&return_val.into()))
+                    self.builder.build_return(Some(&return_val))
                         .map_err(|e| e.to_string())?;
                 }
             }
