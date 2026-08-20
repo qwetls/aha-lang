@@ -5131,8 +5131,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Create blocks for each arm.
         let arm_count = m.arms.len();
         let mut arm_blocks = Vec::with_capacity(arm_count);
-        for _ in &m.arms {
-            let bb = self.context.append_basic_block(current_fn, "match.arm");
+        for i in 0..arm_count {
+            let bb = self.context.append_basic_block(current_fn, &format!("match.arm{}", i));
             arm_blocks.push(bb);
         }
 
