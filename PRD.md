@@ -187,7 +187,7 @@ ke main. Tidak ada loncatan.
 - `module::name` — `ModuleAccess` expression, handle di parser & codegen ✅
 - [x] Visibility filter — non-pub items from imports dropped during AST merge (v1.5.6)
 
-### 🔄 F5 — Resource Lifetimes (Phase 1 in progress)
+### ✅ F5 — Resource Lifetimes — SELESAI
 **Pendekatan: Compiler-inserted free** — compiler secara otomatis menyisipkan
 panggilan `free()` saat variabel keluar scope. Tidak ada borrow checker, tidak
 ada GC, tidak ada reference counting.
