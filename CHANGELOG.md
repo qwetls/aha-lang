@@ -13,6 +13,16 @@ All notable changes to AHA! Lang are documented in this file.
   - CLI: `--emit-exe <output>` emits object file + links with `cc` to produce native executable
   - Flow: rename user main → add C wrapper → emit .o → link with cc
 
+- **String builtins:**
+  - `int_to_string(int) -> string` — i64 to string via snprintf
+  - `string_to_int(string) -> int` — string to i64 via strtol
+  - `string_sub(string, start, len) -> string` — substring extraction
+  - `char_at(string, index) -> int` — character access (ASCII value)
+
+- **File I/O builtins:**
+  - `file_read(path) -> string` — reads entire file into string
+  - `file_write(path, content) -> int` — writes string to file, returns bytes written
+
 ## [1.5.8] — 2026-08-20
 
 ### Added

@@ -156,6 +156,8 @@ ke main. Tidak ada loncatan.
 - String: concat (malloc/memcpy), `==`/`!=` (strcmp), `len()` O(1)
 - Array literal & indexing
 - Builtin: `print`, `print_str`, `abs`, `min`, `max`, `len`
+- String builtins: `int_to_string`, `string_to_int`, `string_sub`, `char_at`
+- File I/O: `file_read`, `file_write`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
 - CI: `cargo check`, 571+ test, `cargo build --release`
