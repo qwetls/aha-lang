@@ -325,20 +325,33 @@ impl Parser {
 
             variants.push(EnumVariant { name: variant_name, payload_types });
 
-            // Advance to next token and check for comma separator.
-            eprintln!("[ENUM-DBG]   pre-advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
-            self.next_token();
-            eprintln!("[ENUM-DBG]   post-advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
-            if self.current_token_is(TokenType::Comma) {
-                self.next_token(); // skip ','
-                // Trailing comma: comma followed by '}' → break
-                if self.current_token_is(TokenType::RightBrace) {
+            // For tuple variants, current is already on comma after ')'.
+            // For unit variants, current is still on variant name — advance first.
+            if !payload_types.is_empty() {
+                // Tuple: current = comma, check directly
+                if self.current_token_is(TokenType::Comma) {
+                    self.next_token(); // skip ','
+                    if self.current_token_is(TokenType::RightBrace) {
+                        break;
+                    }
+                } else if self.current_token_is(TokenType::RightBrace) {
                     break;
                 }
-            } else if self.current_token_is(TokenType::RightBrace) {
-                break; // last variant, exit loop
+            } else {
+                // Unit: peek to check what's next
+                if self.peek_token_is(TokenType::Comma) {
+                    self.next_token(); // skip variant name
+                    self.next_token(); // skip ','
+                    if self.current_token_is(TokenType::RightBrace) {
+                        break;
+                    }
+                } else if self.peek_token_is(TokenType::RightBrace) {
+                    self.next_token(); // advance to '}'
+                    break; // last variant
+                } else {
+                    self.next_token(); // advance to next variant
+                }
             }
-            // Neither comma nor '}' → continue to next variant
         }
 
         eprintln!("[ENUM-DBG] exiting loop: current={:?}({}) variants={}", self.current_token.kind, self.current_token.literal, variants.len());
