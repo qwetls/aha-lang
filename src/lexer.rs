@@ -144,6 +144,8 @@ impl Lexer {
             "struct" => TokenType::Struct,
             "use" => TokenType::Use,
             "pub" => TokenType::Pub,
+            "actor" => TokenType::Actor,
+            "spawn" => TokenType::Spawn,
             _ => TokenType::Identifier,
         }
     }

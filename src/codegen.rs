@@ -424,6 +424,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&ret_stmt.return_value);
                 }
                 ast::Statement::Struct(_) => {}
+                ast::Statement::Actor(_) => {}
                 ast::Statement::Import(_) => {}
             }
         }
@@ -905,6 +906,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
         Self::diag_mark("2: c runtime declared");
+        self.declare_actor_runtime();
+        Self::diag_mark("2a: actor runtime declared");
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
         Self::diag_mark("3: list builtins created");
@@ -2890,6 +2893,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Statement::Import(_) => {
                 // Import statements are handled by the compiler orchestrator
             }
+            ast::Statement::Actor(_) => {
+                // Actor definitions are registered as structs (actor = struct + thread)
+            }
         }
         Ok(())
     }
@@ -2949,6 +2955,70 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .map_err(|e| e.to_string())?;
                 }
                 Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
+            },
+            ast::Expression::Spawn(spawn_expr) => {
+                // Phase 1: spawn ActorName { field: value, ... }
+                // Compiles to: actor_spawn(handler_fn_ptr, state_ptr)
+                // The handler function is a JIT function: fn(state: i64, msg: i64) -> i64
+                // Convention: handler is the function named "handle" in the module.
+                let struct_name = &spawn_expr.actor_name.value;
+                let fields = self.struct_defs.get(struct_name)
+                    .ok_or(format!("Unknown actor type: {}", struct_name))?;
+
+                let mut field_values = Vec::new();
+                for (field_name, _) in fields {
+                    let val = spawn_expr.fields.iter()
+                        .find(|(k, _)| &k.value == field_name)
+                        .map(|(_, v)| self.compile_expression(v))
+                        .transpose()?
+                        .unwrap_or_else(|| TypedValue::int(self.i64_type.const_int(0, false).into()));
+                    field_values.push(val);
+                }
+
+                // Allocate the struct on the heap.
+                let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+                let struct_size = self.i64_type.const_int((fields.len() * 8) as u64, false);
+                let ptr = self.builder.build_call(malloc_fn, &[struct_size.into()], "actor_alloc")
+                    .expect("malloc failed")
+                    .try_as_basic_value().left().expect("malloc void")
+                    .into_pointer_value();
+
+                let ptr_type = ptr.get_type();
+                for (i, val) in field_values.iter().enumerate() {
+                    let field_ptr = unsafe {
+                        self.builder.build_gep(
+                            ptr_type,
+                            ptr,
+                            &[self.i64_type.const_int(i as u64, false)],
+                            &format!("actor_field_{}", i),
+                        ).expect("gep failed")
+                    };
+                    self.builder.build_store(field_ptr, val.value).expect("store failed");
+                }
+
+                // state_ptr = i64 handle to the heap-allocated struct.
+                let state_ptr = self.builder.build_ptr_to_int(ptr, self.i64_type, "actor_state_ptr")
+                    .expect("ptr_to_int failed");
+
+                // Look up the handler function (convention: "handle").
+                let handler_fn = self.module.get_function("handle")
+                    .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
+                let handler_ptr = self.builder.build_ptr_to_int(
+                    handler_fn.as_global_value().as_pointer_value(),
+                    self.i64_type,
+                    "handler_ptr",
+                ).expect("ptr_to_int failed");
+
+                // Call actor_spawn(handler_ptr, state_ptr) -> handle.
+                let actor_spawn_fn = *self.functions.get("actor_spawn").expect("actor_spawn not declared");
+                let args_meta: Vec<BasicMetadataValueEnum> = vec![handler_ptr.into(), state_ptr.into()];
+                let call_result = self.builder.build_call(actor_spawn_fn, &args_meta, "actor_handle")
+                    .map_err(|e| e.to_string())?;
+                let handle = call_result.try_as_basic_value()
+                    .left()
+                    .ok_or("actor_spawn did not return a handle")?;
+
+                Ok(TypedValue::int(handle))
             },
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
@@ -3066,6 +3136,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         let memcmp_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i8_ptr.into(), i64_t.into()], false);
         let memcmp_fn = self.module.add_function("memcmp", memcmp_ty, None);
         self.functions.insert("memcmp".to_string(), memcmp_fn);
+    }
+
+    /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
+    fn declare_actor_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        // actor_spawn(fn_ptr: i64, init_state: i64) -> i64
+        let spawn_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let spawn_fn = self.module.add_function("actor_spawn", spawn_ty, None);
+        self.functions.insert("actor_spawn".to_string(), spawn_fn);
+        // actor_send(handle: i64, msg: i64) -> void
+        let send_ty = self.context.void_type().fn_type(&[i64_t.into(), i64_t.into()], false);
+        let send_fn = self.module.add_function("actor_send", send_ty, None);
+        self.functions.insert("actor_send".to_string(), send_fn);
+        // actor_call(handle: i64, msg: i64) -> i64
+        let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let call_fn = self.module.add_function("actor_call", call_ty, None);
+        self.functions.insert("actor_call".to_string(), call_fn);
     }
 
     /// Type-checked infix operator compilation
@@ -3459,6 +3546,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name.starts_with("map_") {
             return self.compile_map_call(&func_name, call);
         }
+        // F6 Actor builtins: send(handle, msg), call(handle, msg) -> i64
+        if func_name == "send" || func_name == "call" {
+            return self.compile_actor_call(&func_name, call);
+        }
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
             args.push(self.compile_expression(arg)?.value);
@@ -3479,6 +3570,32 @@ impl<'ctx> CodeGenerator<'ctx> {
             .left()
             .ok_or_else(|| "Function call did not return a value".to_string())?;
         Ok(TypedValue::new(val, ret_type))
+    }
+
+    /// Compile actor_send / actor_call builtin calls.
+    fn compile_actor_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        if call.arguments.len() != 2 {
+            return Err(format!("{} expects 2 arguments (handle, msg)", func_name));
+        }
+        let handle = self.compile_expression(&call.arguments[0])?.value;
+        let msg = self.compile_expression(&call.arguments[1])?.value;
+
+        let runtime_fn_name = if func_name == "send" { "actor_send" } else { "actor_call" };
+        let function = *self.functions.get(runtime_fn_name)
+            .ok_or_else(|| format!("{} not declared", runtime_fn_name))?;
+
+        let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
+        let call_result = self.builder.build_call(function, &args_meta, "actor_tmp")
+            .map_err(|e| e.to_string())?;
+
+        if func_name == "call" {
+            let val = call_result.try_as_basic_value()
+                .left()
+                .ok_or_else(|| "actor_call did not return a value".to_string())?;
+            Ok(TypedValue::int(val))
+        } else {
+            Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
+        }
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
@@ -4275,17 +4392,25 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// resolve layout and check types.
     fn register_structs(&mut self, statements: &[ast::Statement]) {
         for stmt in statements {
-            if let ast::Statement::Struct(def) = stmt {
-                let fields: Vec<(String, AhaType)> = def.fields.iter()
-                    .map(|f| {
-                        let t = f.type_hint.as_deref()
-                            .and_then(AhaType::from_hint)
-                            .unwrap_or(AhaType::Int);
-                        (f.name.value.clone(), t)
-                    })
-                    .collect();
-                self.struct_defs.insert(def.name.value.clone(), fields);
-            }
+            let fields = match stmt {
+                ast::Statement::Struct(def) => &def.fields,
+                ast::Statement::Actor(def) => &def.fields,
+                _ => continue,
+            };
+            let field_data: Vec<(String, AhaType)> = fields.iter()
+                .map(|f| {
+                    let t = f.type_hint.as_deref()
+                        .and_then(AhaType::from_hint)
+                        .unwrap_or(AhaType::Int);
+                    (f.name.value.clone(), t)
+                })
+                .collect();
+            let name = match stmt {
+                ast::Statement::Struct(def) => def.name.value.clone(),
+                ast::Statement::Actor(def) => def.name.value.clone(),
+                _ => unreachable!(),
+            };
+            self.struct_defs.insert(name, field_data);
         }
     }
 

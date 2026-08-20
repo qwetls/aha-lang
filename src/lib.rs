@@ -7,6 +7,7 @@ pub mod lexer;
 pub mod parser;
 pub mod codegen;
 pub mod compiler;
+pub mod runtime;
 
 // Re-exports for convenient access
 pub use lexer::Lexer;

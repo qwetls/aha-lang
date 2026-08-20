@@ -152,6 +152,7 @@ impl Parser {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Struct => self.parse_struct_definition(false),
+            TokenType::Actor => self.parse_actor_definition(false),
             TokenType::Use => self.parse_use_statement(),
             TokenType::Pub => self.parse_pub_statement(),
             _ => self.parse_expression_statement(),
@@ -163,8 +164,9 @@ impl Parser {
         match self.current_token.kind {
             TokenType::Fn => self.parse_function_statement(true),
             TokenType::Struct => self.parse_struct_definition(true),
+            TokenType::Actor => self.parse_actor_definition(true),
             _ => {
-                self.errors.push("Expected 'fn' or 'struct' after 'pub'".to_string());
+                self.errors.push("Expected 'fn', 'struct', or 'actor' after 'pub'".to_string());
                 None
             }
         }
@@ -220,9 +222,103 @@ impl Parser {
         Some(Statement::Struct(StructDefinition { name, is_pub, fields }))
     }
 
+    fn parse_actor_definition(&mut self, is_pub: bool) -> Option<Statement> {
+        self.next_token(); // Skip 'actor'
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected actor name".to_string());
+            return None;
+        }
+        let name = Identifier { value: self.current_token.literal.clone() };
+        self.struct_names.insert(name.value.clone());
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return None;
+        }
+
+        let mut fields = Vec::new();
+        self.next_token(); // Skip '{'
+
+        while !self.current_token_is(TokenType::RightBrace) {
+            if !self.current_token_is(TokenType::Identifier) {
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            let type_hint = if self.peek_token_is(TokenType::Colon) {
+                self.next_token(); // Skip field name
+                self.next_token(); // Skip ':'
+                self.parse_type_hint()
+            } else {
+                None
+            };
+
+            fields.push(StructField { name: field_name, type_hint });
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token();
+                self.next_token();
+            } else {
+                self.next_token();
+            }
+        }
+
+        if !self.expect_peek(TokenType::RightBrace) {
+            return None;
+        }
+
+        Some(Statement::Actor(ActorDefinition { name, is_pub, fields }))
+    }
+
+    /// Parse: spawn ActorName { field: value, ... }
+    /// Current token is `spawn` (already consumed by caller).
+    fn parse_spawn_expression(&mut self) -> Expression {
+        self.next_token(); // Skip 'spawn'
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected actor name after 'spawn'".to_string());
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+        let actor_name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+
+        let mut fields = Vec::new();
+        self.next_token(); // Skip '{'
+
+        while !self.current_token_is(TokenType::RightBrace)
+            && !self.current_token_is(TokenType::Eof)
+        {
+            if !self.current_token_is(TokenType::Identifier) {
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            if !self.expect_peek(TokenType::Colon) {
+                break;
+            }
+            self.next_token(); // Skip ':'
+            let value = self.parse_expression(Precedence::Lowest);
+            fields.push((field_name, value));
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // Skip value
+                self.next_token(); // Skip ','
+            } else {
+                self.next_token();
+            }
+        }
+
+        if !self.expect_peek(TokenType::RightBrace) {
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+
+        Expression::Spawn(SpawnExpression { actor_name, fields })
+    }
+
     // Parse a struct literal: TypeName { field: value, field2: value2 }
-    // The caller has already consumed the type name; current token is it.
-    fn parse_struct_literal(&mut self, name: Identifier) -> Expression {
         // current token is the type name; peek is '{'
         self.next_token(); // move to '{'
 
@@ -486,6 +582,7 @@ impl Parser {
             TokenType::Fn => self.parse_function_literal_with_pub(false),
             TokenType::Break => Expression::Break,
             TokenType::Continue => Expression::Continue,
+            TokenType::Spawn => self.parse_spawn_expression(),
             TokenType::LeftBracket => self.parse_array_literal(),
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();

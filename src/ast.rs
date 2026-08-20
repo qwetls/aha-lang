@@ -25,6 +25,8 @@ pub enum TokenType {
     Struct,
     Use,
     Pub,
+    Actor,
+    Spawn,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -102,6 +104,7 @@ pub enum Expression {
     StructLiteral(StructLiteral),
     FieldAccess(FieldAccess),
     ModuleAccess(ModuleAccess),
+    Spawn(SpawnExpression),
     Assignment(AssignmentExpression),
     Break,
     Continue,
@@ -211,6 +214,7 @@ pub enum Statement {
     Return(ReturnStatement),
     Expression(ExpressionStatement),
     Struct(StructDefinition),
+    Actor(ActorDefinition),
     Import(ImportStatement),
 }
 
@@ -275,6 +279,23 @@ pub struct StructLiteral {
 pub struct FieldAccess {
     pub object: Box<Expression>,
     pub field: Identifier,
+}
+
+// --- Actor-related Nodes ---
+
+/// `actor Name { field: type, ... }` — defines an actor type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorDefinition {
+    pub name: Identifier,
+    pub is_pub: bool,
+    pub fields: Vec<StructField>,
+}
+
+/// `spawn Name { field: expr, ... }` — creates an actor instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpawnExpression {
+    pub actor_name: Identifier,
+    pub fields: Vec<(Identifier, Expression)>,
 }
 
 // --- Module Access ---
