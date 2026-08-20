@@ -2,6 +2,21 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.8] — 2026-08-20
+
+### Added
+
+- **F6 Phase 2 — Threaded actors (mpsc + Condvar):**
+  - `actor_spawn(fn_ptr, init_state)` — spawns actor thread with mpsc mailbox + Condvar result slot
+  - `actor_send(handle, msg)` — fire-and-forget message via mpsc channel
+  - `actor_call(handle, msg)` — blocking request-response: sends msg, waits for handler result
+  - `add_global_mapping` in `run_jit()` — explicitly registers native functions with MCJIT execution engine
+  - **Key fix:** MCJIT cannot resolve `#[no_mangle]` symbols in test binaries; `add_global_mapping` bypasses this
+
+### Changed
+
+- F6 is now COMPLETE: Phase 1 (synchronous) + Phase 2 (threaded) both passing.
+
 ## [1.5.7] — 2026-08-20
 
 ### Added

@@ -135,7 +135,7 @@ kompromi.
 | **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (581+ test) |
 | **F4** | Module system — namespace & visibilitas | ✅ Selesai (v1.5.6) — `use "file"` + `pub` + `module::name` + visibility filter |
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
-| **F6** | Actor-model concurrency | ✅ Phase 1 selesai — actor keyword, spawn, call, send (synchronous JIT) |
+| **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 | **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
 
@@ -211,13 +211,18 @@ Detail Fase 1, 2 & 3 (di `development`):
 - 25 ownership tests (12 Phase 1 + 7 Phase 2 + 6 Phase 3)
 - String free belum diimplementasi (ponytail: `string_free` belum ada sebagai builtin)
 
-### ✅ F6 Phase 1 — Actor-Model Concurrency
-- `actor` keyword — parser, AST (`ActorDefinition`), codegen (treats actor as struct + handler)
-- `spawn` expression — allocates actor struct on heap, returns handle (heap ptr as i64)
-- `call(handle, msg)` — direct JIT call to `fn handle(state, msg) -> int`
-- `send(handle, msg)` — no-op in Phase 1 (fire-and-forget, Phase 2 will queue)
+### ✅ F6 — Actor-Model Concurrency — SELESAI
+| Phase | Strategi | Status |
+|-------|----------|--------|
+| Fase 1 | Synchronous JIT — malloc struct, direct handle() call | ✅ |
+| Fase 2 | Threaded — mpsc mailbox + Condvar + add_global_mapping | ✅ |
+
+- `actor` keyword — parser, AST (`ActorDefinition`), codegen
+- `spawn` — allocates struct on heap, passes handler fn_ptr + state to `actor_spawn`
+- `call(handle, msg)` — blocking request-response via Condvar
+- `send(handle, msg)` — fire-and-forget via mpsc channel
 - Convention: `fn handle(state, msg) -> int` is the message handler
-- Phase 1 is synchronous (no threads) — all dispatch is JIT-compiled
+- **Key fix:** `add_global_mapping` required for MCJIT to resolve `#[no_mangle]` symbols in test binaries
 - 4 actor tests passing on CI
 
 ### ❌ Belum ada
