@@ -311,11 +311,9 @@ impl Parser {
             }
         }
 
-        // current token should be '}' — check and consume it
+        // Don't consume '}' — parse_expression's while loop exits on it.
         if !self.current_token_is(TokenType::RightBrace) {
             self.errors.push("Expected '}' to close spawn expression".to_string());
-        } else {
-            self.next_token(); // consume '}'
         }
 
         Expression::Spawn(SpawnExpression { actor_name, fields })
@@ -355,11 +353,10 @@ impl Parser {
             }
         }
 
-        // current token should be '}' — check and consume it
+        // Don't consume '}' — parse_expression's while loop will see it via peek
+        // and exit. parse_program's next_token() advances past it.
         if !self.current_token_is(TokenType::RightBrace) {
             self.errors.push("Expected '}' to close struct literal".to_string());
-        } else {
-            self.next_token(); // consume '}'
         }
 
         Expression::StructLiteral(StructLiteral { name, fields })
