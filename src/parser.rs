@@ -327,8 +327,10 @@ impl Parser {
                 if self.current_token_is(TokenType::RightBrace) {
                     break;
                 }
+            } else if self.current_token_is(TokenType::RightBrace) {
+                break; // last variant, exit loop
             }
-            // No comma → next iteration sees '}' in while condition and exits
+            // Neither comma nor '}' → continue to next variant
         }
 
         if self.current_token_is(TokenType::RightBrace) {
