@@ -926,7 +926,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(()) => Self::diag_mark("4: verify ok"),
             Err(e) => {
                 Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
-                std::process::abort();
+                return Err(format!("LLVM module verification failed: {}", e));
             }
         }
 
