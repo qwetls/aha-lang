@@ -303,16 +303,21 @@ impl Parser {
 
             // Optional tuple payload: Variant(Type, Type, ...)
             let payload_types = if self.peek_token_is(TokenType::LeftParen) {
+                eprintln!("[ENUM-DBG]   tuple '{}': entering with current={:?}({})", variant_name.value, self.current_token.kind, self.current_token.literal);
                 self.next_token(); // '('
+                eprintln!("[ENUM-DBG]   after '(': current={:?}({})", self.current_token.kind, self.current_token.literal);
                 let mut types = Vec::new();
                 self.next_token(); // first token inside parens
+                eprintln!("[ENUM-DBG]   first inner: current={:?}({})", self.current_token.kind, self.current_token.literal);
                 while !self.current_token_is(TokenType::RightParen) && !self.current_token_is(TokenType::Eof) {
                     if self.current_token_is(TokenType::Identifier) {
                         types.push(self.current_token.literal.clone());
                     }
                     self.next_token();
                 }
+                eprintln!("[ENUM-DBG]   inner done: current={:?}({})", self.current_token.kind, self.current_token.literal);
                 self.next_token(); // skip ')'
+                eprintln!("[ENUM-DBG]   after ')': current={:?}({})", self.current_token.kind, self.current_token.literal);
                 types
             } else {
                 Vec::new()
