@@ -3131,27 +3131,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.functions.insert("memcmp".to_string(), memcmp_fn);
     }
 
-    /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
-    fn declare_actor_runtime(&mut self) {
-        let i64_t = self.i64_type;
-        // actor_spawn(init_state: i64) -> i64
-        let spawn_ty = i64_t.fn_type(&[i64_t.into()], false);
-        let spawn_fn = self.module.add_function("actor_spawn", spawn_ty, None);
-        self.functions.insert("actor_spawn".to_string(), spawn_fn);
-        // actor_send(handle: i64, msg: i64) -> void
-        let send_ty = self.context.void_type().fn_type(&[i64_t.into(), i64_t.into()], false);
-        let send_fn = self.module.add_function("actor_send", send_ty, None);
-        self.functions.insert("actor_send".to_string(), send_fn);
-        // actor_call(handle: i64, msg: i64) -> i64
-        let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
-        let call_fn = self.module.add_function("actor_call", call_ty, None);
-        self.functions.insert("actor_call".to_string(), call_fn);
-        // actor_get_state(handle: i64) -> i64
-        let get_state_ty = i64_t.fn_type(&[i64_t.into()], false);
-        let get_state_fn = self.module.add_function("actor_get_state", get_state_ty, None);
-        self.functions.insert("actor_get_state".to_string(), get_state_fn);
-    }
-
     /// Type-checked infix operator compilation
     fn compile_infix(&mut self, infix: &ast::InfixExpression) -> Result<TypedValue<'ctx>, String> {
         let left = self.compile_expression(&infix.left)?;
