@@ -3985,6 +3985,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             }
+            // Ensure entry block has a terminator. When the body ends with
+            // a return statement, compile_match_expression may have moved
+            // the builder to merge_block, leaving entry unterminated.
+            if entry_block.get_terminator().is_none() {
+                let current = self.builder.get_insert_block()
+                    .ok_or("No current block")?;
+                self.builder.position_at_end(entry_block);
+                self.builder.build_unconditional_branch(current)
+                    .map_err(|e| e.to_string())?;
+                self.builder.position_at_end(current);
+            }
             Ok(())
         })();
         
