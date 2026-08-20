@@ -9,6 +9,14 @@ use aha_lang::parser::Parser;
 use aha_lang::codegen::CodeGenerator;
 use inkwell::context::Context;
 
+/// Helper: parse only, returning errors.
+fn parse_only(source: &str) -> Vec<String> {
+    let lexer = Lexer::new(source.to_string());
+    let mut parser = Parser::new(lexer);
+    let _ = parser.parse_program();
+    parser.errors
+}
+
 /// Helper: compile and JIT-execute AHA! source, returning the i64 result.
 fn run(source: &str) -> i64 {
     let lexer = Lexer::new(source.to_string());
@@ -23,6 +31,26 @@ fn run(source: &str) -> i64 {
     let mut codegen = CodeGenerator::new(&context);
     codegen.compile(&program).expect("Codegen failed");
     codegen.run_jit().expect("JIT execution failed")
+}
+
+// --- Diagnostic: does tuple enum parse at all? ---
+
+#[test]
+fn enum_tuple_parse_diagnostic() {
+    let errors = parse_only(r#"
+        enum Op { Add(int, int), Sub(int, int) }
+        fn main() -> int { 42 }
+    "#);
+    assert!(errors.is_empty(), "Tuple enum parse errors: {:?}", errors);
+}
+
+#[test]
+fn enum_unit_parse_diagnostic() {
+    let errors = parse_only(r#"
+        enum Color { Red, Green, Blue }
+        fn main() -> int { 1 }
+    "#);
+    assert!(errors.is_empty(), "Unit enum parse errors: {:?}", errors);
 }
 
 // --- Unit enum tests ---
