@@ -908,6 +908,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_c_runtime();
         Self::diag_mark("2: c runtime declared");
         // Phase 1: actors are pure JIT — no runtime functions needed.
+        self.declare_actor_runtime();
         Self::diag_mark("2a: actor runtime declared");
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
@@ -3002,16 +3003,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.builder.build_store(field_ptr, val.value).expect("store failed");
                 }
 
-                // The handle IS the heap pointer (as i64). No runtime registry needed.
+                // state_ptr = i64 handle to the heap-allocated struct.
                 let state_ptr = self.builder.build_ptr_to_int(raw_ptr, self.i64_type, "actor_state_ptr")
                     .expect("ptr_to_int failed");
 
-                // Verify "handle" function exists (convention: fn handle(state, msg) -> int).
-                if self.module.get_function("handle").is_none() {
-                    return Err("Actor requires a 'handle' function: fn handle(state, msg) -> int".to_string());
-                }
+                // Get handler function pointer (convention: fn handle(state, msg) -> int).
+                let handler_fn = self.module.get_function("handle")
+                    .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
+                let handler_ptr = self.builder.build_ptr_to_int(
+                    handler_fn.as_global_value().as_pointer_value(),
+                    self.i64_type,
+                    "handler_ptr",
+                ).expect("ptr_to_int failed");
 
-                Ok(TypedValue::new(state_ptr.into(), AhaType::Int))
+                // Call actor_spawn(handler_ptr, state_ptr) -> handle.
+                let actor_spawn_fn = *self.functions.get("actor_spawn").expect("actor_spawn not declared");
+                let args_meta: Vec<BasicMetadataValueEnum> = vec![handler_ptr.into(), state_ptr.into()];
+                let call_result = self.builder.build_call(actor_spawn_fn, &args_meta, "actor_handle")
+                    .map_err(|e| e.to_string())?;
+                let handle = call_result.try_as_basic_value()
+                    .left()
+                    .ok_or("actor_spawn did not return a handle")?;
+
+                Ok(TypedValue::new(handle.into(), AhaType::Int))
             },
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
@@ -3129,6 +3143,24 @@ impl<'ctx> CodeGenerator<'ctx> {
         let memcmp_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i8_ptr.into(), i64_t.into()], false);
         let memcmp_fn = self.module.add_function("memcmp", memcmp_ty, None);
         self.functions.insert("memcmp".to_string(), memcmp_fn);
+    }
+
+    /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
+    /// for Phase 2 threading. Mapped to actual Rust functions via add_global_mapping in run_jit.
+    fn declare_actor_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        // actor_spawn(fn_ptr: i64, init_state: i64) -> i64
+        let spawn_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let spawn_fn = self.module.add_function("actor_spawn", spawn_ty, None);
+        self.functions.insert("actor_spawn".to_string(), spawn_fn);
+        // actor_send(handle: i64, msg: i64) -> void
+        let send_ty = self.context.void_type().fn_type(&[i64_t.into(), i64_t.into()], false);
+        let send_fn = self.module.add_function("actor_send", send_ty, None);
+        self.functions.insert("actor_send".to_string(), send_fn);
+        // actor_call(handle: i64, msg: i64) -> i64
+        let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let call_fn = self.module.add_function("actor_call", call_ty, None);
+        self.functions.insert("actor_call".to_string(), call_fn);
     }
 
     /// Type-checked infix operator compilation
@@ -3548,9 +3580,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(TypedValue::new(val, ret_type))
     }
 
-    /// Compile actor_send / actor_call builtin calls.
-    /// call(a, msg): direct call to handle(a, msg) — no runtime needed.
-    /// send(a, msg): no-op in Phase 1.
+    /// Compile actor_send / actor_call builtin calls via the threaded runtime.
+    /// call(a, msg) -> actor_call(handle, msg) -> blocking request-response.
+    /// send(a, msg) -> actor_send(handle, msg) -> fire-and-forget.
     fn compile_actor_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
         if call.arguments.len() != 2 {
             return Err(format!("{} expects 2 arguments (handle, msg)", func_name));
@@ -3558,21 +3590,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         let handle = self.compile_expression(&call.arguments[0])?.value;
         let msg = self.compile_expression(&call.arguments[1])?.value;
 
-        if func_name == "send" {
-            // Phase 1: no-op. Just discard the values.
-            return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
-        }
+        let runtime_fn_name = if func_name == "send" { "actor_send" } else { "actor_call" };
+        let function = *self.functions.get(runtime_fn_name)
+            .ok_or_else(|| format!("{} not declared", runtime_fn_name))?;
 
-        // call(a, msg) → handle(a, msg) directly.
-        let handler_fn = self.module.get_function("handle")
-            .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
-        let handler_args: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
-        let call_result = self.builder.build_call(handler_fn, &handler_args, "handler_result")
+        let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
+        let call_result = self.builder.build_call(function, &args_meta, "actor_tmp")
             .map_err(|e| e.to_string())?;
-        let val = call_result.try_as_basic_value()
-            .left()
-            .ok_or("handle did not return a value")?;
-        Ok(TypedValue::int(val))
+
+        if func_name == "call" {
+            let val = call_result.try_as_basic_value()
+                .left()
+                .ok_or_else(|| "actor_call did not return a value".to_string())?;
+            Ok(TypedValue::int(val))
+        } else {
+            Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
+        }
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
@@ -4492,16 +4525,29 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn run_jit(&self) -> Result<i64, String> {
         let execution_engine = self.module.create_jit_execution_engine(inkwell::OptimizationLevel::None)
             .map_err(|e| format!("Failed to create JIT engine: {}", e))?;
-            
+
+        // Register native runtime functions so the JIT can call them.
+        // Without add_global_mapping, MCJIT can't resolve #[no_mangle] symbols
+        // in test binaries on Linux.
+        if let Some(f) = self.module.get_function("actor_spawn") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_spawn as usize);
+        }
+        if let Some(f) = self.module.get_function("actor_send") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_send as usize);
+        }
+        if let Some(f) = self.module.get_function("actor_call") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_call as usize);
+        }
+
         let function_name = "main";
         let _function = self.module.get_function(function_name)
             .ok_or_else(|| format!("Function '{}' not found", function_name))?;
-            
+
         unsafe {
             let compiled_fn: unsafe extern "C" fn() -> i64 = execution_engine.get_function_address(function_name)
                 .map_err(|e| format!("Failed to get function address: {}", e))
                 .map(|addr| std::mem::transmute(addr))?;
-                
+
             Ok(compiled_fn())
         }
     }
