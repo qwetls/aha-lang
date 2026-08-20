@@ -2988,7 +2988,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Cast i8* from malloc to i64* for field access.
                 let i64_ptr_type = self.i64_type.ptr_type(inkwell::AddressSpace::default());
-                let ptr = self.builder.build_bit_cast(raw_ptr, i64_ptr_type, "actor_struct_ptr")
+                let ptr = self.builder.build_pointer_cast(raw_ptr, i64_ptr_type, "actor_struct_ptr")
                     .expect("bitcast failed");
 
                 for (i, val) in field_values.iter().enumerate() {
