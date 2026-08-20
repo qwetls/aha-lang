@@ -5129,7 +5129,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                         let ptr = self.builder.build_alloca(inner_type, binding)
                             .map_err(|e| e.to_string())?;
-                        self.builder.build_store(ptr, inner_val.into()).map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, inner_val).map_err(|e| e.to_string())?;
                         self.insert_variable(binding.clone(), ptr, payload[j].clone());
                     } else {
                         let field_val = self.builder.build_extract_value(
