@@ -264,8 +264,10 @@ impl Parser {
             }
         }
 
-        if !self.expect_peek(TokenType::RightBrace) {
-            return None;
+        // current token is already '}' from the last else-branch next_token();
+        // consume it so parse_program's loop advances to the next statement.
+        if self.current_token_is(TokenType::RightBrace) {
+            self.next_token();
         }
 
         Some(Statement::Actor(ActorDefinition { name, is_pub, fields }))
@@ -312,8 +314,9 @@ impl Parser {
             }
         }
 
-        if !self.expect_peek(TokenType::RightBrace) {
-            return Expression::Integer(IntegerLiteral { value: 0 });
+        // current token is already '}' — consume it
+        if self.current_token_is(TokenType::RightBrace) {
+            self.next_token();
         }
 
         Expression::Spawn(SpawnExpression { actor_name, fields })
@@ -353,8 +356,9 @@ impl Parser {
             }
         }
 
-        if !self.current_token_is(TokenType::RightBrace) {
-            self.errors.push("Expected '}' to close struct literal".to_string());
+        // consume the closing '}'
+        if self.current_token_is(TokenType::RightBrace) {
+            self.next_token();
         }
 
         Expression::StructLiteral(StructLiteral { name, fields })
