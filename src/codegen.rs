@@ -641,6 +641,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if self.functions.contains_key(&func_name) {
                         continue;
                     }
+                    // Don't predeclare main — compile() creates it as the
+                    // implicit entry point; compile_function fills the body.
+                    if func_name == "main" {
+                        continue;
+                    }
                     let param_types: Result<Vec<_>, _> = func.parameters.iter().enumerate()
                         .map(|(i, _)| {
                             let t = self.param_type_map.get(&func_name)
@@ -1040,59 +1045,66 @@ impl<'ctx> CodeGenerator<'ctx> {
         // is_even can call is_odd before is_odd's body is compiled.
         self.predeclare_functions(&program.statements);
 
-        // When user defined fn main(), compile_function handles the entry
-        // block. We must NOT create a second entry block here — it would
-        // become the entry block and shadow the real user code.
-        // ponytail: compile() still creates its own main for programs
-        // without a user-defined main (implicit entry point).
-        let has_user_main = self.functions.contains_key("main");
+        // ponytail: Create an implicit entry point ("main") that compiles
+        // all user statements. When the user defines fn main(),
+        // compile_function creates the real @main with the user's body.
+        let has_user_main = program.statements.iter().any(|s| {
+            matches!(s, ast::Statement::Expression(ast::ExpressionStatement {
+                expression: ast::Expression::Function(f), ..
+            }) if f.name.as_ref().map(|n| n.value.as_str()) == Some("main"))
+        });
 
-        if has_user_main {
-            Self::diag_mark("4a: has_user_main, compiling non-last stmts");
-            // Compile non-last statements (enums, other fns) — they go into
-            // their own function contexts, not main's entry block.
-            for (i, statement) in program.statements.iter().enumerate() {
-                let is_last = i == program.statements.len() - 1;
-                if is_last { break; }
-                self.compile_statement(statement)?;
-            }
-            Self::diag_mark("4b: non-last stmts done, compiling fn main");
-            // Compile the last statement (fn main) via compile_function,
-            // which creates the entry block and builds the user code.
-            if let Some(last) = program.statements.last() {
-                if let ast::Statement::Expression(expr_stmt) = last {
-                    let _val = self.compile_expression(&expr_stmt.expression)?;
-                }
-            }
-            Self::diag_mark("4c: fn main compiled");
-        } else {
-            // No user-defined main — create implicit entry point.
+        // When user defines fn main(), compile_function creates @main.
+        // We must NOT also create an implicit @main — that would give us
+        // two @main functions. The implicit @main is only for programs
+        // without a user-defined main (e.g. "1 + 2" → returns 3).
+        let implicit_entry = if !has_user_main {
             let fn_type = self.i64_type.fn_type(&[], false);
             let function = self.module.add_function("main", fn_type, None);
-            let basic_block = self.context.append_basic_block(function, "entry");
-            self.builder.position_at_end(basic_block);
+            self.functions.insert("main".to_string(), function);
+            let bb = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(bb);
+            Some(bb)
+        } else {
+            None
+        };
 
-            let mut last_value: Option<TypedValue<'ctx>> = None;
-            for (i, statement) in program.statements.iter().enumerate() {
-                let is_last = i == program.statements.len() - 1;
-                if is_last {
-                    if let ast::Statement::Expression(expr_stmt) = statement {
+        let mut last_value: Option<TypedValue<'ctx>> = None;
+        for (i, statement) in program.statements.iter().enumerate() {
+            let is_last = i == program.statements.len() - 1;
+            if is_last {
+                if let ast::Statement::Expression(expr_stmt) = statement {
+                    if has_user_main {
+                        let _val = self.compile_expression(&expr_stmt.expression)?;
+                        // compile_function leaves builder inside user's @main
+                        // or a callee. Restore to the entry block of the
+                        // user's @main so build_return below targets it.
+                        if let Some(&main_fn) = self.functions.get("main") {
+                            if let Some(entry) = main_fn.get_first_basic_block() {
+                                self.builder.position_at_end(entry);
+                            }
+                        }
+                    } else {
                         let val = self.compile_expression(&expr_stmt.expression)?;
                         last_value = Some(val);
-                        continue;
                     }
+                    continue;
                 }
-                self.compile_statement(statement)?;
             }
-            let return_val = match last_value {
+            self.compile_statement(statement)?;
+        }
+        let return_val = if has_user_main {
+            self.i64_type.const_int(0, false).into()
+        } else {
+            match last_value {
                 Some(tv) => match tv.aha_type {
                     AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
                     _ => tv.value,
                 },
                 None => self.i64_type.const_int(0, false).into(),
-            };
-            let _ = self.builder.build_return(Some(&return_val));
-        }
+            }
+        };
+        let _ = self.builder.build_return(Some(&return_val));
 
         Self::diag_mark("5: main compiled");
 
@@ -3979,6 +3991,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.current_function = saved_function;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
+        } else {
+            // No previous block to restore to. Position the builder at the
+            // entry block of the function we just compiled so the caller
+            // (compile()) can add the implicit main's terminator there.
+            self.builder.position_at_end(entry_block);
         }
         result?;
         Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
