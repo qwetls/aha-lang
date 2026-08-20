@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 /// Check if a statement is a public item (pub function or pub struct).
 fn is_pub_item(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Expression(ast_expr) => {
-            if let crate::ast::Expression::Function(func) = ast_expr {
+        Statement::Expression(es) => {
+            if let crate::ast::Expression::Function(func) = &es.expression {
                 func.is_pub
             } else {
                 false
