@@ -1,21 +1,18 @@
 // src/runtime.rs
 //
-// F6 Phase 1 — Actor runtime (synchronous).
-// Provides actor_spawn, actor_send, actor_call as native functions
-// linked to the LLVM JIT via add_global_mapping.
+// F6 Phase 1 — Actor runtime (synchronous, state-only).
+// The runtime only stores/retrieves actor state.
+// Handler dispatch is done in JIT code (codegen emits direct calls).
 //
-// Phase 1: synchronous actor model (no threads).
-// actor_spawn(fn_ptr, init_state) -> handle — stores handler + state
-// actor_send(handle, msg)           — queued for next actor_call
-// actor_call(handle, msg) -> i64    — calls handler synchronously
+// actor_spawn(init_state) -> handle  — stores state, returns handle
+// actor_send(handle, msg)            — no-op (fire-and-forget, Phase 2)
+// actor_call(handle, msg) -> i64     — returns pending msg (Phase 2 logic)
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 struct ActorEntry {
-    handler_fn: i64,    // JIT function pointer
-    state: i64,         // initial state (struct pointer as i64)
-    pending_msg: Option<i64>,  // queued message from actor_send
+    state: i64,
 }
 
 static ACTORS: OnceLock<Mutex<HashMap<i64, ActorEntry>>> = OnceLock::new();
@@ -34,64 +31,42 @@ fn next_handle() -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// Native functions (linked to LLVM JIT)
+// Native functions (called from JIT)
 // ---------------------------------------------------------------------------
 
-/// actor_spawn(fn_ptr, init_state) -> handle
-/// Stores the handler function and initial state for later calls.
+/// actor_spawn(init_state) -> handle
 #[no_mangle]
-pub extern "C" fn actor_spawn(fn_ptr: i64, init_state: i64) -> i64 {
+pub extern "C" fn actor_spawn(init_state: i64) -> i64 {
     let handle = next_handle();
-    actors().lock().unwrap().insert(
-        handle,
-        ActorEntry {
-            handler_fn: fn_ptr,
-            state: init_state,
-            pending_msg: None,
-        },
-    );
+    actors().lock().unwrap().insert(handle, ActorEntry { state: init_state });
     handle
 }
 
-/// actor_send(handle, msg) — queues a message for next actor_call.
+/// actor_send(handle, msg) — fire-and-forget (no-op in Phase 1)
 #[no_mangle]
 pub extern "C" fn actor_send(handle: i64, msg: i64) {
-    let mut actors = actors().lock().unwrap();
-    if let Some(entry) = actors.get_mut(&handle) {
-        entry.pending_msg = Some(msg);
+    // Phase 1: no-op. Phase 2 will queue messages.
+    let _ = (handle, msg);
+}
+
+/// actor_call(handle, msg) -> i64
+/// Returns the actor's stored state (msg is available for Phase 2 dispatch)
+#[no_mangle]
+pub extern "C" fn actor_call(handle: i64, msg: i64) -> i64 {
+    let actors = actors().lock().unwrap();
+    match actors.get(&handle) {
+        Some(entry) => entry.state,
+        None => 0,
     }
 }
 
-/// actor_call(handle, msg) -> result — calls handler synchronously.
-/// If there's a pending message from actor_send, the handler is called
-/// with the pending message first, then with msg.
+/// actor_get_state(handle) -> i64
+/// Returns the actor's stored state (used by codegen for handler dispatch)
 #[no_mangle]
-pub extern "C" fn actor_call(handle: i64, msg: i64) -> i64 {
-    // Extract the pending message and handler info.
-    let (handler_fn, state, pending) = {
-        let mut actors = actors().lock().unwrap();
-        match actors.get_mut(&handle) {
-            Some(entry) => {
-                let pending = entry.pending_msg.take();
-                (entry.handler_fn, entry.state, pending)
-            }
-            None => return 0,
-        }
-    };
-
-    // Cast function pointer and call handler.
-    let func: extern "C" fn(i64, i64) -> i64 = unsafe {
-        std::mem::transmute(handler_fn)
-    };
-
-    // Process pending message first (if any).
-    let mut result = if let Some(p) = pending {
-        func(state, p)
-    } else {
-        0
-    };
-
-    // Process the current message.
-    result = func(state, msg);
-    result
+pub extern "C" fn actor_get_state(handle: i64) -> i64 {
+    let actors = actors().lock().unwrap();
+    match actors.get(&handle) {
+        Some(entry) => entry.state,
+        None => 0,
+    }
 }

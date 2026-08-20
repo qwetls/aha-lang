@@ -3006,18 +3006,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let state_ptr = self.builder.build_ptr_to_int(raw_ptr, self.i64_type, "actor_state_ptr")
                     .expect("ptr_to_int failed");
 
-                // Look up the handler function (convention: "handle").
-                let handler_fn = self.module.get_function("handle")
-                    .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
-                let handler_ptr = self.builder.build_ptr_to_int(
-                    handler_fn.as_global_value().as_pointer_value(),
-                    self.i64_type,
-                    "handler_ptr",
-                ).expect("ptr_to_int failed");
+                // Verify "handle" function exists (convention: fn handle(state, msg) -> int).
+                if self.module.get_function("handle").is_none() {
+                    return Err("Actor requires a 'handle' function: fn handle(state, msg) -> int".to_string());
+                }
 
-                // Call actor_spawn(handler_ptr, state_ptr) -> handle.
+                // Call actor_spawn(state_ptr) -> handle.
                 let actor_spawn_fn = *self.functions.get("actor_spawn").expect("actor_spawn not declared");
-                let args_meta: Vec<BasicMetadataValueEnum> = vec![handler_ptr.into(), state_ptr.into()];
+                let args_meta: Vec<BasicMetadataValueEnum> = vec![state_ptr.into()];
                 let call_result = self.builder.build_call(actor_spawn_fn, &args_meta, "actor_handle")
                     .map_err(|e| e.to_string())?;
                 let handle = call_result.try_as_basic_value()
@@ -3147,8 +3143,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
     fn declare_actor_runtime(&mut self) {
         let i64_t = self.i64_type;
-        // actor_spawn(fn_ptr: i64, init_state: i64) -> i64
-        let spawn_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        // actor_spawn(init_state: i64) -> i64
+        let spawn_ty = i64_t.fn_type(&[i64_t.into()], false);
         let spawn_fn = self.module.add_function("actor_spawn", spawn_ty, None);
         self.functions.insert("actor_spawn".to_string(), spawn_fn);
         // actor_send(handle: i64, msg: i64) -> void
@@ -3159,6 +3155,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
         let call_fn = self.module.add_function("actor_call", call_ty, None);
         self.functions.insert("actor_call".to_string(), call_fn);
+        // actor_get_state(handle: i64) -> i64
+        let get_state_ty = i64_t.fn_type(&[i64_t.into()], false);
+        let get_state_fn = self.module.add_function("actor_get_state", get_state_ty, None);
+        self.functions.insert("actor_get_state".to_string(), get_state_fn);
     }
 
     /// Type-checked infix operator compilation
@@ -3579,6 +3579,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Compile actor_send / actor_call builtin calls.
+    /// call(a, msg): codegen emits actor_get_state(a) then direct call handle(state, msg).
+    /// send(a, msg): codegen emits actor_send(handle, msg) — no-op in Phase 1.
     fn compile_actor_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
         if call.arguments.len() != 2 {
             return Err(format!("{} expects 2 arguments (handle, msg)", func_name));
@@ -3586,22 +3588,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         let handle = self.compile_expression(&call.arguments[0])?.value;
         let msg = self.compile_expression(&call.arguments[1])?.value;
 
-        let runtime_fn_name = if func_name == "send" { "actor_send" } else { "actor_call" };
-        let function = *self.functions.get(runtime_fn_name)
-            .ok_or_else(|| format!("{} not declared", runtime_fn_name))?;
-
-        let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
-        let call_result = self.builder.build_call(function, &args_meta, "actor_tmp")
-            .map_err(|e| e.to_string())?;
-
-        if func_name == "call" {
-            let val = call_result.try_as_basic_value()
-                .left()
-                .ok_or_else(|| "actor_call did not return a value".to_string())?;
-            Ok(TypedValue::int(val))
-        } else {
-            Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
+        if func_name == "send" {
+            let send_fn = *self.functions.get("actor_send")
+                .ok_or("actor_send not declared")?;
+            let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
+            self.builder.build_call(send_fn, &args_meta, "actor_tmp")
+                .map_err(|e| e.to_string())?;
+            return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
         }
+
+        // call(a, msg) → get state, then direct call handle(state, msg).
+        let get_state_fn = *self.functions.get("actor_get_state")
+            .ok_or("actor_get_state not declared")?;
+        let get_args: Vec<BasicMetadataValueEnum> = vec![handle.into()];
+        let state_val = self.builder.build_call(get_state_fn, &get_args, "actor_state")
+            .map_err(|e| e.to_string())?
+            .try_as_basic_value().left()
+            .ok_or("actor_get_state did not return a value")?;
+
+        let handler_fn = self.module.get_function("handle")
+            .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
+        let handler_args: Vec<BasicMetadataValueEnum> = vec![state_val.into(), msg.into()];
+        let call_result = self.builder.build_call(handler_fn, &handler_args, "handler_result")
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or("handle did not return a value")?;
+        Ok(TypedValue::int(val))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
