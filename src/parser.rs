@@ -318,7 +318,8 @@ impl Parser {
         Expression::Spawn(SpawnExpression { actor_name, fields })
     }
 
-    // Parse a struct literal: TypeName { field: value, field2: value2 }
+    /// Parse a struct literal: TypeName { field: value, field2: value2 }
+    fn parse_struct_literal(&mut self, name: Identifier) -> Expression {
         // current token is the type name; peek is '{'
         self.next_token(); // move to '{'
 
