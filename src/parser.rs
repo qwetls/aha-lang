@@ -859,8 +859,11 @@ impl Parser {
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
             let pattern = self.parse_pattern();
 
-            // parse_pattern leaves current_token on the token AFTER the
-            // pattern (the FatArrow `=>`). Check it directly, not peek.
+            // parse_pattern leaves current_token on ',' (unit) or '=>' (tuple).
+            // For unit patterns, advance past the comma to reach '=>'.
+            if self.current_token_is(TokenType::Comma) {
+                self.next_token(); // ',' → '=>'
+            }
             if !self.current_token_is(TokenType::FatArrow) {
                 self.errors.push(format!(
                     "Expected => after pattern, got {:?}",
@@ -874,9 +877,9 @@ impl Parser {
             let body = self.parse_expression(Precedence::Lowest);
             arms.push(MatchArm { pattern, body });
 
-            if self.peek_token_is(TokenType::Comma) {
-                self.next_token(); // Skip ','
-            }
+            // After parse_expression, current_token is on body's last token.
+            // Advance to ',' or '}' to correctly position for next iteration.
+            self.next_token();
         }
 
         Expression::Match(MatchExpression {
@@ -886,6 +889,7 @@ impl Parser {
     }
 
     /// Parse a match pattern: `_`, `Variant`, or `Variant(a, b, ...)`
+    /// Advances current_token to `=>` (FatArrow) in all cases.
     fn parse_pattern(&mut self) -> Pattern {
         if self.current_token_is(TokenType::Identifier) && self.current_token.literal == "_" {
             self.next_token(); // Skip '_'
@@ -917,7 +921,7 @@ impl Parser {
             self.next_token(); // Skip ')'
             Pattern::EnumTuple(name, bindings)
         } else {
-            self.next_token(); // Skip variant name
+            self.next_token(); // Skip variant name → ','
             Pattern::EnumUnit(name)
         }
     }
