@@ -3368,30 +3368,27 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.mark_param(&param.value);
             }
 
-            // Pre-scan: find last-use points for each heap variable
-            let mut last_uses = Self::find_last_uses(&func.body.statements);
-
-            // Escape analysis: variables returned should not be freed before return.
-            // For explicit returns: update last-use to return statement index + break.
-            // For implicit returns (last expression): populate escaped set only —
-            // do NOT update last_uses, because the last-use free runs AFTER the
-            // expression and would free the value before build_return uses it.
+            // Escape analysis: find variables returned from this function.
+            // Escaped variables must NEVER be freed by last-use or cleanup.
             let mut escaped = std::collections::HashSet::new();
-            for (idx, stmt) in func.body.statements.iter().enumerate() {
+            for stmt in func.body.statements.iter() {
                 if let ast::Statement::Return(ret) = stmt {
                     escaped = Self::find_heap_vars_in_expr(&ret.return_value);
-                    for var in &escaped {
-                        last_uses.insert(var.clone(), idx);
-                    }
                     break;
                 }
-                // Implicit return: last expression statement is the return value.
-                if idx == func.body.statements.len() - 1 {
-                    if let ast::Statement::Expression(es) = stmt {
-                        escaped = Self::find_heap_vars_in_expr(&es.expression);
-                        // Don't update last_uses — post-loop cleanup handles these.
-                    }
+            }
+            // Also check implicit return (last expression = return value).
+            if escaped.is_empty() {
+                if let Some(ast::Statement::Expression(es)) = func.body.statements.last() {
+                    escaped = Self::find_heap_vars_in_expr(&es.expression);
                 }
+            }
+
+            // Pre-scan: find last-use points for each heap variable.
+            // Remove escaped variables — they must not be freed by last-use.
+            let mut last_uses = Self::find_last_uses(&func.body.statements);
+            for var in &escaped {
+                last_uses.remove(var);
             }
 
             let mut has_return = false;
@@ -3869,26 +3866,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.mark_param(&param.value);
             }
 
-            // Pre-scan: find last-use points for each heap variable
-            let mut last_uses = Self::find_last_uses(&generic.body.statements);
-
-            // Escape analysis: variables returned should not be freed before return.
+            // Escape analysis: find variables returned from this function.
             let mut escaped = std::collections::HashSet::new();
-            for (idx, stmt) in generic.body.statements.iter().enumerate() {
+            for stmt in generic.body.statements.iter() {
                 if let ast::Statement::Return(ret) = stmt {
                     escaped = Self::find_heap_vars_in_expr(&ret.return_value);
-                    for var in &escaped {
-                        last_uses.insert(var.clone(), idx);
-                    }
                     break;
                 }
-                // Implicit return: last expression statement is the return value.
-                if idx == generic.body.statements.len() - 1 {
-                    if let ast::Statement::Expression(es) = stmt {
-                        escaped = Self::find_heap_vars_in_expr(&es.expression);
-                        // Don't update last_uses — post-loop cleanup handles these.
-                    }
+            }
+            if escaped.is_empty() {
+                if let Some(ast::Statement::Expression(es)) = generic.body.statements.last() {
+                    escaped = Self::find_heap_vars_in_expr(&es.expression);
                 }
+            }
+
+            // Pre-scan: find last-use points for each heap variable.
+            let mut last_uses = Self::find_last_uses(&generic.body.statements);
+            for var in &escaped {
+                last_uses.remove(var);
             }
 
             let mut has_return = false;
