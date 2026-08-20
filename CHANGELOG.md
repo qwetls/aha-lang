@@ -23,6 +23,13 @@ All notable changes to AHA! Lang are documented in this file.
   - `file_read(path) -> string` — reads entire file into string
   - `file_write(path, content) -> int` — writes string to file, returns bytes written
 
+### Fixed
+
+- **LLVM IR type mismatches in string/file builtins:**
+  - `int_to_string`, `string_sub`, `file_read` declared as returning `i64` but body returns `{i8*, i64}` string struct — fixed to return `string`
+  - `strtol` second parameter was `i8*` null but signature requires `i8**` — fixed cast
+  - `module.verify()` changed from `std::process::abort()` to `return Err()` for better error reporting
+
 ## [1.5.8] — 2026-08-20
 
 ### Added

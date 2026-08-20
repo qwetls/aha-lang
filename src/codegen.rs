@@ -1251,7 +1251,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // strtol(str_ptr, NULL, 10)
         let strtol_fn = *self.functions.get("strtol").expect("strtol not declared");
         let i8_type = self.context.i8_type();
-        let i8_ptr_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
+        let i8_ptr_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default()).ptr_type(inkwell::AddressSpace::default());
         let null_ptr = i8_ptr_ptr_type.const_null();
         let base_10 = i64_type.const_int(10, false);
         let result = self.builder.build_call(strtol_fn, &[str_ptr.into(), null_ptr.into(), base_10.into()], "strtol_result")
