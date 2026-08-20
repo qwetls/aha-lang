@@ -4556,14 +4556,13 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Used during AOT compilation to free up the name for a C-compatible wrapper.
     pub fn rename_main(&mut self, new_name: &str) {
         if let Some(f) = self.module.get_function("main") {
-            f.set_name(new_name);
+            f.as_global_value().set_name(new_name);
         }
     }
 
     /// Add a C-compatible `main` wrapper that calls `__aha_main() -> i64`.
     /// Must be called after `rename_main("__aha_main")`.
     pub fn add_c_main_wrapper(&mut self) {
-        let i64_type = self.context.i64_type();
         let i32_type = self.context.i32_type();
 
         // Declare __aha_main() -> i64
@@ -4588,7 +4587,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Emit object file (.o) for AOT compilation.
     /// Returns the path to the written object file.
     pub fn emit_object_file(&self, path: &std::path::Path) -> Result<(), String> {
-        use inkwell::targets::{Target, TargetMachine, TargetTriple, FileType, InitializationConfig};
+        use inkwell::targets::{Target, TargetMachine, FileType, InitializationConfig, RelocMode, CodeModel};
 
         // Initialize native target
         Target::initialize_native(&InitializationConfig::default())
@@ -4610,8 +4609,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             &cpu,
             &features,
             inkwell::OptimizationLevel::Default,
-            Default::default(),
-            Default::default(),
+            RelocMode::Default,
+            CodeModel::Default,
         ).ok_or("Failed to create target machine")?;
 
         target_machine.write_to_file(&self.module, FileType::Object, path)
