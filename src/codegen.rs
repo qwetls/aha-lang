@@ -1040,38 +1040,56 @@ impl<'ctx> CodeGenerator<'ctx> {
         // is_even can call is_odd before is_odd's body is compiled.
         self.predeclare_functions(&program.statements);
 
-        let fn_type = self.i64_type.fn_type(&[], false);
-        let function = self.module.add_function("main", fn_type, None);
-        let basic_block = self.context.append_basic_block(function, "entry");
+        // When user defined fn main(), compile_function handles the entry
+        // block. We must NOT create a second entry block here — it would
+        // become the entry block and shadow the real user code.
+        // ponytail: compile() still creates its own main for programs
+        // without a user-defined main (implicit entry point).
+        let has_user_main = self.functions.contains_key("main");
 
-        self.builder.position_at_end(basic_block);
-
-        let mut last_value: Option<TypedValue<'ctx>> = None;
-
-        for (i, statement) in program.statements.iter().enumerate() {
-            let is_last = i == program.statements.len() - 1;
-            
-            if is_last {
-                if let ast::Statement::Expression(expr_stmt) = statement {
-                    let val = self.compile_expression(&expr_stmt.expression)?;
-                    last_value = Some(val);
-                    continue;
+        if has_user_main {
+            // Compile non-last statements (enums, other fns) — they go into
+            // their own function contexts, not main's entry block.
+            for (i, statement) in program.statements.iter().enumerate() {
+                let is_last = i == program.statements.len() - 1;
+                if is_last { break; }
+                self.compile_statement(statement)?;
+            }
+            // Compile the last statement (fn main) via compile_function,
+            // which creates the entry block and builds the user code.
+            if let Some(last) = program.statements.last() {
+                if let ast::Statement::Expression(expr_stmt) = last {
+                    let _val = self.compile_expression(&expr_stmt.expression)?;
                 }
             }
-            self.compile_statement(statement)?;
+        } else {
+            // No user-defined main — create implicit entry point.
+            let fn_type = self.i64_type.fn_type(&[], false);
+            let function = self.module.add_function("main", fn_type, None);
+            let basic_block = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(basic_block);
+
+            let mut last_value: Option<TypedValue<'ctx>> = None;
+            for (i, statement) in program.statements.iter().enumerate() {
+                let is_last = i == program.statements.len() - 1;
+                if is_last {
+                    if let ast::Statement::Expression(expr_stmt) = statement {
+                        let val = self.compile_expression(&expr_stmt.expression)?;
+                        last_value = Some(val);
+                        continue;
+                    }
+                }
+                self.compile_statement(statement)?;
+            }
+            let return_val = match last_value {
+                Some(tv) => match tv.aha_type {
+                    AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
+                    _ => tv.value,
+                },
+                None => self.i64_type.const_int(0, false).into(),
+            };
+            let _ = self.builder.build_return(Some(&return_val));
         }
-        
-        let return_val = match last_value {
-            Some(tv) => match tv.aha_type {
-                // main is always an i64 entry point; a String/Struct result
-                // has no meaningful i64 value, so return 0 (callers use len()
-                // etc. to inspect it instead).
-                AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
-                _ => tv.value,
-            },
-            None => self.i64_type.const_int(0, false).into(),
-        };
-        let _ = self.builder.build_return(Some(&return_val));
 
         Self::diag_mark("5: main compiled");
 
