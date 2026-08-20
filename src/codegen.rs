@@ -1111,6 +1111,19 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // DIAGNOSTIC: dump only the main function's IR
         if let Some(&main_fn) = self.functions.get("main") {
+            // Count how many @main functions exist in the module
+            let mut main_count = 0;
+            for f in self.module.get_functions() {
+                if f.get_name().to_str() == Ok("main") {
+                    main_count += 1;
+                    let block_count = f.get_basic_blocks().len();
+                    let first_term = f.get_first_basic_block()
+                        .and_then(|bb| bb.get_terminator())
+                        .is_some();
+                    Self::diag_mark(&format!("5a: @main #{} has {} blocks, entry_has_term={}", main_count, block_count, first_term));
+                }
+            }
+            Self::diag_mark(&format!("5a2: self.functions['main'] blocks={}", main_fn.get_basic_blocks().len()));
             if let Some(ir) = self.module.print_to_string().to_str().ok() {
                 // Find main function in IR
                 if let Some(start) = ir.find("define i64 @main") {
