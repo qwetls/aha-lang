@@ -286,9 +286,9 @@ impl Parser {
         if !self.expect_peek(TokenType::LeftBrace) {
             return None;
         }
+        self.next_token(); // Skip '{'
 
         let mut variants = Vec::new();
-        self.next_token(); // Skip '{'
 
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
             if !self.current_token_is(TokenType::Identifier) {
@@ -302,9 +302,9 @@ impl Parser {
 
             // Optional tuple payload: Variant(Type, Type, ...)
             let payload_types = if self.peek_token_is(TokenType::LeftParen) {
-                self.next_token(); // skip variant name
-                self.next_token(); // skip '('
+                self.next_token(); // '('
                 let mut types = Vec::new();
+                self.next_token(); // first token inside parens
                 while !self.current_token_is(TokenType::RightParen) && !self.current_token_is(TokenType::Eof) {
                     if self.current_token_is(TokenType::Identifier) {
                         types.push(self.current_token.literal.clone());
@@ -319,15 +319,21 @@ impl Parser {
 
             variants.push(EnumVariant { name: variant_name, payload_types });
 
-            if self.peek_token_is(TokenType::Comma) {
-                self.next_token(); // skip current
+            // Consume comma separator if present, then continue or break.
+            if self.current_token_is(TokenType::Comma) {
                 self.next_token(); // skip ','
-            } else if !self.peek_token_is(TokenType::RightBrace) {
-                self.next_token();
+                // Trailing comma: comma followed by '}' → break
+                if self.current_token_is(TokenType::RightBrace) {
+                    break;
+                }
+            } else {
+                break; // no comma → end of variants
             }
         }
 
-        self.next_token(); // skip '}'
+        if self.current_token_is(TokenType::RightBrace) {
+            self.next_token(); // skip '}'
+        }
         Some(Statement::Enum(EnumDefinition { name, is_pub, variants }))
     }
 
