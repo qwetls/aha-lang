@@ -3011,7 +3011,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Err("Actor requires a 'handle' function: fn handle(state, msg) -> int".to_string());
                 }
 
-                Ok(TypedValue::int(state_ptr))
+                Ok(TypedValue::new(state_ptr.into(), AhaType::Int))
             },
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
