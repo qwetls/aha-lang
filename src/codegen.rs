@@ -1201,7 +1201,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Uses snprintf to format i64 into a heap-allocated buffer.
     fn create_int_to_string_builtin(&mut self) {
         let i64_type = self.i64_type;
-        let i8_ptr_type = self.i8_ptr_type();
         let fn_type = i64_type.fn_type(&[i64_type.into()], false);
         let function = self.module.add_function("int_to_string", fn_type, None);
 
@@ -1349,7 +1348,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Reads entire file into a heap-allocated string.
     fn create_file_read_builtin(&mut self) {
         let i64_type = self.i64_type;
-        let i8_ptr_type = self.i8_ptr_type();
         let fn_type = i64_type.fn_type(&[self.string_type.into()], false);
         let function = self.module.add_function("file_read", fn_type, None);
 
