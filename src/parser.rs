@@ -326,8 +326,9 @@ impl Parser {
             variants.push(EnumVariant { name: variant_name, payload_types });
 
             // Advance to next token and check for comma separator.
+            eprintln!("[ENUM-DBG]   pre-advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
             self.next_token();
-            eprintln!("[ENUM-DBG] after advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
+            eprintln!("[ENUM-DBG]   post-advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
             if self.current_token_is(TokenType::Comma) {
                 self.next_token(); // skip ','
                 // Trailing comma: comma followed by '}' → break
