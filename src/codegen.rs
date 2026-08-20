@@ -2981,10 +2981,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Allocate the struct on the heap.
                 let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
                 let struct_size = self.i64_type.const_int((field_names.len() * 8) as u64, false);
-                let ptr = self.builder.build_call(malloc_fn, &[struct_size.into()], "actor_alloc")
+                let raw_ptr = self.builder.build_call(malloc_fn, &[struct_size.into()], "actor_alloc")
                     .expect("malloc failed")
                     .try_as_basic_value().left().expect("malloc void")
                     .into_pointer_value();
+
+                // Cast i8* from malloc to i64* for field access.
+                let i64_ptr_type = self.i64_type.ptr_type(inkwell::AddressSpace::default());
+                let ptr = self.builder.build_bit_cast(raw_ptr, i64_ptr_type, "actor_struct_ptr")
+                    .expect("bitcast failed");
 
                 for (i, val) in field_values.iter().enumerate() {
                     let field_ptr = unsafe {
@@ -2998,7 +3003,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
 
                 // state_ptr = i64 handle to the heap-allocated struct.
-                let state_ptr = self.builder.build_ptr_to_int(ptr, self.i64_type, "actor_state_ptr")
+                let state_ptr = self.builder.build_ptr_to_int(raw_ptr, self.i64_type, "actor_state_ptr")
                     .expect("ptr_to_int failed");
 
                 // Look up the handler function (convention: "handle").
