@@ -1201,7 +1201,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Uses snprintf to format i64 into a heap-allocated buffer.
     fn create_int_to_string_builtin(&mut self) {
         let i64_type = self.i64_type;
-        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let fn_type = self.string_type.fn_type(&[i64_type.into()], false);
         let function = self.module.add_function("int_to_string", fn_type, None);
 
         let entry = self.context.append_basic_block(function, "entry");
@@ -1250,8 +1250,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // strtol(str_ptr, NULL, 10)
         let strtol_fn = *self.functions.get("strtol").expect("strtol not declared");
-        let i8_ptr_type = self.i8_ptr_type();
-        let null_ptr = i8_ptr_type.const_null();
+        let i8_type = self.context.i8_type();
+        let i8_ptr_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
+        let null_ptr = i8_ptr_ptr_type.const_null();
         let base_10 = i64_type.const_int(10, false);
         let result = self.builder.build_call(strtol_fn, &[str_ptr.into(), null_ptr.into(), base_10.into()], "strtol_result")
             .expect("strtol failed").try_as_basic_value().left().unwrap().into_int_value();
@@ -1264,7 +1265,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Extracts a substring via malloc + memcpy.
     fn create_string_sub_builtin(&mut self) {
         let i64_type = self.i64_type;
-        let fn_type = i64_type.fn_type(&[self.string_type.into(), i64_type.into(), i64_type.into()], false);
+        let fn_type = self.string_type.fn_type(&[self.string_type.into(), i64_type.into(), i64_type.into()], false);
         let function = self.module.add_function("string_sub", fn_type, None);
 
         let entry = self.context.append_basic_block(function, "entry");
@@ -1348,7 +1349,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Reads entire file into a heap-allocated string.
     fn create_file_read_builtin(&mut self) {
         let i64_type = self.i64_type;
-        let fn_type = i64_type.fn_type(&[self.string_type.into()], false);
+        let fn_type = self.string_type.fn_type(&[self.string_type.into()], false);
         let function = self.module.add_function("file_read", fn_type, None);
 
         let entry = self.context.append_basic_block(function, "entry");
