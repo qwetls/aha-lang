@@ -319,16 +319,16 @@ impl Parser {
 
             variants.push(EnumVariant { name: variant_name, payload_types });
 
-            // Consume comma separator if present, then continue or break.
+            // Advance to next token and check for comma separator.
+            self.next_token();
             if self.current_token_is(TokenType::Comma) {
                 self.next_token(); // skip ','
                 // Trailing comma: comma followed by '}' → break
                 if self.current_token_is(TokenType::RightBrace) {
                     break;
                 }
-            } else {
-                break; // no comma → end of variants
             }
+            // No comma → next iteration sees '}' in while condition and exits
         }
 
         if self.current_token_is(TokenType::RightBrace) {
