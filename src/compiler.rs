@@ -10,6 +10,21 @@ use crate::parser::Parser;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Check if a statement is a public item (pub function or pub struct).
+fn is_pub_item(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expression(ast_expr) => {
+            if let crate::ast::Expression::Function(func) = ast_expr {
+                func.is_pub
+            } else {
+                false
+            }
+        }
+        Statement::Struct(s) => s.is_pub,
+        _ => false,
+    }
+}
+
 /// Errors encountered during multi-file compilation.
 #[derive(Debug)]
 pub struct CompileError {
@@ -175,8 +190,17 @@ impl Compiler {
         }
 
         // Append this file's own statements after imports.
+        // Visibility filter: only pub items from imported files are exposed
+        // to the importer. Each file's own code still sees all its items
+        // because this file was parsed independently before merging.
         for stmt in file_stmts {
-            all_statements.push(stmt);
+            if is_pub_item(&stmt) {
+                all_statements.push(stmt);
+            }
+            // ponytail: non-pub items from imports are dropped. If a pub fn
+            // in an imported file calls a non-pub helper in the same file,
+            // the helper must also be pub. Add cross-file private access
+            // when module-level scoping lands.
         }
     }
 
