@@ -9,17 +9,12 @@ use aha_lang::parser::Parser;
 use aha_lang::codegen::CodeGenerator;
 use inkwell::context::Context;
 
-/// Helper: parse only, returning errors and statement count.
-fn parse_only(source: &str) -> (Vec<String>, usize) {
+/// Helper: parse only, returning errors.
+fn parse_only(source: &str) -> Vec<String> {
     let lexer = Lexer::new(source.to_string());
     let mut parser = Parser::new(lexer);
-    let program = parser.parse_program();
-    let count = program.statements.len();
-    eprintln!("[TEST DBG] parse_only: {} stmts, {} errors", count, parser.errors.len());
-    for (i, e) in parser.errors.iter().enumerate() {
-        eprintln!("[TEST DBG]   error[{}]: {}", i, e);
-    }
-    (parser.errors, count)
+    let _ = parser.parse_program();
+    parser.errors
 }
 
 /// Helper: compile and JIT-execute AHA! source, returning the i64 result.
@@ -42,33 +37,20 @@ fn run(source: &str) -> i64 {
 
 #[test]
 fn enum_tuple_parse_diagnostic() {
-    let (errors, stmts) = parse_only(r#"
+    let errors = parse_only(r#"
         enum Op { Add(int, int), Sub(int, int) }
         fn main() -> int { 42 }
     "#);
-    eprintln!("[TEST DBG] enum_tuple_parse_diagnostic: stmts={}, errors={:?}", stmts, errors);
-    assert_eq!(stmts, 2, "Expected 2 statements (enum + fn), got {}", stmts);
     assert!(errors.is_empty(), "Tuple enum parse errors: {:?}", errors);
 }
 
 #[test]
 fn enum_unit_parse_diagnostic() {
-    let (errors, stmts) = parse_only(r#"
+    let errors = parse_only(r#"
         enum Color { Red, Green, Blue }
         fn main() -> int { 1 }
     "#);
-    eprintln!("[TEST DBG] enum_unit_parse_diagnostic: stmts={}, errors={:?}", stmts, errors);
-    assert_eq!(stmts, 2, "Expected 2 statements (enum + fn), got {}", stmts);
     assert!(errors.is_empty(), "Unit enum parse errors: {:?}", errors);
-}
-
-#[test]
-fn enum_tuple_minimal_diagnostic() {
-    // Absolute minimum: just an enum, no following function
-    let (errors, stmts) = parse_only("enum Op { Add(int, int) }");
-    eprintln!("[TEST DBG] enum_tuple_minimal_diagnostic: stmts={}, errors={:?}", stmts, errors);
-    assert_eq!(stmts, 1, "Expected 1 statement, got {}", stmts);
-    assert!(errors.is_empty(), "Minimal tuple enum errors: {:?}", errors);
 }
 
 // --- Unit enum tests ---

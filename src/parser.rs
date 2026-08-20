@@ -276,7 +276,6 @@ impl Parser {
     /// Parse: enum Name { Variant, Variant(Type, ...), ... }
     fn parse_enum_definition(&mut self, is_pub: bool) -> Option<Statement> {
         self.next_token(); // Skip 'enum'
-        eprintln!("[ENUM DBG] after skip 'enum': current={:?}({})", self.current_token.kind, self.current_token.literal);
 
         if !self.current_token_is(TokenType::Identifier) {
             self.errors.push("Expected enum name".to_string());
@@ -290,10 +289,8 @@ impl Parser {
 
         let mut variants = Vec::new();
         self.next_token(); // Skip '{'
-        eprintln!("[ENUM DBG] after skip '{{': current={:?}({})", self.current_token.kind, self.current_token.literal);
 
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
-            eprintln!("[ENUM DBG] while-loop: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
             if !self.current_token_is(TokenType::Identifier) {
                 self.errors.push(format!(
                     "Expected variant name, got {:?}",
@@ -305,7 +302,6 @@ impl Parser {
 
             // Optional tuple payload: Variant(Type, Type, ...)
             let payload_types = if self.peek_token_is(TokenType::LeftParen) {
-                eprintln!("[ENUM DBG] tuple variant '{}'", variant_name.value);
                 self.next_token(); // skip variant name
                 self.next_token(); // skip '('
                 let mut types = Vec::new();
@@ -315,29 +311,23 @@ impl Parser {
                     }
                     self.next_token();
                 }
-                eprintln!("[ENUM DBG] after tuple loop: current={:?}({})", self.current_token.kind, self.current_token.literal);
                 self.next_token(); // skip ')'
-                eprintln!("[ENUM DBG] after skip ')': current={:?}({})", self.current_token.kind, self.current_token.literal);
                 types
             } else {
-                eprintln!("[ENUM DBG] unit variant '{}'", variant_name.value);
                 Vec::new()
             };
 
             variants.push(EnumVariant { name: variant_name, payload_types });
 
             if self.peek_token_is(TokenType::Comma) {
-                eprintln!("[ENUM DBG] comma path: peek is Comma");
                 self.next_token(); // skip current
                 self.next_token(); // skip ','
-            } else {
-                eprintln!("[ENUM DBG] no-comma path: peek={:?}({})", self.peek_token.kind, self.peek_token.literal);
+            } else if !self.peek_token_is(TokenType::RightBrace) {
                 self.next_token();
             }
-            eprintln!("[ENUM DBG] end-of-iteration: current={:?}({})", self.current_token.kind, self.current_token.literal);
         }
 
-        eprintln!("[ENUM DBG] exiting: current={:?}({}) variants={}", self.current_token.kind, self.current_token.literal, variants.len());
+        self.next_token(); // skip '}'
         Some(Statement::Enum(EnumDefinition { name, is_pub, variants }))
     }
 

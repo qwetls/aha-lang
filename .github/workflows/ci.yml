@@ -51,7 +51,7 @@ jobs:
       - name: Run tests
         env:
           RUST_BACKTRACE: "full"
-        run: cargo test --verbose -- --test-threads=1 --nocapture
+        run: cargo test --verbose -- --test-threads=1
 
       # Step 4b: Print compiler diag log if it exists (survives SIGSEGV)
       - name: Print diag log
