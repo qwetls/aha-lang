@@ -1218,7 +1218,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // snprintf(buf, 32, "%lld", value)
         let fmt = self.builder.build_global_string_ptr("%lld", "fmt").expect("fmt failed");
         let snprintf_fn = *self.functions.get("snprintf").expect("snprintf not declared");
-        let _ = self.builder.build_call(snprintf_fn, &[buf.into(), buf_size.into(), fmt.as_pointer_value().into()], "snprintf_call");
+        let _ = self.builder.build_call(snprintf_fn, &[buf.into(), buf_size.into(), fmt.as_pointer_value().into(), value.into()], "snprintf_call");
 
         // len = strlen(buf)
         let strlen_fn = *self.functions.get("strlen").expect("strlen not declared");
