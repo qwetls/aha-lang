@@ -1096,11 +1096,24 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         Self::diag_mark("5: main compiled");
 
-        // DIAGNOSTIC: dump IR before verify
-        if let Some(ir) = self.module.print_to_string().to_str().ok() {
-            // Only dump first 2000 chars to avoid log overflow
-            let truncated = if ir.len() > 2000 { &ir[..2000] } else { ir };
-            Self::diag_mark(&format!("5b: IR DUMP:\n{}", truncated));
+        // DIAGNOSTIC: dump only the main function's IR
+        if let Some(&main_fn) = self.functions.get("main") {
+            if let Some(ir) = self.module.print_to_string().to_str().ok() {
+                // Find main function in IR
+                if let Some(start) = ir.find("define i64 @main") {
+                    let end = ir[start..].find("\n\n").map(|e| start + e).unwrap_or(ir.len());
+                    let snippet = &ir[start..end.min(start + 1500)];
+                    Self::diag_mark(&format!("5b: MAIN IR:\n{}", snippet));
+                } else {
+                    Self::diag_mark("5b: MAIN IR: @main not found in IR!");
+                }
+                // Also dump blocks
+                for bb in main_fn.get_basic_blocks() {
+                    let name = bb.get_name().to_str().unwrap_or("?");
+                    let has_term = bb.get_terminator().is_some();
+                    Self::diag_mark(&format!("5c: block '{}' has_terminator={}", name, has_term));
+                }
+            }
         }
 
         // DIAGNOSTIC: second verify after main compilation, before
