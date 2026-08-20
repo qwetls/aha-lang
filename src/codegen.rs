@@ -5053,9 +5053,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let phi_llvm_type = self.aha_type_to_llvm_type(result_type)?;
         let phi = self.builder.build_phi(phi_llvm_type, "match.result").map_err(|e| e.to_string())?;
         for (val, _typ, block) in &results {
-            if !block.get_terminator().is_some() {
-                phi.add_incoming(&[(val as &dyn inkwell::values::BasicValue, *block)]);
-            }
+            // ponytail: every arm block branches to merge — add all unconditionally
+            phi.add_incoming(&[(val as &dyn inkwell::values::BasicValue, *block)]);
         }
 
         Ok(TypedValue::new(phi.as_basic_value(), result_type.clone()))
