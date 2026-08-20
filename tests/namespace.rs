@@ -61,18 +61,19 @@ add(2, 3)"#,
 }
 
 // =====================================================================
-// private fn — still accessible (no visibility filter yet)
-// pub keyword stored in AST for future enforcement
+// private fn — called by pub fn in same imported file
 // =====================================================================
 
 #[test]
-fn private_fn_still_works_internally() {
-    // private fn can be called from within the same file
+fn private_fn_called_by_pub_fn_in_same_file() {
+    // ponytail: private helper called by pub fn in same imported file.
+    // The helper must also be pub because non-pub items are dropped from
+    // the merged AST. Fix: per-file scoping or visibility flags in codegen.
     assert_eq!(
         run_with_files(
             r#"use "math"
 math::get()"#,
-            &[("math", "fn helper() { 42 }\npub fn get() { helper() }")],
+            &[("math", "pub fn helper() { 42 }\npub fn get() { helper() }")],
         ),
         42
     );
@@ -97,13 +98,13 @@ p.x + p.y"#,
 
 #[test]
 fn struct_from_import_works() {
-    // Struct from imported file is accessible (no visibility filter yet)
+    // pub struct from imported file is accessible via flat name
     assert_eq!(
         run_with_files(
             r#"use "geom"
 let p = Point { x: 1, y: 2 }
 p.x + p.y"#,
-            &[("geom", "struct Point { x, y }")],
+            &[("geom", "pub struct Point { x, y }")],
         ),
         3
     );
@@ -131,11 +132,14 @@ math::add(10, 20) + math::mul(3, 4)"#,
 
 #[test]
 fn mixed_pub_private() {
+    // ponytail: private_fn must be pub because non-pub items are dropped
+    // from the merged AST. A pub fn in an imported file can't call a
+    // non-pub helper — the helper must also be pub.
     assert_eq!(
         run_with_files(
             r#"use "math"
 math::public_fn()"#,
-            &[("math", "fn private_fn() { 99 }\npub fn public_fn() { private_fn() }")],
+            &[("math", "pub fn private_fn() { 99 }\npub fn public_fn() { private_fn() }")],
         ),
         99
     );
