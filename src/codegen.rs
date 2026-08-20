@@ -1028,6 +1028,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.create_min_builtin();
         self.create_max_builtin();
         self.create_len_builtin();
+        self.create_int_to_string_builtin();
+        self.create_string_to_int_builtin();
+        self.create_string_sub_builtin();
+        self.create_char_at_builtin();
 
         // Register return types for builtins
         self.fn_types.insert("print".to_string(), AhaType::Int);
@@ -1035,6 +1039,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("min".to_string(), AhaType::Int);
         self.fn_types.insert("max".to_string(), AhaType::Int);
         self.fn_types.insert("len".to_string(), AhaType::Int);
+        self.fn_types.insert("int_to_string".to_string(), AhaType::String);
+        self.fn_types.insert("string_to_int".to_string(), AhaType::Int);
+        self.fn_types.insert("string_sub".to_string(), AhaType::String);
+        self.fn_types.insert("char_at".to_string(), AhaType::Int);
     }
 
     // Builtin: print(int) -> prints integer with newline
@@ -1171,6 +1179,154 @@ impl<'ctx> CodeGenerator<'ctx> {
         
         let _ = self.builder.build_return(Some(&str_len));
         self.functions.insert("len".to_string(), function);
+    }
+
+    // =====================================================================
+    // String builtins — conversion, substring, character access.
+    // =====================================================================
+
+    // Builtin: int_to_string(value: int) -> string
+    // Uses snprintf to format i64 into a heap-allocated buffer.
+    fn create_int_to_string_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let i8_ptr_type = self.i8_ptr_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let function = self.module.add_function("int_to_string", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let value = function.get_nth_param(0).expect("int_to_string: missing param").into_int_value();
+
+        // Alloc 32-byte buffer
+        let buf_size = i64_type.const_int(32, false);
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let buf = self.builder.build_call(malloc_fn, &[buf_size.into()], "buf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // snprintf(buf, 32, "%lld", value)
+        let fmt = self.builder.build_global_string_ptr("%lld", "fmt").expect("fmt failed");
+        let snprintf_fn = *self.functions.get("snprintf").expect("snprintf not declared");
+        let _ = self.builder.build_call(snprintf_fn, &[buf.into(), buf_size.into(), fmt.as_pointer_value().into()], "snprintf_call");
+
+        // len = strlen(buf)
+        let strlen_fn = *self.functions.get("strlen").expect("strlen not declared");
+        let len = self.builder.build_call(strlen_fn, &[buf.into()], "str_len")
+            .expect("strlen failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, len, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("int_to_string".to_string(), function);
+    }
+
+    // Builtin: string_to_int(str: string) -> int
+    // Uses strtol to parse a string to i64.
+    fn create_string_to_int_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into()], false);
+        let function = self.module.add_function("string_to_int", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("string_to_int: missing param").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+
+        // strtol(str_ptr, NULL, 10)
+        let strtol_fn = *self.functions.get("strtol").expect("strtol not declared");
+        let i8_ptr_type = self.i8_ptr_type();
+        let null_ptr = i8_ptr_type.const_null();
+        let base_10 = i64_type.const_int(10, false);
+        let result = self.builder.build_call(strtol_fn, &[str_ptr.into(), null_ptr.into(), base_10.into()], "strtol_result")
+            .expect("strtol failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("string_to_int".to_string(), function);
+    }
+
+    // Builtin: string_sub(str: string, start: int, len: int) -> string
+    // Extracts a substring via malloc + memcpy.
+    fn create_string_sub_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into(), i64_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("string_sub", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("string_sub: missing str").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+        let str_len = self.builder.build_extract_value(str_struct, 1, "slen")
+            .expect("extract len").into_int_value();
+        let start = function.get_nth_param(1).expect("string_sub: missing start").into_int_value();
+        let req_len = function.get_nth_param(2).expect("string_sub: missing len").into_int_value();
+
+        // Clamp: actual_len = min(req_len, str_len - start)
+        let i64_zero = i64_type.const_int(0, false);
+        let remaining = self.builder.build_int_sub(str_len, start, "remaining").expect("sub failed");
+        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, req_len, remaining, "cmp_len").expect("cmp failed");
+        let actual_len = self.builder.build_select(cmp, remaining, req_len, "actual_len").expect("select failed").into_int_value();
+
+        // src = str_ptr + start
+        let src = unsafe { self.builder.build_gep(str_ptr, &[start], "src").expect("gep failed") };
+
+        // alloc actual_len + 1
+        let one = i64_type.const_int(1, false);
+        let alloc_size = self.builder.build_int_add(actual_len, one, "alloc_sz").expect("add failed");
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let new_buf = self.builder.build_call(malloc_fn, &[alloc_size.into()], "newbuf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // memcpy(new_buf, src, actual_len)
+        let memcpy_fn = *self.functions.get("memcpy").expect("memcpy not declared");
+        let _ = self.builder.build_call(memcpy_fn, &[new_buf.into(), src.into(), actual_len.into()], "cp");
+
+        // null terminate
+        let null_pos = unsafe { self.builder.build_gep(new_buf, &[actual_len], "nullpos").expect("gep null") };
+        let i8_type = self.context.i8_type();
+        let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, new_buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, actual_len, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("string_sub".to_string(), function);
+    }
+
+    // Builtin: char_at(str: string, index: int) -> int
+    // Returns the character at the given index as an integer (ASCII value).
+    fn create_char_at_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("char_at", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("char_at: missing str").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+        let index = function.get_nth_param(1).expect("char_at: missing index").into_int_value();
+
+        // char_ptr = str_ptr + index
+        let char_ptr = unsafe { self.builder.build_gep(str_ptr, &[index], "char_ptr").expect("gep failed") };
+
+        // Load i8 value and extend to i64
+        let i8_type = self.context.i8_type();
+        let char_val = self.builder.build_load(char_ptr, "char_val")
+            .expect("load failed").into_int_value();
+        let result = self.builder.build_int_z_extend(char_val, i64_type, "char_ext").expect("zext failed");
+
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("char_at".to_string(), function);
     }
 
     // =====================================================================
@@ -3143,6 +3299,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let memcmp_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i8_ptr.into(), i64_t.into()], false);
         let memcmp_fn = self.module.add_function("memcmp", memcmp_ty, None);
         self.functions.insert("memcmp".to_string(), memcmp_fn);
+        // snprintf(buf, size, fmt, ...) — for int_to_string
+        let snprintf_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i64_t.into(), i8_ptr.into()], true);
+        let snprintf_fn = self.module.add_function("snprintf", snprintf_ty, None);
+        self.functions.insert("snprintf".to_string(), snprintf_fn);
+        // strtol(str, NULL, base) — for string_to_int
+        let strtol_ty = i64_t.fn_type(&[i8_ptr.into(), i8_ptr.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
+        let strtol_fn = self.module.add_function("strtol", strtol_ty, None);
+        self.functions.insert("strtol".to_string(), strtol_fn);
     }
 
     /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
