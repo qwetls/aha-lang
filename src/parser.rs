@@ -860,7 +860,7 @@ impl Parser {
             let pattern = self.parse_pattern();
 
             // parse_pattern leaves current_token on ',' (unit) or '=>' (tuple).
-            // For unit patterns, advance past the comma to reach '=>'.
+            // For unit patterns, advance past comma to reach '=>'.
             if self.current_token_is(TokenType::Comma) {
                 self.next_token(); // ',' → '=>'
             }
@@ -877,9 +877,14 @@ impl Parser {
             let body = self.parse_expression(Precedence::Lowest);
             arms.push(MatchArm { pattern, body });
 
-            // After parse_expression, current_token is on body's last token.
-            // Advance to ',' or '}' to correctly position for next iteration.
-            self.next_token();
+            // After parse_expression, current_token is on body's last token,
+            // peek_token is on ',' or '}'. Skip comma if present.
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // advance to ','
+                self.next_token(); // advance past ',' to next arm
+            } else if self.peek_token_is(TokenType::RightBrace) {
+                break; // last arm, exit loop
+            }
         }
 
         Expression::Match(MatchExpression {
