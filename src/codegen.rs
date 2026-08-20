@@ -1032,6 +1032,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.create_string_to_int_builtin();
         self.create_string_sub_builtin();
         self.create_char_at_builtin();
+        self.create_file_read_builtin();
+        self.create_file_write_builtin();
 
         // Register return types for builtins
         self.fn_types.insert("print".to_string(), AhaType::Int);
@@ -1043,6 +1045,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("string_to_int".to_string(), AhaType::Int);
         self.fn_types.insert("string_sub".to_string(), AhaType::String);
         self.fn_types.insert("char_at".to_string(), AhaType::Int);
+        self.fn_types.insert("file_read".to_string(), AhaType::String);
+        self.fn_types.insert("file_write".to_string(), AhaType::Int);
     }
 
     // Builtin: print(int) -> prints integer with newline
@@ -1327,6 +1331,119 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let _ = self.builder.build_return(Some(&result));
         self.functions.insert("char_at".to_string(), function);
+    }
+
+    // =====================================================================
+    // File I/O builtins — fopen/fread/fwrite/fclose wrappers.
+    // =====================================================================
+
+    // Builtin: file_read(path: string) -> string
+    // Reads entire file into a heap-allocated string.
+    fn create_file_read_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let i8_ptr_type = self.i8_ptr_type();
+        let fn_type = i64_type.fn_type(&[self.string_type.into()], false);
+        let function = self.module.add_function("file_read", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Extract path string
+        let path_struct = function.get_nth_param(0).expect("file_read: missing path").into_struct_value();
+        let path_ptr = self.builder.build_extract_value(path_struct, 0, "path_ptr")
+            .expect("extract ptr").into_pointer_value();
+
+        // fopen(path, "rb")
+        let fopen_fn = *self.functions.get("fopen").expect("fopen not declared");
+        let mode = self.builder.build_global_string_ptr("rb", "mode").expect("mode failed");
+        let fp = self.builder.build_call(fopen_fn, &[path_ptr.into(), mode.as_pointer_value().into()], "fp")
+            .expect("fopen failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // fseek(fp, 0, SEEK_END) — SEEK_END = 2
+        let fseek_fn = *self.functions.get("fseek").expect("fseek not declared");
+        let zero = i64_type.const_int(0, false);
+        let seek_end = self.context.i32_type().const_int(2, false);
+        let _ = self.builder.build_call(fseek_fn, &[fp.into(), zero.into(), seek_end.into()], "fseek_end");
+
+        // size = ftell(fp)
+        let ftell_fn = *self.functions.get("ftell").expect("ftell not declared");
+        let size = self.builder.build_call(ftell_fn, &[fp.into()], "size")
+            .expect("ftell failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // fseek(fp, 0, SEEK_SET) — SEEK_SET = 0
+        let seek_set = self.context.i32_type().const_int(0, false);
+        let _ = self.builder.build_call(fseek_fn, &[fp.into(), zero.into(), seek_set.into()], "fseek_set");
+
+        // buf = malloc(size + 1)
+        let one = i64_type.const_int(1, false);
+        let alloc_size = self.builder.build_int_add(size, one, "alloc_sz").expect("add failed");
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let buf = self.builder.build_call(malloc_fn, &[alloc_size.into()], "buf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // fread(buf, 1, size, fp)
+        let fread_fn = *self.functions.get("fread").expect("fread not declared");
+        let one_64 = i64_type.const_int(1, false);
+        let _ = self.builder.build_call(fread_fn, &[buf.into(), one_64.into(), size.into(), fp.into()], "fread_call");
+
+        // fclose(fp)
+        let fclose_fn = *self.functions.get("fclose").expect("fclose not declared");
+        let _ = self.builder.build_call(fclose_fn, &[fp.into()], "fclose_call");
+
+        // null terminate
+        let null_pos = unsafe { self.builder.build_gep(buf, &[size], "nullpos").expect("gep null") };
+        let i8_type = self.context.i8_type();
+        let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, size, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("file_read".to_string(), function);
+    }
+
+    // Builtin: file_write(path: string, content: string) -> int
+    // Writes string content to file. Returns bytes written.
+    fn create_file_write_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into(), self.string_type.into()], false);
+        let function = self.module.add_function("file_write", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Extract path
+        let path_struct = function.get_nth_param(0).expect("file_write: missing path").into_struct_value();
+        let path_ptr = self.builder.build_extract_value(path_struct, 0, "path_ptr")
+            .expect("extract path ptr").into_pointer_value();
+
+        // Extract content
+        let content_struct = function.get_nth_param(1).expect("file_write: missing content").into_struct_value();
+        let content_ptr = self.builder.build_extract_value(content_struct, 0, "content_ptr")
+            .expect("extract content ptr").into_pointer_value();
+        let content_len = self.builder.build_extract_value(content_struct, 1, "content_len")
+            .expect("extract content len").into_int_value();
+
+        // fopen(path, "wb")
+        let fopen_fn = *self.functions.get("fopen").expect("fopen not declared");
+        let mode = self.builder.build_global_string_ptr("wb", "mode").expect("mode failed");
+        let fp = self.builder.build_call(fopen_fn, &[path_ptr.into(), mode.as_pointer_value().into()], "fp")
+            .expect("fopen failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // bytes_written = fwrite(content_ptr, 1, content_len, fp)
+        let fwrite_fn = *self.functions.get("fwrite").expect("fwrite not declared");
+        let one = i64_type.const_int(1, false);
+        let written = self.builder.build_call(fwrite_fn, &[content_ptr.into(), one.into(), content_len.into(), fp.into()], "written")
+            .expect("fwrite failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // fclose(fp)
+        let fclose_fn = *self.functions.get("fclose").expect("fclose not declared");
+        let _ = self.builder.build_call(fclose_fn, &[fp.into()], "fclose_call");
+
+        let _ = self.builder.build_return(Some(&written));
+        self.functions.insert("file_write".to_string(), function);
     }
 
     // =====================================================================
@@ -3307,6 +3424,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         let strtol_ty = i64_t.fn_type(&[i8_ptr.into(), i8_ptr.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
         let strtol_fn = self.module.add_function("strtol", strtol_ty, None);
         self.functions.insert("strtol".to_string(), strtol_fn);
+        // FILE* fopen(path, mode)
+        let i8_ptr_2 = self.i8_ptr_type();
+        let fopen_ty = i8_ptr_2.fn_type(&[i8_ptr_2.into(), i8_ptr_2.into()], false);
+        let fopen_fn = self.module.add_function("fopen", fopen_ty, None);
+        self.functions.insert("fopen".to_string(), fopen_fn);
+        // int fclose(FILE*)
+        let fclose_ty = self.context.i32_type().fn_type(&[i8_ptr_2.into()], false);
+        let fclose_fn = self.module.add_function("fclose", fclose_ty, None);
+        self.functions.insert("fclose".to_string(), fclose_fn);
+        // size_t fread(buf, size, count, FILE*)
+        let fread_ty = i64_t.fn_type(&[i8_ptr_2.into(), i64_t.into(), i64_t.into(), i8_ptr_2.into()], false);
+        let fread_fn = self.module.add_function("fread", fread_ty, None);
+        self.functions.insert("fread".to_string(), fread_fn);
+        // size_t fwrite(buf, size, count, FILE*)
+        let fwrite_ty = i64_t.fn_type(&[i8_ptr_2.into(), i64_t.into(), i64_t.into(), i8_ptr_2.into()], false);
+        let fwrite_fn = self.module.add_function("fwrite", fwrite_ty, None);
+        self.functions.insert("fwrite".to_string(), fwrite_fn);
+        // int fseek(FILE*, offset, whence)
+        let fseek_ty = self.context.i32_type().fn_type(&[i8_ptr_2.into(), i64_t.into(), self.context.i32_type().into()], false);
+        let fseek_fn = self.module.add_function("fseek", fseek_ty, None);
+        self.functions.insert("fseek".to_string(), fseek_fn);
+        // long ftell(FILE*)
+        let ftell_ty = i64_t.fn_type(&[i8_ptr_2.into()], false);
+        let ftell_fn = self.module.add_function("ftell", ftell_ty, None);
+        self.functions.insert("ftell".to_string(), ftell_fn);
     }
 
     /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
