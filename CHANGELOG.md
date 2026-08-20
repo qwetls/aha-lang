@@ -10,8 +10,14 @@ All notable changes to AHA! Lang are documented in this file.
   - `find_heap_vars_in_expr()` — scan return expression for variable references.
   - `collect_var_names` / `collect_block_vars` — recursive AST variable finder.
   - `insert_cleanup_inline(exclude)` — skip escaped variables in scope-end cleanup.
-  - Both main and generic compilation loops: update last-uses for returned variables so they are not freed at earlier last-use points.
+  - Both main and generic compilation loops: compute escape analysis before last-use, remove escaped variables from `last_uses` to prevent use-after-free.
+  - Handles both explicit `return` and implicit returns (last expression = return value).
   - 6 new tests: return map/list, return one free others, mixed explicit-free + return.
+
+### Fixed
+
+- **Escape analysis order-of-operations bug** — escaped variables were not removed from `last_uses` before the last-use analysis, causing use-after-free (SIGSEGV). Fixed by computing escape analysis first, then removing escaped variables from `last_uses`.
+- **Removed overly permissive `(String, Int)` return type compatibility** — String literals are correctly inferred as String, so this case was unnecessary and broke `test_return_annotation_mismatch_is_error`.
 
 ### Changed
 
