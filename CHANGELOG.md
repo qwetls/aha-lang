@@ -28,6 +28,7 @@ All notable changes to AHA! Lang are documented in this file.
 - **LLVM IR type mismatches in string/file builtins:**
   - `int_to_string`, `string_sub`, `file_read` declared as returning `i64` but body returns `{i8*, i64}` string struct — fixed to return `string`
   - `strtol` second parameter was `i8*` null but signature requires `i8**` — fixed cast
+  - `int_to_string` snprintf called without variadic value argument — undefined behavior producing garbage strings; fixed to pass `value` as 4th arg
   - `module.verify()` changed from `std::process::abort()` to `return Err()` for better error reporting
 
 ## [1.5.8] — 2026-08-20
