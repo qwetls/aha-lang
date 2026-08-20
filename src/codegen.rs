@@ -4933,7 +4933,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut val = enum_type.const_zero();
         // Set tag (field 0).
         val = self.builder.build_insert_value(val, self.i64_type.const_int(tag, false), 0, "tag")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .into_struct_value();
 
         // Set payload fields (field 1, 2, ...).
         for (i, arg) in call.arguments.iter().enumerate() {
@@ -4947,7 +4948,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ));
             }
             val = self.builder.build_insert_value(val, tv.value, (i + 1) as u32, "payload")
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+                .into_struct_value();
         }
 
         Ok(TypedValue::new(val.into(), AhaType::Enum(enum_name.to_string())))
@@ -4978,7 +4980,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Load the tag (field 0) for branching.
         let tag_val = self.builder.build_extract_value(scrutinee.value.into_struct_value(), 0, "tag")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .into_int_value();
 
         // Create blocks for each arm + default.
         let arm_count = m.arms.len();
@@ -4996,19 +4999,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "match on '{}' must have a wildcard '_' arm", enum_name
             ));
         }
-        let unreachable_block = self.context.append_basic_block(current_fn, "match.unreachable");
 
-        // Switch: tag → arm blocks, default → wildcard block.
+        // Build switch cases: collect all (IntValue, BasicBlock) pairs.
         let default_bb = *arm_blocks.last().unwrap();
-        let mut switch = self.builder.build_switch(tag_val, default_bb, &[])
-            .map_err(|e| e.to_string())?;
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
         for (i, arm) in m.arms.iter().enumerate() {
             if let ast::Pattern::EnumUnit(name) | ast::Pattern::EnumTuple(name, _) = &arm.pattern {
                 let tag = self.variant_tag(&enum_name, name)?;
                 let case_val = self.i64_type.const_int(tag, false);
-                switch.add_case(case_val, arm_blocks[i]);
+                cases.push((case_val, arm_blocks[i]));
             }
         }
+        self.builder.build_switch(tag_val, default_bb, &cases)
+            .map_err(|e| e.to_string())?;
 
         // Compile each arm body.
         let mut results: Vec<(BasicValueEnum<'ctx>, AhaType, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
@@ -5036,7 +5039,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             let tv = self.compile_expression(&arm.body)?;
-            self.leave_scope();
+            self.exit_scope();
             if !self.builder.get_insert_block().unwrap().get_terminator().is_some() {
                 self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
             }
