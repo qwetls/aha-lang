@@ -3317,10 +3317,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 (AhaType::Int, t) if t.is_bool() => true, // Int and Bool are both i64
                 (t, AhaType::Int) if t.is_bool() => true,
                 // Body inferred as Int but hint is complex — trust the hint
-                // (infer_expr_type_with_scope can't track local variable types)
+                // (infer_expr_type_with_scope can't track local variable types
+                // for Map/List; String literals ARE inferred correctly).
                 (AhaType::Map(_, _), AhaType::Int) => true,
                 (AhaType::List(_), AhaType::Int) => true,
-                (AhaType::String, AhaType::Int) => true,
                 _ => hint_type == body_type,
             };
             if !compatible {
