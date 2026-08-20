@@ -3372,7 +3372,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let mut last_uses = Self::find_last_uses(&func.body.statements);
 
             // Escape analysis: variables returned should not be freed before return.
-            // Update their last-use to the return statement index.
+            // For explicit returns: update last-use to return statement index + break.
+            // For implicit returns (last expression): populate escaped set only —
+            // do NOT update last_uses, because the last-use free runs AFTER the
+            // expression and would free the value before build_return uses it.
             let mut escaped = std::collections::HashSet::new();
             for (idx, stmt) in func.body.statements.iter().enumerate() {
                 if let ast::Statement::Return(ret) = stmt {
@@ -3381,6 +3384,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                         last_uses.insert(var.clone(), idx);
                     }
                     break;
+                }
+                // Implicit return: last expression statement is the return value.
+                if idx == func.body.statements.len() - 1 {
+                    if let ast::Statement::Expression(es) = stmt {
+                        escaped = Self::find_heap_vars_in_expr(&es.expression);
+                        // Don't update last_uses — post-loop cleanup handles these.
+                    }
                 }
             }
 
@@ -3871,6 +3881,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                         last_uses.insert(var.clone(), idx);
                     }
                     break;
+                }
+                // Implicit return: last expression statement is the return value.
+                if idx == generic.body.statements.len() - 1 {
+                    if let ast::Statement::Expression(es) = stmt {
+                        escaped = Self::find_heap_vars_in_expr(&es.expression);
+                        // Don't update last_uses — post-loop cleanup handles these.
+                    }
                 }
             }
 
