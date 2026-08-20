@@ -4003,11 +4003,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // is still unterminated. Add build_return in entry block
                 // so LLVM has a valid entry point. This is dead code in
                 // practice (switch dispatches to arm blocks first).
-                if entry_block.get_terminator().is_none() {
+                let entry_has_term = entry_block.get_terminator().is_some();
+                Self::diag_mark(&format!("FIX: has_return=true, entry_has_term={}, builder_block={:?}",
+                    entry_has_term,
+                    self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string())));
+                if !entry_has_term {
                     let return_val: inkwell::values::BasicValueEnum = self.i64_type.const_int(0, false).into();
                     self.builder.position_at_end(entry_block);
-                    self.builder.build_return(Some(&return_val))
-                        .map_err(|e| e.to_string())?;
+                    let r = self.builder.build_return(Some(&return_val));
+                    Self::diag_mark(&format!("FIX: build_return result={:?}", r.is_ok()));
+                    r.map_err(|e| e.to_string())?;
                 }
             }
             Ok(())
