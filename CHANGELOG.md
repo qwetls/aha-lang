@@ -2,6 +2,17 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.9] — 2026-08-20
+
+### Added
+
+- **AOT compilation (`--emit-exe <output>`):**
+  - `rename_main()` — renames LLVM `main` to free the name for C wrapper
+  - `add_c_main_wrapper()` — generates `int main()` that calls `__aha_main() -> i64`, truncates return
+  - `emit_object_file()` — uses inkwell `TargetMachine::write_to_file()` to produce native `.o`
+  - CLI: `--emit-exe <output>` emits object file + links with `cc` to produce native executable
+  - Flow: rename user main → add C wrapper → emit .o → link with cc
+
 ## [1.5.8] — 2026-08-20
 
 ### Added
