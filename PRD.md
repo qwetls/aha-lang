@@ -1,6 +1,6 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.3.2
+**Versi PRD:** 0.3.5
 **Tanggal:** 2026-08-20
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
@@ -126,14 +126,14 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F3 stabil di `main`. F4 namespace sebagian. F5 selesai.**
+**F1-F4 stabil di `main`. F5 selesai.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
 | **F1** | Struct codegen, mutasi field, struct sebagai param/return | ✅ Selesai (v1.5.0) |
 | **F2** | Type inference & annotations | ✅ Selesai |
 | **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (581+ test) |
-| **F4** | Module system — namespace & visibilitas | ⚠️ `use "file"` ✅ + `pub` keyword + `module::name` ✅ (v1.5.3); visibility filter belum |
+| **F4** | Module system — namespace & visibilitas | ✅ Selesai (v1.5.6) — `use "file"` + `pub` + `module::name` + visibility filter |
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
@@ -180,12 +180,12 @@ ke main. Tidak ada loncatan.
 - Map 4 combos: `<Int,Int>`, `<String,Int>`, `<Int,String>`, `<String,String>`
 - 21 Map tests, grow-on-load-factor + rehash + free old buffer
 
-### ⚠️ F4 — Module System (partial, v1.5.3)
+### ✅ F4 — Module System (v1.5.6)
 - `use "file"` — modularitas antar file (recursive import, AST merge, cycle detection) ✅
 - `pub` keyword — di-lexer, di-parse, tersimpan di AST (`is_pub` pada FunctionLiteral & StructDefinition) ✅
 - `::` token — `ColonColon` di-lexer ✅
 - `module::name` — `ModuleAccess` expression, handle di parser & codegen ✅
-- [ ] Visibility filter — `pub` disimpan tapi belum enforce (semua item dari import tetap accessible)
+- [x] Visibility filter — non-pub items from imports dropped during AST merge (v1.5.6)
 
 ### 🔄 F5 — Resource Lifetimes (Phase 1 in progress)
 **Pendekatan: Compiler-inserted free** — compiler secara otomatis menyisipkan
@@ -243,12 +243,12 @@ Detail Fase 1, 2 & 3 (di `development`):
 - [x] Map grow-on-load-factor + rehash + free old buffer
 - [x] Semua sub-fitur di `main` (571+ test)
 
-### F4. Module system — ⚠️ PARTIAL (v1.5.3)
+### F4. Module system — ✅ COMPLETE (v1.5.6)
 - [x] `use "file"` — modularitas antar file (recursive import resolution, AST merge, cycle detection)
 - [x] `pub` keyword — lexer, parser, AST (is_pub flag on FunctionLiteral & StructDefinition)
 - [x] `::` token — ColonColon in lexer
 - [x] `module::name` — ModuleAccess expression, parser prefix, codegen (compile_expression, compile_call, scan_expr_for_calls, infer_expr_type_with_scope)
-- [ ] Visibility filter — pub items only from imports (currently all items accessible)
+- [x] Visibility filter — non-pub items from imports dropped during AST merge (v1.5.6)
 - [ ] ~~`aha install` — registry sederhana~~ → dipindah ke F8 (setelah AOT binary + komunitas)
 
 ### ✅ F5. Resource lifetimes — SELESAI
@@ -349,3 +349,4 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.2 | F4 namespace progress: `pub` keyword + `::` token + `module::name` expression implemented (lexer, AST, parser, codegen). Visibility filter deferred — pub stored in AST but all items still accessible from imports. |
 | 2026-08-20 | 0.3.3 | F5 Phase 2 selesai: last-use analysis — `find_last_uses()` pre-scan AST, `insert_free_for_var()` per-variable free, fallback ke scope-end untuk branch. 7 tests baru (total 19 ownership tests). |
 | 2026-08-20 | 0.3.4 | F5 SELESAI — Phase 3 escape analysis: `find_heap_vars_in_expr()` deteksi variabel yang di-return, skip auto-free. 6 tests baru (total 25 ownership tests). F5 lengkap: scope-based + last-use + escape. |
+| 2026-08-20 | 0.3.5 | F4 SELESAI — Visibility filter: non-pub items dari imports di-drop saat AST merge. `is_pub_item()` cek FunctionLiteral & StructDefinition. 5 tests baru, 3 namespace tests di-update. F4 lengkap: use + pub + namespace + visibility. |

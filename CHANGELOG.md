@@ -2,6 +2,25 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.6] — 2026-08-20
+
+### Added
+
+- **F4 Visibility filter — `pub` enforcement on imports:**
+  - Non-pub functions and structs from imported files are dropped during AST merge.
+  - Only `pub` items are accessible via `use "file"` or `module::name`.
+  - `is_pub_item()` helper in compiler.rs checks `FunctionLiteral.is_pub` and `StructDefinition.is_pub`.
+  - 5 new visibility filter tests: non-pub fn/struct blocked, mixed pub/non-pub, pub-only callees.
+  - 3 existing namespace tests updated for enforcement.
+
+### Changed
+
+- **F4 is now COMPLETE**: `use "file"` ✅ + `pub` keyword ✅ + `module::name` ✅ + visibility filter ✅.
+
+### Known limitation
+
+- Pub functions in imported files cannot call non-pub helpers in the same file (non-pub items are dropped from merged AST). ponytail: fix when per-file scoping lands.
+
 ## [1.5.5] — 2026-08-20
 
 ### Added
