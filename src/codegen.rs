@@ -4551,6 +4551,74 @@ impl<'ctx> CodeGenerator<'ctx> {
             Ok(compiled_fn())
         }
     }
+
+    /// Rename the LLVM `main` function to `new_name`.
+    /// Used during AOT compilation to free up the name for a C-compatible wrapper.
+    pub fn rename_main(&mut self, new_name: &str) {
+        if let Some(f) = self.module.get_function("main") {
+            f.set_name(new_name);
+        }
+    }
+
+    /// Add a C-compatible `main` wrapper that calls `__aha_main() -> i64`.
+    /// Must be called after `rename_main("__aha_main")`.
+    pub fn add_c_main_wrapper(&mut self) {
+        let i64_type = self.context.i64_type();
+        let i32_type = self.context.i32_type();
+
+        // Declare __aha_main() -> i64
+        let aha_main_fn = self.module.get_function("__aha_main")
+            .expect("__aha_main not found — call rename_main first");
+        let wrapper_type = i32_type.fn_type(&[], false);
+        let wrapper_fn = self.module.add_function("main", wrapper_type, None);
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let call = self.builder.build_call(aha_main_fn, &[], "aha_result")
+            .expect("failed to call __aha_main");
+        let result = call.try_as_basic_value().left().unwrap().into_int_value();
+
+        // Truncate i64 to i32 for C main return
+        let truncated = self.builder.build_int_truncate(result, i32_type, "ret")
+            .expect("truncate failed");
+        self.builder.build_return(Some(&truncated)).expect("return failed");
+    }
+
+    /// Emit object file (.o) for AOT compilation.
+    /// Returns the path to the written object file.
+    pub fn emit_object_file(&self, path: &std::path::Path) -> Result<(), String> {
+        use inkwell::targets::{Target, TargetMachine, TargetTriple, FileType, InitializationConfig};
+
+        // Initialize native target
+        Target::initialize_native(&InitializationConfig::default())
+            .map_err(|e| format!("Failed to init native target: {}", e))?;
+        Target::initialize_x86(&InitializationConfig::default());
+        Target::initialize_aarch64(&InitializationConfig::default());
+
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple)
+            .map_err(|e| format!("Failed to get target: {}", e))?;
+
+        let cpu = TargetMachine::get_host_cpu_name()
+            .to_string_lossy().to_string();
+        let features = TargetMachine::get_host_cpu_features()
+            .to_string_lossy().to_string();
+
+        let target_machine = target.create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            inkwell::OptimizationLevel::Default,
+            Default::default(),
+            Default::default(),
+        ).ok_or("Failed to create target machine")?;
+
+        target_machine.write_to_file(&self.module, FileType::Object, path)
+            .map_err(|e| format!("Failed to write object file: {}", e))?;
+
+        Ok(())
+    }
 }
 
 
