@@ -910,6 +910,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Phase 1: actors are pure JIT — no runtime functions needed.
         self.declare_actor_runtime();
         Self::diag_mark("2a: actor runtime declared");
+        // String + file builtins depend on C runtime (malloc, snprintf, fopen, etc.)
+        self.declare_string_and_file_builtins();
+        Self::diag_mark("2b: string/file builtins declared");
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
         Self::diag_mark("3: list builtins created");
@@ -1028,12 +1031,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.create_min_builtin();
         self.create_max_builtin();
         self.create_len_builtin();
-        self.create_int_to_string_builtin();
-        self.create_string_to_int_builtin();
-        self.create_string_sub_builtin();
-        self.create_char_at_builtin();
-        self.create_file_read_builtin();
-        self.create_file_write_builtin();
 
         // Register return types for builtins
         self.fn_types.insert("print".to_string(), AhaType::Int);
@@ -1041,6 +1038,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("min".to_string(), AhaType::Int);
         self.fn_types.insert("max".to_string(), AhaType::Int);
         self.fn_types.insert("len".to_string(), AhaType::Int);
+    }
+
+    /// Declare string + file I/O builtins (depend on C runtime: malloc, snprintf, fopen, etc.)
+    fn declare_string_and_file_builtins(&mut self) {
+        self.create_int_to_string_builtin();
+        self.create_string_to_int_builtin();
+        self.create_string_sub_builtin();
+        self.create_char_at_builtin();
+        self.create_file_read_builtin();
+        self.create_file_write_builtin();
+
         self.fn_types.insert("int_to_string".to_string(), AhaType::String);
         self.fn_types.insert("string_to_int".to_string(), AhaType::Int);
         self.fn_types.insert("string_sub".to_string(), AhaType::String);
