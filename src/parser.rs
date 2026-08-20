@@ -264,11 +264,8 @@ impl Parser {
             }
         }
 
-        // current token is already '}' from the last else-branch next_token();
-        // consume it so parse_program's loop advances to the next statement.
-        if self.current_token_is(TokenType::RightBrace) {
-            self.next_token();
-        }
+        // current_token is '}' from the last else-branch next_token();
+        // Don't consume it here — parse_program's loop calls next_token().
 
         Some(Statement::Actor(ActorDefinition { name, is_pub, fields }))
     }
