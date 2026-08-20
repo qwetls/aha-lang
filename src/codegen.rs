@@ -55,6 +55,9 @@ pub struct CodeGenerator<'ctx> {
     /// Active generic type-parameter bindings during monomorphized
     /// body compilation: type param name → concrete AhaType.
     type_param_map: HashMap<String, AhaType>,
+    /// Registered enum definitions: enum name → variants with payload types.
+    /// Each variant is (name, Vec<AhaType>) — empty vec = unit variant.
+    enum_defs: HashMap<String, Vec<(String, Vec<AhaType>)>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -95,6 +98,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             scan_scope: Vec::new(),
             generic_defs: HashMap::new(),
             type_param_map: HashMap::new(),
+            enum_defs: HashMap::new(),
         }
     }
 
@@ -262,6 +266,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Array(arr) => {
                 for elem in &arr.elements { Self::collect_var_names(elem, vars); }
             }
+            ast::Expression::Match(m) => {
+                Self::collect_var_names(&m.value, vars);
+                for arm in &m.arms { Self::collect_var_names(&arm.body, vars); }
+            }
             _ => {}
         }
     }
@@ -345,6 +353,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Assignment(assign) => {
                 Self::scan_expr_uses(&assign.value, last_uses, idx);
             }
+            ast::Expression::Match(m) => {
+                Self::scan_expr_uses(&m.value, last_uses, idx);
+                for arm in &m.arms {
+                    Self::scan_expr_uses(&arm.body, last_uses, idx);
+                }
+            }
             _ => {} // literals, module access — no heap var uses
         }
     }
@@ -426,6 +440,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 ast::Statement::Struct(_) => {}
                 ast::Statement::Actor(_) => {}
+                ast::Statement::Enum(_) => {}
                 ast::Statement::Import(_) => {}
             }
         }
@@ -525,6 +540,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(value_expr);
                 }
             }
+            ast::Expression::Match(m) => {
+                self.scan_expr_for_calls(&m.value);
+                for arm in &m.arms {
+                    self.scan_expr_for_calls(&arm.body);
+                }
+            }
             _ => {}
         }
     }
@@ -540,6 +561,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         match t {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
+            AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -570,6 +592,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         if self.struct_defs.contains_key(hint) {
             return AhaType::Struct(hint.to_string());
         }
+        if self.enum_defs.contains_key(hint) {
+            return AhaType::Enum(hint.to_string());
+        }
         AhaType::Int
     }
 
@@ -587,6 +612,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::Struct(name) => {
                 let st = self.struct_llvm_type(name)?;
                 Ok(st.fn_type(&meta, false))
+            }
+            AhaType::Enum(name) => {
+                let et = self.enum_llvm_type(name)?;
+                Ok(et.fn_type(&meta, false))
             }
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
@@ -665,6 +694,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Call(call) => {
                 if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    // Enum variant constructor: return the enum type.
+                    if let Some(enum_name) = self.find_enum_for_variant(&id.value) {
+                        return AhaType::Enum(enum_name);
+                    }
                     // List builtins: preserve the element type of the first
                     // argument so `let xs = list_new(); list_push(xs, ...)`
                     // keeps xs as List<Int> and list_get(xs, i) is Int.
@@ -721,6 +754,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 AhaType::Int
             }
+            ast::Expression::Match(m) => {
+                // Return type of first arm body (all arms must agree).
+                if let Some(arm) = m.arms.first() {
+                    self.infer_expr_type(&arm.body)
+                } else {
+                    AhaType::Int
+                }
+            }
             _ => AhaType::Int,
         }
     }
@@ -733,9 +774,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn infer_function_return_type(&self, func: &ast::FunctionLiteral, func_name: &str) -> AhaType {
         // Prefer explicit return type annotation (e.g. `fn f() -> int`)
         if let Some(ref hint) = func.return_type_hint {
-            // Resolve struct names against struct_defs, then fall back to from_hint.
+            // Resolve struct/enum names against registries, then fall back to from_hint.
             let ty = if self.struct_defs.contains_key(hint.as_str()) {
                 AhaType::Struct(hint.clone())
+            } else if self.enum_defs.contains_key(hint.as_str()) {
+                AhaType::Enum(hint.clone())
             } else {
                 AhaType::from_hint(hint).unwrap_or(AhaType::Int)
             };
@@ -813,6 +856,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     _ => None,
                 };
                 if let Some(name) = call_name {
+                    if let Some(enum_name) = self.find_enum_for_variant(name) {
+                        return AhaType::Enum(enum_name);
+                    }
                     if name == "list_push" || name == "list_push_string" {
                         if let Some(first) = call.arguments.first() {
                             return self.infer_expr_type_with_scope(first, scope);
@@ -864,6 +910,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Assignment(assign) => {
                 self.infer_expr_type_with_scope(&assign.value, scope)
+            }
+            ast::Expression::Match(m) => {
+                if let Some(arm) = m.arms.first() {
+                    self.infer_expr_type_with_scope(&arm.body, scope)
+                } else {
+                    AhaType::Int
+                }
             }
             _ => AhaType::Int,
         }
@@ -933,6 +986,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Register struct definitions first so struct literals and field
         // access can resolve field layout during codegen.
         self.register_structs(&program.statements);
+        // Register enum definitions so constructors and match can resolve
+        // variant layout during codegen.
+        self.register_enums(&program.statements);
 
         // Pre-pass: iterate scanning until param types and return types
         // stabilize. A single pass is insufficient: a struct param's
@@ -997,7 +1053,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // main is always an i64 entry point; a String/Struct result
                 // has no meaningful i64 value, so return 0 (callers use len()
                 // etc. to inspect it instead).
-                AhaType::String | AhaType::Struct(_) => self.i64_type.const_int(0, false).into(),
+                AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
                 _ => tv.value,
             },
             None => self.i64_type.const_int(0, false).into(),
@@ -3128,17 +3184,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let alloc_type = if let Some(ref hint) = let_stmt.type_annotation {
                     let hint_type = AhaType::from_hint(hint)
                         .unwrap_or(AhaType::Int);
-                    // If the struct_defs registry has a matching name, use Struct.
+                    // If the struct_defs or enum_defs registry has a matching name.
                     let hint_type = if self.struct_defs.contains_key(hint) {
                         AhaType::Struct(hint.clone())
+                    } else if self.enum_defs.contains_key(hint) {
+                        AhaType::Enum(hint.clone())
                     } else {
                         hint_type
                     };
                     // Type-check: annotation must match the inferred type.
-                    // Struct("Point") vs Struct("Point") is compatible.
-                    // Int annotation with String value → error.
+                    // Struct("Point") vs Struct("Point") or Enum("Color") vs Enum("Color") is compatible.
                     let compatible = match (&hint_type, &typed_val.aha_type) {
                         (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                        (AhaType::Enum(a), AhaType::Enum(b)) => a == b,
                         _ => hint_type == typed_val.aha_type,
                     };
                     if !compatible {
@@ -3177,6 +3235,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Statement::Actor(_) => {
                 // Actor definitions are registered as structs (actor = struct + thread)
+            }
+            ast::Statement::Enum(_) => {
+                // Enum definitions are compile-time metadata
             }
         }
         Ok(())
@@ -3307,6 +3368,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 Ok(TypedValue::new(handle.into(), AhaType::Int))
             },
+            ast::Expression::Match(m) => self.compile_match_expression(m),
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
     }
@@ -3717,11 +3779,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             let hint_type = if self.struct_defs.contains_key(hint.as_str()) {
                 AhaType::Struct(hint.clone())
+            } else if self.enum_defs.contains_key(hint.as_str()) {
+                AhaType::Enum(hint.clone())
             } else {
                 AhaType::from_hint(hint).unwrap_or(AhaType::Int)
             };
             let compatible = match (&hint_type, &body_type) {
                 (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                (AhaType::Enum(a), AhaType::Enum(b)) => a == b,
                 (AhaType::Int, t) if t.is_bool() => true, // Int and Bool are both i64
                 (t, AhaType::Int) if t.is_bool() => true,
                 // Body inferred as Int but hint is complex — trust the hint
@@ -3805,6 +3870,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 AhaType::Struct(name) => {
                     self.struct_llvm_type(name)?.const_zero().into()
                 }
+                AhaType::Enum(name) => {
+                    self.enum_llvm_type(name)?.const_zero().into()
+                }
                 _ => self.i64_type.const_int(0, false).into(),
             };
 
@@ -3870,6 +3938,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // F6 Actor builtins: send(handle, msg), call(handle, msg) -> i64
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
+        }
+        // Enum variant constructor: Variant(args...) or Variant
+        if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
+            return self.compile_enum_constructor(&enum_name, &func_name, call);
         }
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
@@ -4332,6 +4404,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 AhaType::Struct(name) => {
                     self.struct_llvm_type(name)?.const_zero().into()
                 }
+                AhaType::Enum(name) => {
+                    self.enum_llvm_type(name)?.const_zero().into()
+                }
                 _ => self.i64_type.const_int(0, false).into(),
             };
 
@@ -4464,6 +4539,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             (AhaType::String, _) | (_, AhaType::String) => self.string_type.into(),
             (AhaType::Struct(name), _) => self.struct_llvm_type(name)?.into(),
             (_, AhaType::Struct(name)) => self.struct_llvm_type(name)?.into(),
+            (AhaType::Enum(name), _) => self.enum_llvm_type(name)?.into(),
+            (_, AhaType::Enum(name)) => self.enum_llvm_type(name)?.into(),
             _ => self.i64_type.into(),
         };
         let phi_node = self.builder.build_phi(phi_type, "iftmp")
@@ -4768,6 +4845,221 @@ impl<'ctx> CodeGenerator<'ctx> {
         fields.iter().position(|(f, _)| f == field)
             .map(|i| i as u32)
             .ok_or_else(|| format!("Struct '{}' has no field '{}'", struct_name, field))
+    }
+
+    // --- Enum support ---
+
+    /// Walk top-level statements and record every enum definition's
+    /// variant names + payload types for constructors and match.
+    fn register_enums(&mut self, statements: &[ast::Statement]) {
+        for stmt in statements {
+            if let ast::Statement::Enum(def) = stmt {
+                let variants: Vec<(String, Vec<AhaType>)> = def.variants.iter()
+                    .map(|v| {
+                        let types: Vec<AhaType> = v.payload_types.iter()
+                            .map(|t| AhaType::from_hint(t).unwrap_or(AhaType::Int))
+                            .collect();
+                        (v.name.value.clone(), types)
+                    })
+                    .collect();
+                self.enum_defs.insert(def.name.value.clone(), variants);
+            }
+        }
+    }
+
+    /// Find which enum owns a variant name by scanning all registered enums.
+    fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
+        for (enum_name, variants) in &self.enum_defs {
+            if variants.iter().any(|(name, _)| name == variant_name) {
+                return Some(enum_name.clone());
+            }
+        }
+        None
+    }
+
+    /// LLVM struct type for an enum: {i64 tag, i64, i64, ...} where
+    /// the number of i64 slots after the tag equals the max payload size.
+    fn enum_llvm_type(&self, name: &str) -> Result<inkwell::types::StructType<'ctx>, String> {
+        let variants = self.enum_defs.get(name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", name))?;
+        let max_payload = variants.iter()
+            .map(|(_, types)| types.len())
+            .max()
+            .unwrap_or(0);
+        let mut field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
+            Vec::with_capacity(1 + max_payload);
+        field_types.push(self.i64_type.into()); // tag
+        for _ in 0..max_payload {
+            field_types.push(self.i64_type.into()); // payload slots
+        }
+        Ok(self.context.struct_type(&field_types, false))
+    }
+
+    /// Variant tag index (0-based, declaration order).
+    fn variant_tag(&self, enum_name: &str, variant_name: &str) -> Result<u64, String> {
+        let variants = self.enum_defs.get(enum_name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", enum_name))?;
+        variants.iter()
+            .position(|(name, _)| name == variant_name)
+            .map(|i| i as u64)
+            .ok_or_else(|| format!("Enum '{}' has no variant '{}'", enum_name, variant_name))
+    }
+
+    /// Payload types for a variant.
+    fn variant_payload(&self, enum_name: &str, variant_name: &str) -> Result<Vec<AhaType>, String> {
+        let variants = self.enum_defs.get(enum_name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", enum_name))?;
+        variants.iter()
+            .find(|(name, _)| name == variant_name)
+            .map(|(_, types)| types.clone())
+            .ok_or_else(|| format!("Enum '{}' has no variant '{}'", enum_name, variant_name))
+    }
+
+    /// Compile an enum constructor call: `Variant(args...)` or `Variant`.
+    /// Called from compile_call when the name matches a registered enum variant.
+    fn compile_enum_constructor(&mut self, enum_name: &str, variant_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let tag = self.variant_tag(enum_name, variant_name)?;
+        let payload_types = self.variant_payload(enum_name, variant_name)?;
+        let enum_type = self.enum_llvm_type(enum_name)?;
+
+        // Verify argument count matches payload arity.
+        if call.arguments.len() != payload_types.len() {
+            return Err(format!(
+                "Enum variant '{}::{}' expects {} arguments, got {}",
+                enum_name, variant_name, payload_types.len(), call.arguments.len()
+            ));
+        }
+
+        let mut val = enum_type.const_zero();
+        // Set tag (field 0).
+        val = self.builder.build_insert_value(val, self.i64_type.const_int(tag, false), 0, "tag")
+            .map_err(|e| e.to_string())?;
+
+        // Set payload fields (field 1, 2, ...).
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let tv = self.compile_expression(arg)?;
+            // Type-check payload.
+            let expected = &payload_types[i];
+            if !Self::types_compatible(&tv.aha_type, expected) {
+                return Err(format!(
+                    "Enum variant '{}::{}' arg {} expects {}, got {}",
+                    enum_name, variant_name, i, expected, tv.aha_type
+                ));
+            }
+            val = self.builder.build_insert_value(val, tv.value, (i + 1) as u32, "payload")
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok(TypedValue::new(val.into(), AhaType::Enum(enum_name.to_string())))
+    }
+
+    /// Loose type compatibility check for enum payloads (Int~Bool, same name).
+    fn types_compatible(a: &AhaType, b: &AhaType) -> bool {
+        if a == b { return true; }
+        match (a, b) {
+            (AhaType::Int, AhaType::Bool) | (AhaType::Bool, AhaType::Int) => true,
+            _ => false,
+        }
+    }
+
+    /// Compile: match expr { Pattern => body, ... }
+    fn compile_match_expression(&mut self, m: &ast::MatchExpression) -> Result<TypedValue<'ctx>, String> {
+        let scrutinee = self.compile_expression(&m.value)?;
+        let enum_name = match &scrutinee.aha_type {
+            AhaType::Enum(name) => name.clone(),
+            _ => return Err(format!(
+                "match requires an enum value, got {}", scrutinee.aha_type
+            )),
+        };
+
+        let enum_type = self.enum_llvm_type(&enum_name)?;
+        let current_fn = self.current_function.ok_or("match outside function")?;
+        let merge_block = self.context.append_basic_block(current_fn, "match.merge");
+
+        // Load the tag (field 0) for branching.
+        let tag_val = self.builder.build_extract_value(scrutinee.value.into_struct_value(), 0, "tag")
+            .map_err(|e| e.to_string())?;
+
+        // Create blocks for each arm + default.
+        let arm_count = m.arms.len();
+        let mut arm_blocks = Vec::with_capacity(arm_count);
+        let mut has_default = false;
+        for arm in &m.arms {
+            if matches!(arm.pattern, ast::Pattern::Wildcard) {
+                has_default = true;
+            }
+            let bb = self.context.append_basic_block(current_fn, "match.arm");
+            arm_blocks.push(bb);
+        }
+        if !has_default {
+            return Err(format!(
+                "match on '{}' must have a wildcard '_' arm", enum_name
+            ));
+        }
+        let unreachable_block = self.context.append_basic_block(current_fn, "match.unreachable");
+
+        // Switch: tag → arm blocks, default → wildcard block.
+        let default_bb = *arm_blocks.last().unwrap();
+        let mut switch = self.builder.build_switch(tag_val, default_bb, &[])
+            .map_err(|e| e.to_string())?;
+        for (i, arm) in m.arms.iter().enumerate() {
+            if let ast::Pattern::EnumUnit(name) | ast::Pattern::EnumTuple(name, _) = &arm.pattern {
+                let tag = self.variant_tag(&enum_name, name)?;
+                let case_val = self.i64_type.const_int(tag, false);
+                switch.add_case(case_val, arm_blocks[i]);
+            }
+        }
+
+        // Compile each arm body.
+        let mut results: Vec<(BasicValueEnum<'ctx>, AhaType, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        for (i, arm) in m.arms.iter().enumerate() {
+            self.builder.position_at_end(arm_blocks[i]);
+            self.enter_scope();
+
+            // Destructure bindings for tuple patterns.
+            if let ast::Pattern::EnumTuple(name, bindings) = &arm.pattern {
+                let payload = self.variant_payload(&enum_name, name)?;
+                for (j, binding) in bindings.iter().enumerate() {
+                    if j >= payload.len() { break; }
+                    let field_val = self.builder.build_extract_value(
+                        scrutinee.value.into_struct_value(),
+                        (j + 1) as u32,
+                        "destructure",
+                    ).map_err(|e| e.to_string())?;
+                    let ptr = self.builder.build_alloca(
+                        self.aha_type_to_llvm_type(&payload[j])?,
+                        binding,
+                    ).map_err(|e| e.to_string())?;
+                    self.builder.build_store(ptr, field_val).map_err(|e| e.to_string())?;
+                    self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                }
+            }
+
+            let tv = self.compile_expression(&arm.body)?;
+            self.leave_scope();
+            if !self.builder.get_insert_block().unwrap().get_terminator().is_some() {
+                self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+            }
+            let block = self.builder.get_insert_block().unwrap();
+            results.push((tv.value, tv.aha_type, block));
+        }
+
+        // Unreachable block.
+        self.builder.position_at_end(unreachable_block);
+        self.builder.build_unreachable().map_err(|e| e.to_string())?;
+
+        // Merge: phi node across all arms.
+        self.builder.position_at_end(merge_block);
+        let result_type = &results[0].1;
+        let phi_llvm_type = self.aha_type_to_llvm_type(result_type)?;
+        let phi = self.builder.build_phi(phi_llvm_type, "match.result").map_err(|e| e.to_string())?;
+        for (val, _typ, block) in &results {
+            if !block.get_terminator().is_some() {
+                phi.add_incoming(&[(val as &dyn inkwell::values::BasicValue, *block)]);
+            }
+        }
+
+        Ok(TypedValue::new(phi.as_basic_value(), result_type.clone()))
     }
 
     fn compile_struct_literal(&mut self, lit: &ast::StructLiteral) -> Result<TypedValue<'ctx>, String> {
