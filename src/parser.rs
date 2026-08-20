@@ -292,7 +292,6 @@ impl Parser {
 
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
             if !self.current_token_is(TokenType::Identifier) {
-                eprintln!("[ENUM-DBG] ERROR: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
                 self.errors.push(format!(
                     "Expected variant name, got {:?}",
                     self.current_token.kind
@@ -303,31 +302,27 @@ impl Parser {
 
             // Optional tuple payload: Variant(Type, Type, ...)
             let payload_types = if self.peek_token_is(TokenType::LeftParen) {
-                eprintln!("[ENUM-DBG]   tuple '{}': entering with current={:?}({})", variant_name.value, self.current_token.kind, self.current_token.literal);
                 self.next_token(); // '('
-                eprintln!("[ENUM-DBG]   after '(': current={:?}({})", self.current_token.kind, self.current_token.literal);
                 let mut types = Vec::new();
                 self.next_token(); // first token inside parens
-                eprintln!("[ENUM-DBG]   first inner: current={:?}({})", self.current_token.kind, self.current_token.literal);
                 while !self.current_token_is(TokenType::RightParen) && !self.current_token_is(TokenType::Eof) {
                     if self.current_token_is(TokenType::Identifier) {
                         types.push(self.current_token.literal.clone());
                     }
                     self.next_token();
                 }
-                eprintln!("[ENUM-DBG]   inner done: current={:?}({})", self.current_token.kind, self.current_token.literal);
                 self.next_token(); // skip ')'
-                eprintln!("[ENUM-DBG]   after ')': current={:?}({})", self.current_token.kind, self.current_token.literal);
                 types
             } else {
                 Vec::new()
             };
 
-            variants.push(EnumVariant { name: variant_name, payload_types });
-
             // For tuple variants, current is already on comma after ')'.
             // For unit variants, current is still on variant name — advance first.
-            if !payload_types.is_empty() {
+            let is_tuple = !payload_types.is_empty();
+            variants.push(EnumVariant { name: variant_name, payload_types });
+
+            if is_tuple {
                 // Tuple: current = comma, check directly
                 if self.current_token_is(TokenType::Comma) {
                     self.next_token(); // skip ','
@@ -354,7 +349,6 @@ impl Parser {
             }
         }
 
-        eprintln!("[ENUM-DBG] exiting loop: current={:?}({}) variants={}", self.current_token.kind, self.current_token.literal, variants.len());
         if self.current_token_is(TokenType::RightBrace) {
             self.next_token(); // skip '}'
         }
