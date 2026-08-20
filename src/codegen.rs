@@ -158,10 +158,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Insert free calls for all heap-allocated local variables directly
     /// into the current basic block (no new blocks created).
     /// Must be called BEFORE the return terminator is built.
-    fn insert_cleanup_inline(&mut self) {
+    /// `exclude` — variable names to skip (escaped via return).
+    fn insert_cleanup_inline(&mut self, exclude: &std::collections::HashSet<String>) {
         if let Some(scope) = self.scopes.last() {
-            for (_, var_info) in scope {
-                if var_info.is_param || var_info.freed { continue; }
+            for (name, var_info) in scope {
+                if var_info.is_param || var_info.freed || exclude.contains(name) { continue; }
                 match &var_info.var_type {
                     AhaType::Map(_, _) => {
                         if let Some(f) = self.module.get_function("map_free") {
@@ -221,6 +222,58 @@ impl<'ctx> CodeGenerator<'ctx> {
             Self::scan_stmt_uses(stmt, &mut last_uses, idx);
         }
         last_uses
+    }
+
+    /// Escape analysis: find all variable names referenced in an expression.
+    /// Used to detect which heap variables escape via return.
+    fn find_heap_vars_in_expr(expr: &ast::Expression) -> std::collections::HashSet<String> {
+        let mut vars = std::collections::HashSet::new();
+        Self::collect_var_names(expr, &mut vars);
+        vars
+    }
+
+    fn collect_var_names(expr: &ast::Expression, vars: &mut std::collections::HashSet<String>) {
+        match expr {
+            ast::Expression::Identifier(id) => { vars.insert(id.value.clone()); }
+            ast::Expression::Infix(infix) => {
+                Self::collect_var_names(&infix.left, vars);
+                Self::collect_var_names(&infix.right, vars);
+            }
+            ast::Expression::Prefix(prefix) => { Self::collect_var_names(&prefix.right, vars); }
+            ast::Expression::If(if_expr) => {
+                Self::collect_var_names(&if_expr.condition, vars);
+                Self::collect_block_vars(&if_expr.consequence, vars);
+                if let Some(ref alt) = if_expr.alternative { Self::collect_block_vars(alt, vars); }
+            }
+            ast::Expression::Call(call) => {
+                Self::collect_var_names(&call.function, vars);
+                for arg in &call.arguments { Self::collect_var_names(arg, vars); }
+            }
+            ast::Expression::Index(idx_expr) => {
+                Self::collect_var_names(&idx_expr.left, vars);
+                Self::collect_var_names(&idx_expr.index, vars);
+            }
+            ast::Expression::FieldAccess(fa) => { Self::collect_var_names(&fa.object, vars); }
+            ast::Expression::Assignment(assign) => { Self::collect_var_names(&assign.value, vars); }
+            ast::Expression::StructLiteral(sl) => {
+                for (_, val) in &sl.fields { Self::collect_var_names(val, vars); }
+            }
+            ast::Expression::Array(arr) => {
+                for elem in &arr.elements { Self::collect_var_names(elem, vars); }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_block_vars(block: &ast::BlockStatement, vars: &mut std::collections::HashSet<String>) {
+        for stmt in &block.statements {
+            match stmt {
+                ast::Statement::Expression(es) => Self::collect_var_names(&es.expression, vars),
+                ast::Statement::Let(ls) => Self::collect_var_names(&ls.value, vars),
+                ast::Statement::Return(ret) => Self::collect_var_names(&ret.return_value, vars),
+                _ => {}
+            }
+        }
     }
 
     fn scan_stmt_uses(stmt: &ast::Statement, last_uses: &mut std::collections::HashMap<String, usize>, idx: usize) {
@@ -2825,7 +2878,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Statement::Return(ret_stmt) => {
                 let typed_val = self.compile_expression(&ret_stmt.return_value)?;
                 if self.has_heap_locals() {
-                    self.insert_cleanup_inline();
+                    let escaped = Self::find_heap_vars_in_expr(&ret_stmt.return_value);
+                    self.insert_cleanup_inline(&escaped);
                 }
                 self.builder.build_return(Some(&typed_val.value))
                     .map_err(|e| e.to_string())?;
@@ -3310,7 +3364,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             // Pre-scan: find last-use points for each heap variable
-            let last_uses = Self::find_last_uses(&func.body.statements);
+            let mut last_uses = Self::find_last_uses(&func.body.statements);
+
+            // Escape analysis: variables returned should not be freed before return.
+            // Update their last-use to the return statement index.
+            let mut escaped = std::collections::HashSet::new();
+            for (idx, stmt) in func.body.statements.iter().enumerate() {
+                if let ast::Statement::Return(ret) = stmt {
+                    escaped = Self::find_heap_vars_in_expr(&ret.return_value);
+                    for var in &escaped {
+                        last_uses.insert(var.clone(), idx);
+                    }
+                    break;
+                }
+            }
 
             let mut has_return = false;
             let mut last_value: BasicValueEnum<'ctx> = match &return_type {
@@ -3341,7 +3408,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             if !has_return && self.has_heap_locals() {
-                self.insert_cleanup_inline();
+                self.insert_cleanup_inline(&escaped);
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             } else if !has_return {
@@ -3788,7 +3855,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             // Pre-scan: find last-use points for each heap variable
-            let last_uses = Self::find_last_uses(&generic.body.statements);
+            let mut last_uses = Self::find_last_uses(&generic.body.statements);
+
+            // Escape analysis: variables returned should not be freed before return.
+            let mut escaped = std::collections::HashSet::new();
+            for (idx, stmt) in generic.body.statements.iter().enumerate() {
+                if let ast::Statement::Return(ret) = stmt {
+                    escaped = Self::find_heap_vars_in_expr(&ret.return_value);
+                    for var in &escaped {
+                        last_uses.insert(var.clone(), idx);
+                    }
+                    break;
+                }
+            }
 
             let mut has_return = false;
             let mut last_value: BasicValueEnum<'ctx> = match &return_type {
@@ -3819,7 +3898,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             if !has_return && self.has_heap_locals() {
-                self.insert_cleanup_inline();
+                self.insert_cleanup_inline(&escaped);
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
             } else if !has_return {

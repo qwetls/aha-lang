@@ -311,3 +311,104 @@ test()
 "#;
     assert_eq!(run(src), 42);
 }
+
+// =====================================================================
+// F5 Phase 3: Escape analysis tests
+// =====================================================================
+
+#[test]
+fn returned_map_not_freed() {
+    // Critical: returning a map from a function must NOT free it.
+    // Caller receives a valid pointer and can use it.
+    let src = r#"
+fn create_map() {
+    let m = map_new()
+    map_set(m, 1, 42)
+    m
+}
+let m = create_map()
+map_get(m, 1)
+"#;
+    assert_eq!(run(src), 42);
+}
+
+#[test]
+fn returned_list_not_freed() {
+    let src = r#"
+fn create_list() {
+    let xs = list_new()
+    list_push(xs, 99)
+    xs
+}
+let xs = create_list()
+list_get(xs, 0)
+"#;
+    assert_eq!(run(src), 99);
+}
+
+#[test]
+fn return_one_free_others() {
+    // Return one map, but another map in the same scope should still be freed.
+    let src = r#"
+fn test() {
+    let a = map_new()
+    let b = map_new()
+    map_set(a, 1, 10)
+    map_set(b, 1, 20)
+    a
+}
+let m = test()
+map_get(m, 1)
+"#;
+    assert_eq!(run(src), 10);
+}
+
+#[test]
+fn returned_map_escaped_not_in_last_use() {
+    // m is used in set, get, and return — last-use should be the return,
+    // not the get. So m is not freed before return.
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 55)
+    let v = map_get(m, 1)
+    m
+}
+let m = test()
+map_get(m, 1)
+"#;
+    assert_eq!(run(src), 55);
+}
+
+#[test]
+fn no_escape_still_freed() {
+    // If a map is NOT returned, it should still be freed (no regression).
+    let src = r#"
+fn test() {
+    let m = map_new()
+    map_set(m, 1, 77)
+    let v = map_get(m, 1)
+    v
+}
+test()
+"#;
+    assert_eq!(run(src), 77);
+}
+
+#[test]
+fn explicit_free_then_return_other() {
+    // Free one map explicitly, return another.
+    let src = r#"
+fn test() {
+    let a = map_new()
+    let b = map_new()
+    map_set(a, 1, 11)
+    map_set(b, 1, 22)
+    map_free(a)
+    b
+}
+let m = test()
+map_get(m, 1)
+"#;
+    assert_eq!(run(src), 22);
+}
