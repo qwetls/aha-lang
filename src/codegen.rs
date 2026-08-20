@@ -1048,6 +1048,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let has_user_main = self.functions.contains_key("main");
 
         if has_user_main {
+            Self::diag_mark("4a: has_user_main, compiling non-last stmts");
             // Compile non-last statements (enums, other fns) — they go into
             // their own function contexts, not main's entry block.
             for (i, statement) in program.statements.iter().enumerate() {
@@ -1055,6 +1056,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if is_last { break; }
                 self.compile_statement(statement)?;
             }
+            Self::diag_mark("4b: non-last stmts done, compiling fn main");
             // Compile the last statement (fn main) via compile_function,
             // which creates the entry block and builds the user code.
             if let Some(last) = program.statements.last() {
@@ -1062,6 +1064,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let _val = self.compile_expression(&expr_stmt.expression)?;
                 }
             }
+            Self::diag_mark("4c: fn main compiled");
         } else {
             // No user-defined main — create implicit entry point.
             let fn_type = self.i64_type.fn_type(&[], false);
@@ -1092,6 +1095,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         Self::diag_mark("5: main compiled");
+
+        // DIAGNOSTIC: dump IR before verify
+        if let Some(ir) = self.module.print_to_string().to_str().ok() {
+            // Only dump first 2000 chars to avoid log overflow
+            let truncated = if ir.len() > 2000 { &ir[..2000] } else { ir };
+            Self::diag_mark(&format!("5b: IR DUMP:\n{}", truncated));
+        }
 
         // DIAGNOSTIC: second verify after main compilation, before
         // returning to the caller (print_to_string / JIT).
