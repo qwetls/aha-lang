@@ -53,6 +53,22 @@ fn enum_unit_parse_diagnostic() {
     assert!(errors.is_empty(), "Unit enum parse errors: {:?}", errors);
 }
 
+#[test]
+fn enum_match_parse_diagnostic() {
+    let errors = parse_only(r#"
+        enum Op { Add(int, int), Sub(int, int) }
+        fn main() -> int {
+            let op = Sub(100, 37)
+            match op {
+                Add(a, b) => a + b,
+                Sub(a, b) => a - b,
+                _ => 0,
+            }
+        }
+    "#);
+    assert!(errors.is_empty(), "Match expression parse errors: {:?}", errors);
+}
+
 // --- Unit enum tests ---
 
 #[test]

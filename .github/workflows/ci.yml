@@ -51,7 +51,12 @@ jobs:
       - name: Run tests
         env:
           RUST_BACKTRACE: "full"
-        run: cargo test --verbose -- --test-threads=1
+        run: |
+          cargo test --verbose -- --test-threads=1 --nocapture > /tmp/test_output.txt 2>&1 || true
+          echo "=== TEST OUTPUT (last 200 lines) ==="
+          tail -200 /tmp/test_output.txt
+          echo "=== FAILED TEST DETAILS ==="
+          grep -A30 'FAILED\|panicked\|thread.*panic\|assertion failed\|Parser errors' /tmp/test_output.txt | head -100
 
       # Step 4b: Print compiler diag log if it exists (survives SIGSEGV)
       - name: Print diag log
