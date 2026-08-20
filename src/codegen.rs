@@ -5047,10 +5047,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             results.push((tv.value, tv.aha_type, block));
         }
 
-        // Unreachable block.
-        self.builder.position_at_end(unreachable_block);
-        self.builder.build_unreachable().map_err(|e| e.to_string())?;
-
         // Merge: phi node across all arms.
         self.builder.position_at_end(merge_block);
         let result_type = &results[0].1;
