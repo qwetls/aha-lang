@@ -1,11 +1,12 @@
 // src/codegen.rs
 
 use crate::ast;
+use crate::ast::{ActorDefinition, SpawnExpression};
 use crate::types::{AhaType, TypedValue};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue};
+use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue, BasicMetadataValueEnum};
 use inkwell::types::{IntType, StructType};
 use std::collections::HashMap;
 
@@ -2983,11 +2984,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .try_as_basic_value().left().expect("malloc void")
                     .into_pointer_value();
 
-                let ptr_type = ptr.get_type();
                 for (i, val) in field_values.iter().enumerate() {
                     let field_ptr = unsafe {
                         self.builder.build_gep(
-                            ptr_type,
                             ptr,
                             &[self.i64_type.const_int(i as u64, false)],
                             &format!("actor_field_{}", i),
