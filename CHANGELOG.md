@@ -2,6 +2,22 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.5.5] — 2026-08-20
+
+### Added
+
+- **F5 Phase 3 — Escape analysis for returned heap values:**
+  - `find_heap_vars_in_expr()` — scan return expression for variable references.
+  - `collect_var_names` / `collect_block_vars` — recursive AST variable finder.
+  - `insert_cleanup_inline(exclude)` — skip escaped variables in scope-end cleanup.
+  - Both main and generic compilation loops: update last-uses for returned variables so they are not freed at earlier last-use points.
+  - 6 new tests: return map/list, return one free others, mixed explicit-free + return.
+
+### Changed
+
+- F5 is now **complete**: Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis).
+- 25 ownership tests total (12 Phase 1 + 7 Phase 2 + 6 Phase 3).
+
 ## [1.5.4] — 2026-08-20
 
 ### Added

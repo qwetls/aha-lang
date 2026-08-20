@@ -126,7 +126,7 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F3 stabil di `main`. F4 namespace sebagian. F5 Phase 2 selesai.**
+**F1-F3 stabil di `main`. F4 namespace sebagian. F5 selesai.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
@@ -134,7 +134,7 @@ kompromi.
 | **F2** | Type inference & annotations | ✅ Selesai |
 | **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (581+ test) |
 | **F4** | Module system — namespace & visibilitas | ⚠️ `use "file"` ✅ + `pub` keyword + `module::name` ✅ (v1.5.3); visibility filter belum |
-| **F5** | Resource lifetimes (ownership) | 🔄 Phase 1 ✅ (scope-based auto-free); Phase 2 ✅ (last-use analysis); Phase 3 belum |
+| **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ⏳ Setelah F5 |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 | **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
@@ -196,18 +196,19 @@ ada GC, tidak ada reference counting.
 |-------|----------|--------|
 | Fase 1 | Scope-based free — auto free Map/List di akhir scope | ✅ |
 | Fase 2 | Last-use analysis — free di titik usage terakhir | ✅ |
-| Fase 3 | Escape analysis — handle alokasi yang di-return/passed | ⏳ |
+| Fase 3 | Escape analysis — handle alokasi yang di-return/passed | ✅ |
 
-Detail Fase 1 & 2 (di `development`):
+Detail Fase 1, 2 & 3 (di `development`):
 - `VarInfo` extended: `freed: bool`, `is_param: bool`
 - `mark_param()` — exclude function params dari auto-free
 - `mark_freed()` — prevent double-free jika user manual call `list_free`/`map_free`
 - `has_heap_locals()` — cek apakah scope punya variabel heap yang belum free
-- `insert_cleanup_inline()` — insert free calls sebelum return terminator
+- `insert_cleanup_inline(exclude)` — insert free calls sebelum return, skip escaped vars
 - `find_last_uses()` — pre-scan AST untuk titik usage terakhir per variabel heap
 - `insert_free_for_var()` — free variabel spesifik, skip jika sudah freed/param
+- `find_heap_vars_in_expr()` — escape analysis: detect variables returned from function
 - Fallback ke scope-end cleanup untuk variabel di branch (conservative)
-- 19 ownership tests (12 Phase 1 + 7 Phase 2)
+- 25 ownership tests (12 Phase 1 + 7 Phase 2 + 6 Phase 3)
 - String free belum diimplementasi (ponytail: `string_free` belum ada sebagai builtin)
 
 ### ❌ Belum ada
@@ -250,7 +251,7 @@ Detail Fase 1 & 2 (di `development`):
 - [ ] Visibility filter — pub items only from imports (currently all items accessible)
 - [ ] ~~`aha install` — registry sederhana~~ → dipindah ke F8 (setelah AOT binary + komunitas)
 
-### F5. Resource lifetimes — 🔄 AKTIF (Phase 2 selesai)
+### ✅ F5. Resource lifetimes — SELESAI
 **Approach: Compiler-inserted free** — compiler otomatis insert `free()` calls.
 Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 
@@ -259,10 +260,10 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] `mark_param()` — exclude function params dari auto-free
 - [x] `mark_freed()` — prevent double-free
 - [x] `has_heap_locals()` — cek scope untuk variabel heap belum free
-- [x] `insert_cleanup_inline()` — insert free calls sebelum return terminator
+- [x] `insert_cleanup_inline(exclude)` — insert free calls sebelum return, skip escaped vars
 - [x] Phase 2: last-use analysis — `find_last_uses()`, `insert_free_for_var()`, 7 tests
+- [x] Phase 3: escape analysis — `find_heap_vars_in_expr()`, 6 tests
 - [ ] `string_free` builtin (belum — ponytail: add when string lifetime mgmt)
-- [ ] Phase 3: escape analysis (returned/passed allocations)
 
 ### ⏳ F6. Actor-model concurrency
 - [ ] Message passing antar actor
@@ -347,3 +348,4 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.1 | F5 Phase 1 merged (compiler-inserted free, 581+ test). `aha install` dipindah dari F4 ke F8 — terlalu dini tanpa binary release & komunitas. |
 | 2026-08-20 | 0.3.2 | F4 namespace progress: `pub` keyword + `::` token + `module::name` expression implemented (lexer, AST, parser, codegen). Visibility filter deferred — pub stored in AST but all items still accessible from imports. |
 | 2026-08-20 | 0.3.3 | F5 Phase 2 selesai: last-use analysis — `find_last_uses()` pre-scan AST, `insert_free_for_var()` per-variable free, fallback ke scope-end untuk branch. 7 tests baru (total 19 ownership tests). |
+| 2026-08-20 | 0.3.4 | F5 SELESAI — Phase 3 escape analysis: `find_heap_vars_in_expr()` deteksi variabel yang di-return, skip auto-free. 6 tests baru (total 25 ownership tests). F5 lengkap: scope-based + last-use + escape. |
