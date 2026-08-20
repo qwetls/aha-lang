@@ -907,7 +907,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
         Self::diag_mark("2: c runtime declared");
-        self.declare_actor_runtime();
+        // Phase 1: actors are pure JIT — no runtime functions needed.
         Self::diag_mark("2a: actor runtime declared");
         // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
@@ -3002,7 +3002,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.builder.build_store(field_ptr, val.value).expect("store failed");
                 }
 
-                // state_ptr = i64 handle to the heap-allocated struct.
+                // The handle IS the heap pointer (as i64). No runtime registry needed.
                 let state_ptr = self.builder.build_ptr_to_int(raw_ptr, self.i64_type, "actor_state_ptr")
                     .expect("ptr_to_int failed");
 
@@ -3011,16 +3011,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Err("Actor requires a 'handle' function: fn handle(state, msg) -> int".to_string());
                 }
 
-                // Call actor_spawn(state_ptr) -> handle.
-                let actor_spawn_fn = *self.functions.get("actor_spawn").expect("actor_spawn not declared");
-                let args_meta: Vec<BasicMetadataValueEnum> = vec![state_ptr.into()];
-                let call_result = self.builder.build_call(actor_spawn_fn, &args_meta, "actor_handle")
-                    .map_err(|e| e.to_string())?;
-                let handle = call_result.try_as_basic_value()
-                    .left()
-                    .ok_or("actor_spawn did not return a handle")?;
-
-                Ok(TypedValue::int(handle))
+                Ok(TypedValue::int(state_ptr))
             },
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
@@ -3579,8 +3570,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Compile actor_send / actor_call builtin calls.
-    /// call(a, msg): codegen emits actor_get_state(a) then direct call handle(state, msg).
-    /// send(a, msg): codegen emits actor_send(handle, msg) — no-op in Phase 1.
+    /// call(a, msg): direct call to handle(a, msg) — no runtime needed.
+    /// send(a, msg): no-op in Phase 1.
     fn compile_actor_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
         if call.arguments.len() != 2 {
             return Err(format!("{} expects 2 arguments (handle, msg)", func_name));
@@ -3589,26 +3580,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let msg = self.compile_expression(&call.arguments[1])?.value;
 
         if func_name == "send" {
-            let send_fn = *self.functions.get("actor_send")
-                .ok_or("actor_send not declared")?;
-            let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
-            self.builder.build_call(send_fn, &args_meta, "actor_tmp")
-                .map_err(|e| e.to_string())?;
+            // Phase 1: no-op. Just discard the values.
             return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
         }
 
-        // call(a, msg) → get state, then direct call handle(state, msg).
-        let get_state_fn = *self.functions.get("actor_get_state")
-            .ok_or("actor_get_state not declared")?;
-        let get_args: Vec<BasicMetadataValueEnum> = vec![handle.into()];
-        let state_val = self.builder.build_call(get_state_fn, &get_args, "actor_state")
-            .map_err(|e| e.to_string())?
-            .try_as_basic_value().left()
-            .ok_or("actor_get_state did not return a value")?;
-
+        // call(a, msg) → handle(a, msg) directly.
         let handler_fn = self.module.get_function("handle")
             .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
-        let handler_args: Vec<BasicMetadataValueEnum> = vec![state_val.into(), msg.into()];
+        let handler_args: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
         let call_result = self.builder.build_call(handler_fn, &handler_args, "handler_result")
             .map_err(|e| e.to_string())?;
         let val = call_result.try_as_basic_value()
