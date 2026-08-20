@@ -112,6 +112,8 @@ impl AhaType {
             "bool" => Some(AhaType::Bool),
             "string" | "str" => Some(AhaType::String),
             "void" => Some(AhaType::Void),
+            "map" => Some(AhaType::Map(Box::new(AhaType::Int), Box::new(AhaType::Int))),
+            "list" => Some(AhaType::List(Box::new(AhaType::Int))),
             _ => {
                 // List<T> — parse the inner type.
                 if let Some(inner) = hint.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
