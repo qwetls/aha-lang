@@ -292,6 +292,7 @@ impl Parser {
 
         while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
             if !self.current_token_is(TokenType::Identifier) {
+                eprintln!("[ENUM-DBG] ERROR: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
                 self.errors.push(format!(
                     "Expected variant name, got {:?}",
                     self.current_token.kind
@@ -321,6 +322,7 @@ impl Parser {
 
             // Advance to next token and check for comma separator.
             self.next_token();
+            eprintln!("[ENUM-DBG] after advance: current={:?}({}) peek={:?}({})", self.current_token.kind, self.current_token.literal, self.peek_token.kind, self.peek_token.literal);
             if self.current_token_is(TokenType::Comma) {
                 self.next_token(); // skip ','
                 // Trailing comma: comma followed by '}' → break
@@ -333,6 +335,7 @@ impl Parser {
             // Neither comma nor '}' → continue to next variant
         }
 
+        eprintln!("[ENUM-DBG] exiting loop: current={:?}({}) variants={}", self.current_token.kind, self.current_token.literal, variants.len());
         if self.current_token_is(TokenType::RightBrace) {
             self.next_token(); // skip '}'
         }
