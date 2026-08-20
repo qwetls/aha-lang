@@ -2963,11 +2963,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // The handler function is a JIT function: fn(state: i64, msg: i64) -> i64
                 // Convention: handler is the function named "handle" in the module.
                 let struct_name = &spawn_expr.actor_name.value;
-                let fields = self.struct_defs.get(struct_name)
-                    .ok_or(format!("Unknown actor type: {}", struct_name))?;
+                let field_names: Vec<String> = match self.struct_defs.get(struct_name) {
+                    Some(fields) => fields.iter().map(|(n, _)| n.clone()).collect(),
+                    None => return Err(format!("Unknown actor type: {}", struct_name)),
+                };
 
                 let mut field_values = Vec::new();
-                for (field_name, _) in fields {
+                for field_name in &field_names {
                     let val = spawn_expr.fields.iter()
                         .find(|(k, _)| &k.value == field_name)
                         .map(|(_, v)| self.compile_expression(v))
@@ -2978,7 +2980,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Allocate the struct on the heap.
                 let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
-                let struct_size = self.i64_type.const_int((fields.len() * 8) as u64, false);
+                let struct_size = self.i64_type.const_int((field_names.len() * 8) as u64, false);
                 let ptr = self.builder.build_call(malloc_fn, &[struct_size.into()], "actor_alloc")
                     .expect("malloc failed")
                     .try_as_basic_value().left().expect("malloc void")

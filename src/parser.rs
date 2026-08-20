@@ -8,6 +8,7 @@ use crate::ast::{
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
     IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess,
     AssignmentExpression, FunctionLiteral, ImportStatement, ModuleAccess,
+    ActorDefinition, SpawnExpression,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
