@@ -1016,9 +1016,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
         self.declare_actor_runtime();
+        self.declare_socket_runtime();
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
+        self.create_socket_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -3218,6 +3220,345 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     }
 
+    /// Declare C socket runtime functions (socket, bind, listen, accept,
+    /// connect, send, recv, sendto, recvfrom, close, htons, htonl, inet_addr,
+    /// inet_ntoa, inet_ntop). These are in libc on Linux.
+    fn declare_socket_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let i32_t = self.context.i32_type();
+        let i8_ptr = self.i8_ptr_type();
+        let i32_ptr = i32_t.ptr_type(inkwell::AddressSpace::default());
+
+        // socket(int domain, int type, int protocol) -> int
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i32_t.into(), i32_t.into()], false);
+        self.functions.insert("socket".to_string(), self.module.add_function("socket", fn_ty, None));
+
+        // int bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i8_ptr.into(), i32_t.into()], false);
+        self.functions.insert("bind".to_string(), self.module.add_function("bind", fn_ty, None));
+
+        // int listen(int fd, int backlog)
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i32_t.into()], false);
+        self.functions.insert("listen".to_string(), self.module.add_function("listen", fn_ty, None));
+
+        // int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i8_ptr.into(), i32_ptr.into()], false);
+        self.functions.insert("accept".to_string(), self.module.add_function("accept", fn_ty, None));
+
+        // int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i8_ptr.into(), i32_t.into()], false);
+        self.functions.insert("connect".to_string(), self.module.add_function("connect", fn_ty, None));
+
+        // ssize_t send(int fd, const void *buf, size_t len, int flags)
+        let fn_ty = i64_t.fn_type(&[i32_t.into(), i8_ptr.into(), i64_t.into(), i32_t.into()], false);
+        self.functions.insert("send".to_string(), self.module.add_function("send", fn_ty, None));
+
+        // ssize_t recv(int fd, void *buf, size_t len, int flags)
+        let fn_ty = i64_t.fn_type(&[i32_t.into(), i8_ptr.into(), i64_t.into(), i32_t.into()], false);
+        self.functions.insert("recv".to_string(), self.module.add_function("recv", fn_ty, None));
+
+        // ssize_t sendto(int fd, const void *buf, size_t len, int flags,
+        //                 const struct sockaddr *dest_addr, socklen_t addrlen)
+        let fn_ty = i64_t.fn_type(&[i32_t.into(), i8_ptr.into(), i64_t.into(), i32_t.into(),
+                                     i8_ptr.into(), i32_t.into()], false);
+        self.functions.insert("sendto".to_string(), self.module.add_function("sendto", fn_ty, None));
+
+        // ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
+        //                   struct sockaddr *src_addr, socklen_t *addrlen)
+        let fn_ty = i64_t.fn_type(&[i32_t.into(), i8_ptr.into(), i64_t.into(), i32_t.into(),
+                                     i8_ptr.into(), i32_ptr.into()], false);
+        self.functions.insert("recvfrom".to_string(), self.module.add_function("recvfrom", fn_ty, None));
+
+        // int close(int fd)
+        let fn_ty = i32_t.fn_type(&[i32_t.into()], false);
+        self.functions.insert("close".to_string(), self.module.add_function("close", fn_ty, None));
+
+        // uint16_t htons(uint16_t hostshort)
+        let fn_ty = i32_t.fn_type(&[i32_t.into()], false);
+        self.functions.insert("htons".to_string(), self.module.add_function("htons", fn_ty, None));
+
+        // uint32_t htonl(uint32_t hostlong)
+        let fn_ty = i32_t.fn_type(&[i32_t.into()], false);
+        self.functions.insert("htonl".to_string(), self.module.add_function("htonl", fn_ty, None));
+
+        // in_addr_t inet_addr(const char *cp)
+        let fn_ty = i32_t.fn_type(&[i8_ptr.into()], false);
+        self.functions.insert("inet_addr".to_string(), self.module.add_function("inet_addr", fn_ty, None));
+
+        // char *inet_ntoa(struct in_addr in)  — returns static buffer
+        let fn_ty = i8_ptr.fn_type(&[i32_t.into()], false);
+        self.functions.insert("inet_ntoa".to_string(), self.module.add_function("inet_ntoa", fn_ty, None));
+
+        // int inet_pton(int af, const char *src, void *dst)  — safe version
+        let fn_ty = i32_t.fn_type(&[i32_t.into(), i8_ptr.into(), i8_ptr.into()], false);
+        self.functions.insert("inet_pton".to_string(), self.module.add_function("inet_pton", fn_ty, None));
+
+        // char *inet_ntop(int af, const void *src, char *dst, socklen_t size)
+        let fn_ty = i8_ptr.fn_type(&[i32_t.into(), i8_ptr.into(), i8_ptr.into(), i32_t.into()], false);
+        self.functions.insert("inet_ntop".to_string(), self.module.add_function("inet_ntop", fn_ty, None));
+    }
+
+    /// Create AHA! socket builtins — high-level wrappers over C socket calls.
+    /// All functions return i64 (fd, byte count, or error code).
+    ///   tcp_socket()                          -> fd
+    ///   tcp_connect(host: string, port: int)  -> fd (or -1)
+    ///   tcp_bind_listen(port: int, backlog: int) -> fd (or -1)
+    ///   tcp_accept(fd: int)                   -> new_fd (or -1)
+    ///   tcp_send(fd: int, buf_ptr: int, len: int) -> bytes_sent
+    ///   tcp_recv(fd: int, buf_ptr: int, max_len: int) -> bytes_read
+    ///   udp_socket()                          -> fd
+    ///   udp_send(fd: int, buf_ptr: int, len: int, ip: string, port: int) -> bytes_sent
+    ///   udp_recv(fd: int, buf_ptr: int, max_len: int) -> bytes_read
+    ///   close_fd(fd: int)                     -> 0
+    ///   ip4_addr(ip: string, port: int)       -> packed sockaddr_in as i64
+    ///   ip4_str(addr_i64: int)                -> string
+    fn create_socket_builtins(&mut self) {
+        let i32_t = self.context.i32_type();
+        let i8_ptr = self.i8_ptr_type();
+        let i64_t = self.i64_type;
+        let af_inet = i32_t.const_int(2, false);
+        let sock_stream = i32_t.const_int(1, false);
+        let sock_dgram = i32_t.const_int(2, false);
+        let zero_i32 = i32_t.const_int(0, false);
+
+        // Helper macro: call a declared C function, return i32
+        macro_rules! call_c_i32 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+        // Helper macro: call a declared C function, return i64
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+        // Helper: pack sockaddr_in as two i64s stored at an alloca.
+        // layout: family(16) | port_nbo(16) | ip(32) | pad(32)  = first qword
+        //         8 zero bytes = second qword
+        // Returns (alloca_ptr, i8* cast)
+        macro_rules! pack_sockaddr {
+            ($port_i32:expr, $ip_i32:expr) => {{
+                let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+                let port_nbo = call_c_i32!("htons", &[$port_i32.into()]);
+                let port_ext = self.builder.build_int_z_extend(port_nbo, i64_t, "p").unwrap();
+                let fam_ext = self.builder.build_int_z_extend(af_inet, i64_t, "f").unwrap();
+                let fam_port = self.builder.build_or(fam_ext,
+                    self.builder.build_left_shift(port_ext, i64_t.const_int(16, false), "shl1").unwrap(), "fp").unwrap();
+                let ip_ext = self.builder.build_int_z_extend($ip_i32, i64_t, "ip").unwrap();
+                let first = self.builder.build_or(fam_port,
+                    self.builder.build_left_shift(ip_ext, i64_t.const_int(32, false), "shl2").unwrap(), "q0").unwrap();
+                self.builder.build_store(sa, first).unwrap();
+                let second_ptr = unsafe {
+                    self.builder.build_gep(sa, &[i64_t.const_int(1, false)], "q1").unwrap()
+                };
+                self.builder.build_store(second_ptr, i64_t.const_int(0, false)).unwrap();
+                let sa_i8 = self.builder.build_pointer_cast(sa, i8_ptr, "sa8").unwrap();
+                (sa, sa_i8)
+            }};
+        }
+
+        // --- tcp_socket() -> fd ---
+        {
+            let fnty = i64_t.fn_type(&[], false);
+            let bb = self.context.append_basic_block(self.module.add_function("tcp_socket", fnty, None), "entry");
+            self.builder.position_at_end(bb);
+            let fd = call_c_i32!("socket", &[af_inet.into(), sock_stream.into(), zero_i32.into()]);
+            let fd64 = self.builder.build_int_sign_extend(fd, i64_t, "fd64").unwrap();
+            self.builder.build_return(Some(fd64.into())).unwrap();
+        }
+
+        // --- tcp_connect(host: string, port: int) -> fd ---
+        {
+            let fnty = i64_t.fn_type(&[self.string_type.into(), i64_t.into()], false);
+            let func = self.module.add_function("tcp_connect", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let host_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let port_arg = func.get_nth_param(1).unwrap().into_int_value();
+            let host_ptr = self.builder.build_extract_value(host_struct, 0, "hp").unwrap().into_pointer_value();
+            let ip_i32 = call_c_i32!("inet_addr", &[host_ptr.into()]);
+            let port_i32 = self.builder.build_int_truncate(port_arg, i32_t, "p32").unwrap();
+            let (_sa, sa_i8) = pack_sockaddr!(port_i32, ip_i32);
+            let fd = call_c_i32!("socket", &[af_inet.into(), sock_stream.into(), zero_i32.into()]);
+            let conn = call_c_i32!("connect", &[fd.into(), sa_i8.into(), i32_t.const_int(16, false).into()]);
+            let fd64 = self.builder.build_int_sign_extend(fd, i64_t, "fd64").unwrap();
+            let neg1 = i64_t.const_int(-1, true);
+            let is_err = self.builder.build_int_compare(inkwell::IntPredicate::NE, conn, zero_i32, "err").unwrap();
+            let result = self.builder.build_select(is_err, neg1, fd64, "r").unwrap();
+            self.builder.build_return(Some(result)).unwrap();
+        }
+
+        // --- tcp_bind_listen(port: int, backlog: int) -> fd ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+            let func = self.module.add_function("tcp_bind_listen", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let port_arg = func.get_nth_param(0).unwrap().into_int_value();
+            let back_arg = func.get_nth_param(1).unwrap().into_int_value();
+            let fd = call_c_i32!("socket", &[af_inet.into(), sock_stream.into(), zero_i32.into()]);
+            let port_i32 = self.builder.build_int_truncate(port_arg, i32_t, "p32").unwrap();
+            let back_i32 = self.builder.build_int_truncate(back_arg, i32_t, "b32").unwrap();
+            // INADDR_ANY = 0
+            let (_sa, sa_i8) = pack_sockaddr!(port_i32, zero_i32);
+            let bind_ret = call_c_i32!("bind", &[fd.into(), sa_i8.into(), i32_t.const_int(16, false).into()]);
+            let listen_ret = call_c_i32!("listen", &[fd.into(), back_i32.into()]);
+            let bind_ok = self.builder.build_int_compare(inkwell::IntPredicate::EQ, bind_ret, zero_i32, "bo").unwrap();
+            let listen_ok = self.builder.build_int_compare(inkwell::IntPredicate::EQ, listen_ret, zero_i32, "lo").unwrap();
+            let all_ok = self.builder.build_and(bind_ok, listen_ok, "ok").unwrap();
+            let fd64 = self.builder.build_int_sign_extend(fd, i64_t, "fd64").unwrap();
+            let neg1 = i64_t.const_int(-1, true);
+            let result = self.builder.build_select(all_ok, fd64, neg1, "r").unwrap();
+            self.builder.build_return(Some(result)).unwrap();
+        }
+
+        // --- tcp_accept(fd: int) -> new_fd ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into()], false);
+            let func = self.module.add_function("tcp_accept", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd64 = func.get_nth_param(0).unwrap().into_int_value();
+            let fd32 = self.builder.build_int_truncate(fd64, i32_t, "fd32").unwrap();
+            let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+            let sa_i8 = self.builder.build_pointer_cast(sa, i8_ptr, "sa8").unwrap();
+            let addrlen = self.builder.build_alloca(i32_t, "alen").unwrap();
+            self.builder.build_store(addrlen, i32_t.const_int(16, false)).unwrap();
+            let new_fd = call_c_i32!("accept", &[fd32.into(), sa_i8.into(), addrlen.into()]);
+            let new_fd64 = self.builder.build_int_sign_extend(new_fd, i64_t, "nfd64").unwrap();
+            self.builder.build_return(Some(new_fd64.into())).unwrap();
+        }
+
+        // --- tcp_send(fd, buf_ptr, len) -> bytes_sent ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+            let func = self.module.add_function("tcp_send", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd32 = self.builder.build_int_truncate(func.get_nth_param(0).unwrap().into_int_value(), i32_t, "fd").unwrap();
+            let buf = self.builder.build_int_to_ptr(func.get_nth_param(1).unwrap().into_int_value(), i8_ptr, "buf").unwrap();
+            let len = func.get_nth_param(2).unwrap().into_int_value();
+            let sent = call_c_i64!("send", &[fd32.into(), buf.into(), len.into(), zero_i32.into()]);
+            self.builder.build_return(Some(sent.into())).unwrap();
+        }
+
+        // --- tcp_recv(fd, buf_ptr, max_len) -> bytes_read ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+            let func = self.module.add_function("tcp_recv", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd32 = self.builder.build_int_truncate(func.get_nth_param(0).unwrap().into_int_value(), i32_t, "fd").unwrap();
+            let buf = self.builder.build_int_to_ptr(func.get_nth_param(1).unwrap().into_int_value(), i8_ptr, "buf").unwrap();
+            let max_len = func.get_nth_param(2).unwrap().into_int_value();
+            let nread = call_c_i64!("recv", &[fd32.into(), buf.into(), max_len.into(), zero_i32.into()]);
+            self.builder.build_return(Some(nread.into())).unwrap();
+        }
+
+        // --- udp_socket() -> fd ---
+        {
+            let fnty = i64_t.fn_type(&[], false);
+            let bb = self.context.append_basic_block(self.module.add_function("udp_socket", fnty, None), "entry");
+            self.builder.position_at_end(bb);
+            let fd = call_c_i32!("socket", &[af_inet.into(), sock_dgram.into(), zero_i32.into()]);
+            let fd64 = self.builder.build_int_sign_extend(fd, i64_t, "fd64").unwrap();
+            self.builder.build_return(Some(fd64.into())).unwrap();
+        }
+
+        // --- udp_send(fd, buf_ptr, len, ip: string, port: int) -> bytes_sent ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), self.string_type.into(), i64_t.into()], false);
+            let func = self.module.add_function("udp_send", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd32 = self.builder.build_int_truncate(func.get_nth_param(0).unwrap().into_int_value(), i32_t, "fd").unwrap();
+            let buf = self.builder.build_int_to_ptr(func.get_nth_param(1).unwrap().into_int_value(), i8_ptr, "buf").unwrap();
+            let len = func.get_nth_param(2).unwrap().into_int_value();
+            let ip_struct = func.get_nth_param(3).unwrap().into_struct_value();
+            let ip_ptr = self.builder.build_extract_value(ip_struct, 0, "ipp").unwrap().into_pointer_value();
+            let ip_i32 = call_c_i32!("inet_addr", &[ip_ptr.into()]);
+            let port32 = self.builder.build_int_truncate(func.get_nth_param(4).unwrap().into_int_value(), i32_t, "p32").unwrap();
+            let (_sa, sa_i8) = pack_sockaddr!(port32, ip_i32);
+            let sent = call_c_i64!("sendto", &[fd32.into(), buf.into(), len.into(), zero_i32.into(), sa_i8.into(), i32_t.const_int(16, false).into()]);
+            self.builder.build_return(Some(sent.into())).unwrap();
+        }
+
+        // --- udp_recv(fd, buf_ptr, max_len) -> bytes_read ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+            let func = self.module.add_function("udp_recv", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd32 = self.builder.build_int_truncate(func.get_nth_param(0).unwrap().into_int_value(), i32_t, "fd").unwrap();
+            let buf = self.builder.build_int_to_ptr(func.get_nth_param(1).unwrap().into_int_value(), i8_ptr, "buf").unwrap();
+            let max_len = func.get_nth_param(2).unwrap().into_int_value();
+            let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+            let sa_i8 = self.builder.build_pointer_cast(sa, i8_ptr, "sa8").unwrap();
+            let addrlen = self.builder.build_alloca(i32_t, "alen").unwrap();
+            self.builder.build_store(addrlen, i32_t.const_int(16, false)).unwrap();
+            let nread = call_c_i64!("recvfrom", &[fd32.into(), buf.into(), max_len.into(), zero_i32.into(), sa_i8.into(), addrlen.into()]);
+            self.builder.build_return(Some(nread.into())).unwrap();
+        }
+
+        // --- close_fd(fd) -> 0 ---
+        {
+            let fnty = i64_t.fn_type(&[i64_t.into()], false);
+            let func = self.module.add_function("close_fd", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd32 = self.builder.build_int_truncate(func.get_nth_param(0).unwrap().into_int_value(), i32_t, "fd").unwrap();
+            let _ = call_c_i32!("close", &[fd32.into()]);
+            self.builder.build_return(Some(i64_t.const_int(0, false).into())).unwrap();
+        }
+
+        // --- ip4_addr(ip: string, port: int) -> i64 (packed sockaddr) ---
+        {
+            let fnty = i64_t.fn_type(&[self.string_type.into(), i64_t.into()], false);
+            let func = self.module.add_function("ip4_addr", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let ip_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let port64 = func.get_nth_param(1).unwrap().into_int_value();
+            let ip_ptr = self.builder.build_extract_value(ip_struct, 0, "ipp").unwrap().into_pointer_value();
+            let ip_i32 = call_c_i32!("inet_addr", &[ip_ptr.into()]);
+            let port32 = self.builder.build_int_truncate(port64, i32_t, "p32").unwrap();
+            let port_nbo = call_c_i32!("htons", &[port32.into()]);
+            let fam_ext = self.builder.build_int_z_extend(af_inet, i64_t, "f").unwrap();
+            let port_ext = self.builder.build_int_z_extend(port_nbo, i64_t, "p").unwrap();
+            let fam_port = self.builder.build_or(fam_ext,
+                self.builder.build_left_shift(port_ext, i64_t.const_int(16, false), "shl1").unwrap(), "fp").unwrap();
+            let ip_ext = self.builder.build_int_z_extend(ip_i32, i64_t, "ip").unwrap();
+            let packed = self.builder.build_or(fam_port,
+                self.builder.build_left_shift(ip_ext, i64_t.const_int(32, false), "shl2").unwrap(), "pk").unwrap();
+            self.builder.build_return(Some(packed.into())).unwrap();
+        }
+
+        // --- ip4_str(addr_i64: int) -> string ---
+        {
+            let fnty = self.string_type.fn_type(&[i64_t.into()], false);
+            let func = self.module.add_function("ip4_str", fnty, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let addr = func.get_nth_param(0).unwrap().into_int_value();
+            let shifted = self.builder.build_right_shift(addr, i64_t.const_int(32, false), false, "sh").unwrap();
+            let ip32 = self.builder.build_int_truncate(shifted, i32_t, "ip32").unwrap();
+            let ntoa_fn = *self.functions.get("inet_ntoa").unwrap();
+            let str_ptr = self.builder.build_call(ntoa_fn, &[ip32.into()], "ntoa").unwrap()
+                .try_as_basic_value().left().unwrap().into_pointer_value();
+            let strlen_fn = *self.functions.get("strlen").unwrap();
+            let slen = self.builder.build_call(strlen_fn, &[str_ptr.into()], "sl").unwrap()
+                .try_as_basic_value().left().unwrap().into_int_value();
+            let s = self.builder.build_insert_value(self.string_type.const_zero(), str_ptr, 0, "sp").unwrap();
+            let s = self.builder.build_insert_value(s, slen, 1, "sl2").unwrap();
+            self.builder.build_return(Some(s.into())).unwrap();
+        }
+    }
+
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
@@ -4063,6 +4404,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
         }
+        // Socket builtins: tcp_socket, tcp_connect, ..., ip4_str
+        if matches!(func_name.as_str(),
+            "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" |
+            "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" |
+            "close_fd" | "ip4_addr" | "ip4_str"
+        ) {
+            return self.compile_socket_call(&func_name, call);
+        }
         // Enum variant constructor: Variant(args...) or Variant
         if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
             return self.compile_enum_constructor(&enum_name, &func_name, call);
@@ -4137,6 +4486,28 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
         }
+    }
+
+    /// Compile socket builtin calls. All socket builtins are LLVM functions
+    /// that accept raw i64 / i8* args. We compile arguments and call directly.
+    fn compile_socket_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let function = self.module.get_function(func_name)
+            .ok_or_else(|| format!("Socket builtin '{}' not declared", func_name))?;
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let typed_val = self.compile_expression(arg)?;
+            args.push(typed_val.value.into());
+        }
+        let call_result = self.builder.build_call(function, &args, "sock_tmp")
+            .map_err(|e| e.to_string())?;
+        let ret_type = match func_name {
+            "ip4_str" => AhaType::String,
+            _ => AhaType::Int,
+        };
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
+        Ok(TypedValue::new(val, ret_type))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
