@@ -39,6 +39,7 @@ pub enum Precedence {
     Prefix,      // -X or !X
     Call,        // myFunction(X)
     Index,       // arr[i]
+    Postfix,     // expr?
 }
 
 impl Parser {
@@ -656,6 +657,16 @@ impl Parser {
                 continue;
             }
 
+            // Handle postfix ? operator: expr?
+            if self.peek_token_is(TokenType::QuestionMark) {
+                self.next_token(); // consume '?'
+                left = Expression::Postfix(PostfixExpression {
+                    operator: "?".to_string(),
+                    operand: Box::new(left),
+                });
+                continue;
+            }
+
             // Generic infix operator
             self.next_token(); // consume operator
             let operator = self.current_token.literal.clone();
@@ -1120,6 +1131,7 @@ impl Parser {
             TokenType::LeftParen => Precedence::Call,
             TokenType::LeftBracket => Precedence::Index,
             TokenType::Dot => Precedence::Index,
+            TokenType::QuestionMark => Precedence::Postfix,
             _ => Precedence::Lowest,
         }
     }

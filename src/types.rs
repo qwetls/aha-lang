@@ -36,6 +36,9 @@ pub enum AhaType {
     /// Raw pointer — `*void` (opaque), `*int`, `*string`, etc.
     /// Maps to LLVM `i8*` (opaque) or `T*` (typed). Used for FFI.
     RawPtr(Box<AhaType>),
+    /// Result<T, E> — ok variant carries T, err variant carries string message.
+    /// LLVM: `{i64 tag, i64 payload}` — tag 0=Ok, tag 1=Err.
+    Result(Box<AhaType>, Box<AhaType>),
     /// Function type with parameter types and return type
     Function {
         params: Vec<AhaType>,
@@ -154,6 +157,23 @@ impl AhaType {
                     };
                     return Some(AhaType::Map(Box::new(key_type), Box::new(value_type)));
                 }
+                // Result<T, E> — parse ok type and err type.
+                if let Some(inner) = hint.strip_prefix("Result<").and_then(|s| s.strip_suffix('>')) {
+                    let (ok_hint, err_hint) = inner.split_once(',')?;
+                    let ok_type = match ok_hint.trim() {
+                        "int" | "i64" => AhaType::Int,
+                        "bool" => AhaType::Bool,
+                        "string" | "str" => AhaType::String,
+                        _ => Self::from_hint(ok_hint.trim())?,
+                    };
+                    let err_type = match err_hint.trim() {
+                        "int" | "i64" => AhaType::Int,
+                        "bool" => AhaType::Bool,
+                        "string" | "str" => AhaType::String,
+                        _ => Self::from_hint(err_hint.trim())?,
+                    };
+                    return Some(AhaType::Result(Box::new(ok_type), Box::new(err_type)));
+                }
                 None
             }
         }
@@ -194,6 +214,7 @@ impl fmt::Display for AhaType {
             AhaType::Struct(name) => write!(f, "{}", name),
             AhaType::Enum(name) => write!(f, "{}", name),
             AhaType::RawPtr(inner) => write!(f, "*{}", inner),
+            AhaType::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             AhaType::Function { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {

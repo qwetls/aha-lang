@@ -44,6 +44,7 @@ pub enum TokenType {
     LtEq,        // <=
     GtEq,        // >=
     Bang,         // !
+    QuestionMark, // ?
     And,          // &&
     Or,           // ||
     // Delimiters
@@ -111,6 +112,7 @@ pub enum Expression {
     Spawn(SpawnExpression),
     Assignment(AssignmentExpression),
     Match(MatchExpression),
+    Postfix(PostfixExpression),
     Break,
     Continue,
 }
@@ -146,6 +148,12 @@ pub struct StringLiteral {
 pub struct PrefixExpression {
     pub operator: String,
     pub right: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostfixExpression {
+    pub operator: String,
+    pub operand: Box<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

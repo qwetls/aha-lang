@@ -34,6 +34,8 @@ pub struct CodeGenerator<'ctx> {
     list_header_type: StructType<'ctx>,
     /// Map header struct type: {i8*, i64, i64, i64, i64} (data, len, cap, key_size, val_size)
     map_header_type: StructType<'ctx>,
+    /// Result struct type: {i64 tag, i64 payload} — tag 0=Ok, tag 1=Err
+    result_type: StructType<'ctx>,
     current_function: Option<FunctionValue<'ctx>>,
     /// Stack of (continue_block, break_block) for nested loops
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
@@ -78,6 +80,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             &[i8_ptr_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
             false,
         );
+        // Result = {i64 tag, i64 payload} — tag 0=Ok, tag 1=Err
+        let result_type = context.struct_type(&[i64_type.into(), i64_type.into()], false);
 
         CodeGenerator {
             context,
@@ -90,6 +94,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             string_type,
             list_header_type,
             map_header_type,
+            result_type,
             current_function: None,
             loop_stack: Vec::new(),
             param_type_map: HashMap::new(),
@@ -270,6 +275,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::collect_var_names(&m.value, vars);
                 for arm in &m.arms { Self::collect_var_names(&arm.body, vars); }
             }
+            ast::Expression::Postfix(pf) => { Self::collect_var_names(&pf.operand, vars); }
             _ => {}
         }
     }
@@ -359,6 +365,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::scan_expr_uses(&arm.body, last_uses, idx);
                 }
             }
+            ast::Expression::Postfix(pf) => { Self::scan_expr_uses(&pf.operand, last_uses, idx); }
             _ => {} // literals, module access — no heap var uses
         }
     }
@@ -547,6 +554,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&arm.body);
                 }
             }
+            ast::Expression::Postfix(pf) => { self.scan_expr_for_calls(&pf.operand); }
             _ => {}
         }
     }
@@ -564,6 +572,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
             AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
             AhaType::RawPtr(_) => Ok(self.i8_ptr_type().into()),
+            AhaType::Result(_, _) => Ok(self.result_type.into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -620,6 +629,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(et.fn_type(&meta, false))
             }
             AhaType::RawPtr(_) => Ok(self.i8_ptr_type().fn_type(&meta, false)),
+            AhaType::Result(_, _) => Ok(self.result_type.fn_type(&meta, false)),
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
     }
@@ -769,6 +779,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.infer_expr_type(&arm.body)
                 } else {
                     AhaType::Int
+                }
+            }
+            ast::Expression::Postfix(pf) => {
+                // ? on Result → unwrap ok type
+                let inner = self.infer_expr_type(&pf.operand);
+                match &inner {
+                    AhaType::Result(ok, _) => (**ok).clone(),
+                    _ => AhaType::Int,
                 }
             }
             _ => AhaType::Int,
@@ -940,6 +958,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.infer_expr_type_with_scope(&arm.body, scope)
                 } else {
                     AhaType::Int
+                }
+            }
+            ast::Expression::Postfix(pf) => {
+                let inner = self.infer_expr_type_with_scope(&pf.operand, scope);
+                match &inner {
+                    AhaType::Result(ok, _) => (**ok).clone(),
+                    _ => AhaType::Int,
                 }
             }
             _ => AhaType::Int,
@@ -3368,6 +3393,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(TypedValue::new(handle.into(), AhaType::Int))
             },
             ast::Expression::Match(m) => self.compile_match_expression(m),
+            ast::Expression::Postfix(pf) => self.compile_postfix(pf),
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
     }
@@ -4010,6 +4036,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // F6 Actor builtins: send(handle, msg), call(handle, msg) -> i64
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
+        }
+        // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
+        if func_name == "ok" || func_name == "err" {
+            return self.compile_result_literal(&func_name, call);
         }
         // Enum variant constructor: Variant(args...) or Variant
         if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
@@ -5102,6 +5132,114 @@ impl<'ctx> CodeGenerator<'ctx> {
             (AhaType::Int, AhaType::Bool) | (AhaType::Bool, AhaType::Int) => true,
             _ => false,
         }
+    }
+
+    /// Compile postfix expression: expr?
+    fn compile_postfix(&mut self, pf: &ast::PostfixExpression) -> Result<TypedValue<'ctx>, String> {
+        match pf.operator.as_str() {
+            "?" => self.compile_question_mark(&pf.operand),
+            op => Err(format!("Unknown postfix operator: {}", op)),
+        }
+    }
+
+    /// Compile ok(val) or err(msg) — Result constructors.
+    fn compile_result_literal(&mut self, kind: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        if call.arguments.len() != 1 {
+            return Err(format!("{}() expects 1 argument", kind));
+        }
+        let arg = self.compile_expression(&call.arguments[0])?;
+
+        let result_struct = self.result_type.const_zero();
+
+        match kind {
+            "ok" => {
+                // Ok(val) → tag=0, payload=val (as i64)
+                let payload = match &arg.aha_type {
+                    AhaType::Int | AhaType::Bool => arg.value.into_int_value(),
+                    AhaType::String => {
+                        // String → extract i8* pointer, cast to i64
+                        let ptr = self.extract_str_ptr(&arg)?;
+                        self.builder.build_ptr_to_int(ptr, self.i64_type, "str_as_i64")
+                            .map_err(|e| e.to_string())?
+                    }
+                    _ => arg.value.into_int_value(),
+                };
+                let s = self.builder.build_insert_value(result_struct, self.i64_type.const_int(0, false), 0, "ok_tag")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                let s = self.builder.build_insert_value(s, payload, 1, "ok_val")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                // Type: Result<T, string> where T = arg type
+                let ok_type = arg.aha_type.clone();
+                Ok(TypedValue::new(s.into(), AhaType::Result(Box::new(ok_type), Box::new(AhaType::String))))
+            }
+            "err" => {
+                // Err(msg) → tag=1, payload=string_ptr (i8* as i64)
+                let payload = match &arg.aha_type {
+                    AhaType::String => {
+                        let ptr = self.extract_str_ptr(&arg)?;
+                        self.builder.build_ptr_to_int(ptr, self.i64_type, "err_ptr")
+                            .map_err(|e| e.to_string())?
+                    }
+                    _ => arg.value.into_int_value(),
+                };
+                let s = self.builder.build_insert_value(result_struct, self.i64_type.const_int(1, false), 0, "err_tag")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                let s = self.builder.build_insert_value(s, payload, 1, "err_val")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                Ok(TypedValue::new(s.into(), AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String))))
+            }
+            _ => Err(format!("Unknown result constructor: {}", kind)),
+        }
+    }
+
+    /// Compile the ? operator on a Result value.
+    /// Checks tag: if Err (tag=1) → early return from current function;
+    /// if Ok (tag=0) → unwrap payload and continue.
+    fn compile_question_mark(&mut self, operand: &ast::Expression) -> Result<TypedValue<'ctx>, String> {
+        let result_val = self.compile_expression(operand)?;
+
+        // Must be a Result type
+        let ok_type = match &result_val.aha_type {
+            AhaType::Result(ok, _) => (**ok).clone(),
+            other => return Err(format!("? operator requires Result type, got {}", other)),
+        };
+
+        let function = self.current_function
+            .ok_or("? operator used outside of a function".to_string())?;
+
+        // Extract tag and payload from Result struct {i64, i64}
+        let tag = self.builder.build_extract_value(result_val.value.into_struct_value(), 0, "r_tag")
+            .map_err(|e| e.to_string())?.into_int_value();
+        let payload = self.builder.build_extract_value(result_val.value.into_struct_value(), 1, "r_payload")
+            .map_err(|e| e.to_string())?.into_int_value();
+
+        let is_err = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ, tag,
+            self.i64_type.const_int(1, false), "is_err",
+        ).map_err(|e| e.to_string())?;
+
+        let ok_block = self.context.append_basic_block(function, "qmark_ok");
+        let err_block = self.context.append_basic_block(function, "qmark_err");
+        let continue_block = self.context.append_basic_block(function, "qmark_cont");
+
+        self.builder.build_conditional_branch(is_err, err_block, ok_block)
+            .map_err(|e| e.to_string())?;
+
+        // Err path: build Result Err(payload) and return from function
+        self.builder.position_at_end(err_block);
+        let err_struct = self.result_type.const_zero();
+        let err_struct = self.builder.build_insert_value(err_struct, self.i64_type.const_int(1, false), 0, "err_tag")
+            .map_err(|e| e.to_string())?.into_struct_value();
+        let err_struct = self.builder.build_insert_value(err_struct, payload, 1, "err_val")
+            .map_err(|e| e.to_string())?.into_struct_value();
+        let _ = self.builder.build_return(Some(&err_struct));
+
+        // Ok path: continue with unwrapped payload
+        self.builder.position_at_end(ok_block);
+        let _ = self.builder.build_unconditional_branch(continue_block);
+
+        self.builder.position_at_end(continue_block);
+        Ok(TypedValue::new(payload.into(), ok_type))
     }
 
     /// Compile: match expr { Pattern => body, ... }
