@@ -5225,14 +5225,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder.build_conditional_branch(is_err, err_block, ok_block)
             .map_err(|e| e.to_string())?;
 
-        // Err path: build Result Err(payload) and return from function
+        // Err path: return error value matching the function's return type.
         self.builder.position_at_end(err_block);
-        let err_struct = self.result_type.const_zero();
-        let err_struct = self.builder.build_insert_value(err_struct, self.i64_type.const_int(1, false), 0, "err_tag")
-            .map_err(|e| e.to_string())?.into_struct_value();
-        let err_struct = self.builder.build_insert_value(err_struct, payload, 1, "err_val")
-            .map_err(|e| e.to_string())?.into_struct_value();
-        let _ = self.builder.build_return(Some(&err_struct));
+        let fn_ret = function.get_type().get_return_type();
+        if let inkwell::types::BasicTypeEnum::StructType(st) = fn_ret {
+            // Function returns Result — build full Err struct.
+            let err_struct = st.const_zero();
+            let err_struct = self.builder.build_insert_value(err_struct, self.i64_type.const_int(1, false), 0, "err_tag")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let err_struct = self.builder.build_insert_value(err_struct, payload, 1, "err_val")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let _ = self.builder.build_return(Some(&err_struct));
+        } else {
+            // Function returns non-Result (e.g. Int) — return error tag (1).
+            let _ = self.builder.build_return(Some(&self.i64_type.const_int(1, false)));
+        }
 
         // Ok path: continue with unwrapped payload
         self.builder.position_at_end(ok_block);
