@@ -819,10 +819,7 @@ impl Parser {
         let hint = if self.peek_token_is(TokenType::Colon) {
             self.next_token(); // skip ':'
             self.next_token(); // advance to type token
-            let is_ptr = self.current_token_is(TokenType::Asterisk);
-            let h = self.parse_type_hint();
-            if is_ptr { self.next_token(); } // advance past base type for pointers
-            h
+            self.parse_type_hint()
         } else {
             None
         };
@@ -835,10 +832,7 @@ impl Parser {
             let hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // skip ':'
                 self.next_token(); // advance to type token
-                let is_ptr = self.current_token_is(TokenType::Asterisk);
-                let h = self.parse_type_hint();
-                if is_ptr { self.next_token(); } // advance past base type for pointers
-                h
+                self.parse_type_hint()
             } else {
                 None
             };
