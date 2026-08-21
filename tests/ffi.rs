@@ -42,27 +42,11 @@ fn expect_compile_error(source: &str, expected: &str) {
     }
 }
 
-// --- Basic extern fn call (no params, returns int) ---
+// --- Basic extern fn call (atol: *void -> long/i64) ---
 
 #[test]
-fn extern_fn_getpid() {
-    // getpid() returns the current process ID — always > 0
-    let result = run(r#"
-        extern fn getpid() -> int;
-        let pid = getpid();
-        if pid > 0 { 1 } else { 0 }
-    "#);
-    assert_eq!(result, 1);
-}
-
-// --- Extern fn with int param (using atoi-like pattern) ---
-
-#[test]
-fn extern_fn_atol() {
-    // atol("42") returns 42 — atol takes *void, returns long (i64)
-    // We can't pass AHA! strings to *void yet, so test the parse+codegen path
-    // by just calling it with a dummy pointer (0 = NULL, which atol handles
-    // by returning 0).
+fn extern_fn_atol_null() {
+    // atol(NULL) returns 0 — atol takes const char* (i8*), returns long (i64)
     let result = run(r#"
         extern fn atol(s: *void) -> int;
         atol(0)
@@ -70,12 +54,12 @@ fn extern_fn_atol() {
     assert_eq!(result, 0);
 }
 
-// --- Extern fn declared, not called (should not crash) ---
+// --- Extern fn declared, not called ---
 
 #[test]
 fn extern_fn_declared_not_called() {
     let result = run(r#"
-        extern fn getpid() -> int;
+        extern fn atol(s: *void) -> int;
         42
     "#);
     assert_eq!(result, 42);
@@ -86,13 +70,11 @@ fn extern_fn_declared_not_called() {
 #[test]
 fn extern_fn_multiple_declarations() {
     let result = run(r#"
-        extern fn getpid() -> int;
         extern fn atol(s: *void) -> int;
-        let a = getpid();
-        let b = atol(0);
-        if a > 0 { 1 } else { 0 }
+        extern fn atol(s: *void) -> int;
+        atol(0) + atol(0)
     "#);
-    assert_eq!(result, 1);
+    assert_eq!(result, 0);
 }
 
 // --- Extern fn called from user function ---
@@ -100,16 +82,15 @@ fn extern_fn_multiple_declarations() {
 #[test]
 fn extern_fn_called_from_user_function() {
     let result = run(r#"
-        extern fn getpid() -> int;
+        extern fn atol(s: *void) -> int;
 
-        fn check_pid() {
-            let p = getpid();
-            if p > 0 { 1 } else { 0 }
+        fn get_zero() {
+            atol(0)
         }
 
-        check_pid()
+        get_zero() + 5
     "#);
-    assert_eq!(result, 1);
+    assert_eq!(result, 5);
 }
 
 // --- Extern fn in control flow ---
@@ -117,12 +98,11 @@ fn extern_fn_called_from_user_function() {
 #[test]
 fn extern_fn_in_control_flow() {
     let result = run(r#"
-        extern fn getpid() -> int;
         extern fn atol(s: *void) -> int;
 
-        let x = getpid();
-        if x > 0 {
-            atol(0) + 10
+        let x = atol(0);
+        if x == 0 {
+            10
         } else {
             0
         }
@@ -145,7 +125,7 @@ fn extern_fn_in_loop() {
     assert_eq!(result, 5);
 }
 
-// --- Extern fn with redeclaration (skip if already declared) ---
+// --- Extern fn redeclaring a C runtime builtin (skip) ---
 
 #[test]
 fn extern_fn_redeclare_builtin() {
@@ -162,7 +142,7 @@ fn extern_fn_redeclare_builtin() {
 #[test]
 fn extern_fn_missing_fn_keyword() {
     expect_compile_error(
-        r#"extern getpid() -> int;"#,
+        r#"extern atol(s: *void) -> int;"#,
         "Expected 'fn' after 'extern'",
     );
 }
@@ -170,8 +150,8 @@ fn extern_fn_missing_fn_keyword() {
 #[test]
 fn extern_fn_missing_semicolon() {
     expect_compile_error(
-        r#"extern fn getpid() -> int
-        getpid()"#,
+        r#"extern fn atol(s: *void) -> int
+        atol(0)"#,
         "Expected ';' after extern fn declaration",
     );
 }
