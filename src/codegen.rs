@@ -5060,9 +5060,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let default_bb = if let Some(wi) = m.arms.iter().position(|a| matches!(a.pattern, ast::Pattern::Wildcard)) {
             arm_blocks[wi]
         } else {
+            let saved_block = self.builder.get_insert_block();
             let dead = self.context.append_basic_block(current_fn, "match.dead");
             self.builder.position_at_end(dead);
             self.builder.build_unreachable().map_err(|e| e.to_string())?;
+            if let Some(prev) = saved_block {
+                self.builder.position_at_end(prev);
+            }
             dead
         };
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
