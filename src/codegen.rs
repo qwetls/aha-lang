@@ -3757,6 +3757,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn compile_extern(&mut self, decl: &ast::ExternFnDecl) -> Result<(), String> {
         let func_name = decl.name.value.clone();
 
+        // Skip if already declared (e.g. C runtime builtins like strlen, malloc)
+        if self.functions.contains_key(&func_name) {
+            return Ok(());
+        }
+
         // Resolve param types from hints
         let mut param_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> = Vec::new();
         for hint in &decl.param_type_hints {
