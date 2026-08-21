@@ -25,21 +25,17 @@ fn run(source: &str) -> i64 {
     codegen.run_jit().expect("JIT execution failed")
 }
 
-/// Helper: expect a compile error matching the given substring.
-fn expect_compile_error(source: &str, expected: &str) {
+/// Helper: expect a parser error matching the given substring.
+fn expect_parse_error(source: &str, expected: &str) {
     let lexer = Lexer::new(source.to_string());
     let mut parser = Parser::new(lexer);
-    let program = parser.parse_program();
+    let _program = parser.parse_program();
 
-    let context = Context::create();
-    let mut codegen = CodeGenerator::new(&context);
-    match codegen.compile(&program) {
-        Ok(()) => panic!("Expected compile error containing '{}', but compilation succeeded", expected),
-        Err(e) => {
-            assert!(e.contains(expected),
-                "Expected error containing '{}', got: {}", expected, e);
-        }
-    }
+    assert!(!parser.errors.is_empty(),
+        "Expected parser error containing '{}', but no errors occurred", expected);
+    let all_errors = parser.errors.join("; ");
+    assert!(all_errors.contains(expected),
+        "Expected error containing '{}', got: {}", expected, all_errors);
 }
 
 // --- Basic extern fn call (atol: *void -> long/i64) ---
@@ -141,7 +137,7 @@ fn extern_fn_redeclare_builtin() {
 
 #[test]
 fn extern_fn_missing_fn_keyword() {
-    expect_compile_error(
+    expect_parse_error(
         r#"extern atol(s: *void) -> int;"#,
         "Expected 'fn' after 'extern'",
     );
@@ -149,7 +145,7 @@ fn extern_fn_missing_fn_keyword() {
 
 #[test]
 fn extern_fn_missing_semicolon() {
-    expect_compile_error(
+    expect_parse_error(
         r#"extern fn atol(s: *void) -> int
         atol(0)"#,
         "Expected ';' after extern fn declaration",

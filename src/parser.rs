@@ -815,9 +815,6 @@ impl Parser {
         // Optional per-param type hint: name: Type
         let hint = if self.peek_token_is(TokenType::Colon) {
             self.next_token(); // skip ':'
-            if !self.expect_peek(TokenType::Identifier) {
-                self.errors.push("Expected type after ':' in parameter".to_string());
-            }
             self.parse_type_hint()
         } else {
             None
@@ -830,9 +827,6 @@ impl Parser {
             params.push(Identifier { value: self.current_token.literal.clone() });
             let hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // skip ':'
-                if !self.expect_peek(TokenType::Identifier) {
-                    self.errors.push("Expected type after ':' in parameter".to_string());
-                }
                 self.parse_type_hint()
             } else {
                 None
