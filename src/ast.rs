@@ -25,6 +25,10 @@ pub enum TokenType {
     Struct,
     Use,
     Pub,
+    Actor,
+    Spawn,
+    Enum,
+    Match,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -55,6 +59,7 @@ pub enum TokenType {
     DotDot,       // ..
     Dot,          // .
     Arrow,        // ->
+    FatArrow,     // =>
     // Special
     Eof,          // End of file
     Illegal,      // Unrecognized character
@@ -102,7 +107,9 @@ pub enum Expression {
     StructLiteral(StructLiteral),
     FieldAccess(FieldAccess),
     ModuleAccess(ModuleAccess),
+    Spawn(SpawnExpression),
     Assignment(AssignmentExpression),
+    Match(MatchExpression),
     Break,
     Continue,
 }
@@ -211,6 +218,8 @@ pub enum Statement {
     Return(ReturnStatement),
     Expression(ExpressionStatement),
     Struct(StructDefinition),
+    Actor(ActorDefinition),
+    Enum(EnumDefinition),
     Import(ImportStatement),
 }
 
@@ -277,10 +286,71 @@ pub struct FieldAccess {
     pub field: Identifier,
 }
 
+// --- Actor-related Nodes ---
+
+/// `actor Name { field: type, ... }` — defines an actor type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorDefinition {
+    pub name: Identifier,
+    pub is_pub: bool,
+    pub fields: Vec<StructField>,
+}
+
+/// `spawn Name { field: expr, ... }` — creates an actor instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpawnExpression {
+    pub actor_name: Identifier,
+    pub fields: Vec<(Identifier, Expression)>,
+}
+
 // --- Module Access ---
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleAccess {
     pub module: String,
     pub name: String,
+}
+
+// --- Enum Definition ---
+
+/// `enum Name { Variant, Variant(Type, ...), ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDefinition {
+    pub name: Identifier,
+    pub is_pub: bool,
+    pub variants: Vec<EnumVariant>,
+}
+
+/// A single enum variant: `Name` or `Name(Type, Type, ...)`
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: Identifier,
+    pub payload_types: Vec<String>, // empty = unit variant, e.g. `Red`
+}
+
+// --- Match Expression ---
+
+/// `match expr { pattern => body, ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchExpression {
+    pub value: Box<Expression>,
+    pub arms: Vec<MatchArm>,
+}
+
+/// A single match arm: `Pattern => body`
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expression,
+}
+
+/// Patterns: `EnumVariant`, `EnumVariant(a, b, ...)`, or `_` (wildcard)
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// `_` wildcard — matches anything
+    Wildcard,
+    /// `Variant` — unit enum variant
+    EnumUnit(String),
+    /// `Variant(a, b, ...)` — enum variant with destructured bindings
+    EnumTuple(String, Vec<String>),
 }

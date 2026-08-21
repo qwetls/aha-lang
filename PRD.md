@@ -1,6 +1,6 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.3.5
+**Versi PRD:** 0.3.6
 **Tanggal:** 2026-08-20
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
@@ -135,7 +135,7 @@ kompromi.
 | **F3** | Generics / parametric types | ✅ Selesai — fungsi generik + List<T> + Map<K,V> (581+ test) |
 | **F4** | Module system — namespace & visibilitas | ✅ Selesai (v1.5.6) — `use "file"` + `pub` + `module::name` + visibility filter |
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
-| **F6** | Actor-model concurrency | ⏳ Setelah F5 |
+| **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
 | **F7** | Self-hosting | ⏳ Setelah F6 |
 | **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
 
@@ -156,6 +156,8 @@ ke main. Tidak ada loncatan.
 - String: concat (malloc/memcpy), `==`/`!=` (strcmp), `len()` O(1)
 - Array literal & indexing
 - Builtin: `print`, `print_str`, `abs`, `min`, `max`, `len`
+- String builtins: `int_to_string`, `string_to_int`, `string_sub`, `char_at`
+- File I/O: `file_read`, `file_write`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
 - CI: `cargo check`, 571+ test, `cargo build --release`
@@ -211,11 +213,30 @@ Detail Fase 1, 2 & 3 (di `development`):
 - 25 ownership tests (12 Phase 1 + 7 Phase 2 + 6 Phase 3)
 - String free belum diimplementasi (ponytail: `string_free` belum ada sebagai builtin)
 
+### ✅ F6 — Actor-Model Concurrency — SELESAI
+| Phase | Strategi | Status |
+|-------|----------|--------|
+| Fase 1 | Synchronous JIT — malloc struct, direct handle() call | ✅ |
+| Fase 2 | Threaded — mpsc mailbox + Condvar + add_global_mapping | ✅ |
+
+- `actor` keyword — parser, AST (`ActorDefinition`), codegen
+- `spawn` — allocates struct on heap, passes handler fn_ptr + state to `actor_spawn`
+- `call(handle, msg)` — blocking request-response via Condvar
+- `send(handle, msg)` — fire-and-forget via mpsc channel
+- Convention: `fn handle(state, msg) -> int` is the message handler
+- **Key fix:** `add_global_mapping` required for MCJIT to resolve `#[no_mangle]` symbols in test binaries
+- 4 actor tests passing on CI
+
+### ✅ AOT Compilation — SELESAI
+- `--emit-exe <output>` — CLI untuk compile ke native binary
+- `rename_main()` — rename user's `main` → `__aha_main`
+- `add_c_main_wrapper()` — `int main()` → calls `__aha_main()`, truncates i64→i32
+- `emit_object_file()` — inkwell `TargetMachine::write_to_file()` → `.o` file
+- Link with `cc` — `cc -o <output> <temp>.o`
+
 ### ❌ Belum ada
-- AOT compile ke native binary (saat ini JIT-only)
 - Self-hosting (compiler AHA! ditulis dalam AHA!)
-- Namespace & visibilitas (F4 sisa)
-- Package manager `aha install` (F8 — setelah AOT + komunitas)
+- Package manager `aha install` (F8 — setelah komunitas)
 
 ---
 
@@ -265,10 +286,21 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] Phase 3: escape analysis — `find_heap_vars_in_expr()`, 6 tests
 - [ ] `string_free` builtin (belum — ponytail: add when string lifetime mgmt)
 
-### ⏳ F6. Actor-model concurrency
-- [ ] Message passing antar actor
-- [ ] `async`/`await` tanpa thread yang bisa di-share sembarangan
-- [ ] Memory-safe: message transfer = ownership transfer (bukan shared)
+### ✅ F6. Actor-model concurrency — SELESAI
+- [x] `actor` keyword — parser, AST, codegen
+- [x] `spawn` — allocates struct, passes handler fn_ptr + state to `actor_spawn`
+- [x] `call(handle, msg)` — blocking request-response via Condvar
+- [x] `send(handle, msg)` — fire-and-forget via mpsc channel
+- [x] Threaded actors (Phase 2) — `std::thread::spawn` + mpsc mailbox
+- [x] `add_global_mapping` — MCJIT native function registration
+- [x] 4 actor tests passing on CI
+
+### ✅ AOT Compilation — SELESAI
+- [x] `--emit-exe <output>` CLI option
+- [x] `rename_main()` — rename user's `main` → `__aha_main`
+- [x] `add_c_main_wrapper()` — C-compatible `int main()` wrapper
+- [x] `emit_object_file()` — inkwell `TargetMachine::write_to_file()` → `.o`
+- [x] Link with `cc` — produces native executable
 
 ### ⏳ F7. Self-hosting
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa)
@@ -278,7 +310,7 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 ## 10. Persyaratan Non-Fungsional
 
 - **Backend:** LLVM via inkwell — satu-satunya jalur codegen (JIT sekarang,
-  AOT nanti). Tidak ada interpreter.
+  AOT sudah tersedia via `--emit-exe`). Tidak ada interpreter.
 - **Model memori (target):** value semantics + ownership; string/array punya
   owner tunggal; free otomatis & deterministik di akhir scope; alokasi
   bertumpuk (stack) untuk nilai kecil.
@@ -315,8 +347,7 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
    besar; butuh definisi ownership untuk param).
 3. **Mutasi field struct:** ~~kapan `p.x = 5` didukung?~~ — ✅ selesai di v1.5.0.
 4. **String:** tetap immutable `{ptr, len}`? Atau ada tipe builder?
-5. **AOT native binary:** kapan dirilis? (saat ini JIT-only; `--emit-ir` sudah
-   ada, tinggal object code + linker).
+5. **AOT native binary:** ✅ sudah tersedia via `--emit-exe`. JIT tetap default.
 6. **Alokasi:** kapan sebuah nilai boleh di-heap vs stack?
 7. **Target aerospace:** apakah AHA! perlu dukungan hardware langsung (GPIO,
    MMIO, interrupt) atau cukup sebagai bahasa aplikasi di atas RTOS?
@@ -350,3 +381,4 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.3 | F5 Phase 2 selesai: last-use analysis — `find_last_uses()` pre-scan AST, `insert_free_for_var()` per-variable free, fallback ke scope-end untuk branch. 7 tests baru (total 19 ownership tests). |
 | 2026-08-20 | 0.3.4 | F5 SELESAI — Phase 3 escape analysis: `find_heap_vars_in_expr()` deteksi variabel yang di-return, skip auto-free. 6 tests baru (total 25 ownership tests). F5 lengkap: scope-based + last-use + escape. |
 | 2026-08-20 | 0.3.5 | F4 SELESAI — Visibility filter: non-pub items dari imports di-drop saat AST merge. `is_pub_item()` cek FunctionLiteral & StructDefinition. 5 tests baru, 3 namespace tests di-update. F4 lengkap: use + pub + namespace + visibility. |
+| 2026-08-20 | 0.3.6 | F6 SELESAI + AOT Compilation. Actor-model: spawn/call/send threaded via mpsc+Condvar. AOT: `--emit-exe` → rename main + C wrapper + emit .o + link with cc. inkwell v0.4 API: `as_global_value().set_name()`, explicit `RelocMode::Default`/`CodeModel::Default`. |

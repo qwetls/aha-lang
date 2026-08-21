@@ -19,6 +19,10 @@ struct Args {
     /// Save LLVM IR to file
     #[arg(long)]
     emit_ir: Option<String>,
+
+    /// Compile to native executable (AOT)
+    #[arg(long)]
+    emit_exe: Option<String>,
 }
 
 fn main() {
@@ -76,16 +80,54 @@ fn main() {
     println!("----------------------\n");
 
     // Save IR to file if requested
-    if let Some(ir_file) = args.emit_ir {
+    if let Some(ref ir_file) = args.emit_ir {
         let ir_string = codegen.get_llvm_ir();
-        if let Err(e) = fs::write(&ir_file, ir_string) {
+        if let Err(e) = fs::write(ir_file, ir_string) {
             eprintln!("[ERROR] Failed to save IR: {}", e);
         } else {
             println!("LLVM IR saved to: {}", ir_file);
         }
     }
 
-    // 4. EXECUTION (JIT)
+    // 4. AOT COMPILATION (--emit-exe)
+    if let Some(ref output_path) = args.emit_exe {
+        println!("[3] AOT COMPILATION...");
+
+        // Rename user's main → __aha_main, add C-compatible wrapper
+        codegen.rename_main("__aha_main");
+        codegen.add_c_main_wrapper();
+
+        // Emit object file to temp location
+        let obj_path = std::env::temp_dir().join("aha_output.o");
+        if let Err(e) = codegen.emit_object_file(&obj_path) {
+            eprintln!("[ERROR] Failed to emit object file: {}", e);
+            return;
+        }
+        println!("Object file: {}", obj_path.display());
+
+        // Link with cc
+        let status = std::process::Command::new("cc")
+            .arg("-o").arg(output_path)
+            .arg(&obj_path)
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                println!("Native executable: {}", output_path);
+                let _ = fs::remove_file(&obj_path);
+            }
+            Ok(s) => {
+                eprintln!("[ERROR] Linker failed with status: {}", s);
+                eprintln!("Object file preserved at: {}", obj_path.display());
+            }
+            Err(e) => {
+                eprintln!("[ERROR] Failed to run linker (cc): {}", e);
+                eprintln!("Object file preserved at: {}", obj_path.display());
+            }
+        }
+        return;
+    }
+
+    // 5. EXECUTION (JIT)
     println!("[3] EXECUTION (JIT)...");
     match codegen.run_jit() {
         Ok(result) => println!("Program executed successfully. Result: {}", result),

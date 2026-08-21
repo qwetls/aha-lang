@@ -30,6 +30,9 @@ pub enum AhaType {
     /// Named struct — carries the struct's declared name so codegen can
     /// look up its field layout and LLVM struct type.
     Struct(String),
+    /// Named enum — carries the enum's declared name so codegen can
+    /// look up its variant layout and LLVM tagged union type.
+    Enum(String),
     /// Function type with parameter types and return type
     Function {
         params: Vec<AhaType>,
@@ -178,6 +181,7 @@ impl fmt::Display for AhaType {
             AhaType::List(inner) => write!(f, "List<{}>", inner),
             AhaType::Map(key, value) => write!(f, "Map<{}, {}>", key, value),
             AhaType::Struct(name) => write!(f, "{}", name),
+            AhaType::Enum(name) => write!(f, "{}", name),
             AhaType::Function { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {

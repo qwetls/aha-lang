@@ -1,11 +1,12 @@
 // src/codegen.rs
 
 use crate::ast;
+use crate::ast::{ActorDefinition, SpawnExpression};
 use crate::types::{AhaType, TypedValue};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue};
+use inkwell::values::{PointerValue, BasicValueEnum, FunctionValue, BasicMetadataValueEnum};
 use inkwell::types::{IntType, StructType};
 use std::collections::HashMap;
 
@@ -54,6 +55,9 @@ pub struct CodeGenerator<'ctx> {
     /// Active generic type-parameter bindings during monomorphized
     /// body compilation: type param name → concrete AhaType.
     type_param_map: HashMap<String, AhaType>,
+    /// Registered enum definitions: enum name → variants with payload types.
+    /// Each variant is (name, Vec<AhaType>) — empty vec = unit variant.
+    enum_defs: HashMap<String, Vec<(String, Vec<AhaType>)>>,
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -94,6 +98,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             scan_scope: Vec::new(),
             generic_defs: HashMap::new(),
             type_param_map: HashMap::new(),
+            enum_defs: HashMap::new(),
         }
     }
 
@@ -261,6 +266,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Array(arr) => {
                 for elem in &arr.elements { Self::collect_var_names(elem, vars); }
             }
+            ast::Expression::Match(m) => {
+                Self::collect_var_names(&m.value, vars);
+                for arm in &m.arms { Self::collect_var_names(&arm.body, vars); }
+            }
             _ => {}
         }
     }
@@ -344,6 +353,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Assignment(assign) => {
                 Self::scan_expr_uses(&assign.value, last_uses, idx);
             }
+            ast::Expression::Match(m) => {
+                Self::scan_expr_uses(&m.value, last_uses, idx);
+                for arm in &m.arms {
+                    Self::scan_expr_uses(&arm.body, last_uses, idx);
+                }
+            }
             _ => {} // literals, module access — no heap var uses
         }
     }
@@ -424,6 +439,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&ret_stmt.return_value);
                 }
                 ast::Statement::Struct(_) => {}
+                ast::Statement::Actor(_) => {}
+                ast::Statement::Enum(_) => {}
                 ast::Statement::Import(_) => {}
             }
         }
@@ -523,6 +540,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(value_expr);
                 }
             }
+            ast::Expression::Match(m) => {
+                self.scan_expr_for_calls(&m.value);
+                for arm in &m.arms {
+                    self.scan_expr_for_calls(&arm.body);
+                }
+            }
             _ => {}
         }
     }
@@ -538,6 +561,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         match t {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
+            AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -568,6 +592,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         if self.struct_defs.contains_key(hint) {
             return AhaType::Struct(hint.to_string());
         }
+        if self.enum_defs.contains_key(hint) {
+            return AhaType::Enum(hint.to_string());
+        }
         AhaType::Int
     }
 
@@ -585,6 +612,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::Struct(name) => {
                 let st = self.struct_llvm_type(name)?;
                 Ok(st.fn_type(&meta, false))
+            }
+            AhaType::Enum(name) => {
+                let et = self.enum_llvm_type(name)?;
+                Ok(et.fn_type(&meta, false))
             }
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
@@ -610,13 +641,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if self.functions.contains_key(&func_name) {
                         continue;
                     }
-                    let param_types: Result<Vec<_>, _> = func.parameters.iter().enumerate()
-                        .map(|(i, _)| {
-                            let t = self.param_type_map.get(&func_name)
-                                .and_then(|types| types.get(i).cloned())
-                                .unwrap_or(AhaType::Int);
-                            self.aha_type_to_llvm_type(&t)
-                        })
+                    // Don't predeclare main — compile() creates it as the
+                    // implicit entry point; compile_function fills the body.
+                    if func_name == "main" {
+                        continue;
+                    }
+                    let param_aha = self.infer_param_types(&func_name, &func.parameters, &func.param_type_hints);
+                    let param_types: Result<Vec<_>, _> = param_aha.iter()
+                        .map(|t| self.aha_type_to_llvm_type(t))
                         .collect();
                     let Ok(param_types) = param_types else { continue; };
                     let return_type = self.infer_function_return_type(func, &func_name);
@@ -663,6 +695,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Expression::Call(call) => {
                 if let ast::Expression::Identifier(id) = call.function.as_ref() {
+                    // Enum variant constructor: return the enum type.
+                    if let Some(enum_name) = self.find_enum_for_variant(&id.value) {
+                        return AhaType::Enum(enum_name);
+                    }
                     // List builtins: preserve the element type of the first
                     // argument so `let xs = list_new(); list_push(xs, ...)`
                     // keeps xs as List<Int> and list_get(xs, i) is Int.
@@ -719,6 +755,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 AhaType::Int
             }
+            ast::Expression::Match(m) => {
+                // Return type of first arm body (all arms must agree).
+                if let Some(arm) = m.arms.first() {
+                    self.infer_expr_type(&arm.body)
+                } else {
+                    AhaType::Int
+                }
+            }
             _ => AhaType::Int,
         }
     }
@@ -731,16 +775,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn infer_function_return_type(&self, func: &ast::FunctionLiteral, func_name: &str) -> AhaType {
         // Prefer explicit return type annotation (e.g. `fn f() -> int`)
         if let Some(ref hint) = func.return_type_hint {
-            // Resolve struct names against struct_defs, then fall back to from_hint.
+            // Resolve struct/enum names against registries, then fall back to from_hint.
             let ty = if self.struct_defs.contains_key(hint.as_str()) {
                 AhaType::Struct(hint.clone())
+            } else if self.enum_defs.contains_key(hint.as_str()) {
+                AhaType::Enum(hint.clone())
             } else {
                 AhaType::from_hint(hint).unwrap_or(AhaType::Int)
             };
             return ty;
         }
 
-        let param_types = self.infer_param_types_immutable(func_name, &func.parameters);
+        let param_types = self.infer_param_types_immutable(func_name, &func.parameters, &func.param_type_hints);
 
         // Build a synthetic scope so infer_expr_type_with_scope can resolve params.
         let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
@@ -763,12 +809,27 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Immutable variant of infer_param_types for the pre-pass (when we
     /// cannot call the &mut self version). Reads from param_type_map.
-    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+    fn infer_param_types_immutable(&self, func_name: &str, params: &[ast::Identifier], hints: &[Option<String>]) -> Vec<AhaType> {
         let mut types = vec![AhaType::Int; params.len()];
+        for (i, hint) in hints.iter().enumerate() {
+            if i < types.len() {
+                if let Some(h) = hint {
+                    types[i] = if self.enum_defs.contains_key(h.as_str()) {
+                        AhaType::Enum(h.clone())
+                    } else if self.struct_defs.contains_key(h.as_str()) {
+                        AhaType::Struct(h.clone())
+                    } else {
+                        AhaType::from_hint(h).unwrap_or(AhaType::Int)
+                    };
+                }
+            }
+        }
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
-                    types[i] = t.clone();
+                    if matches!(types[i], AhaType::Int) {
+                        types[i] = t.clone();
+                    }
                 }
             }
         }
@@ -811,6 +872,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     _ => None,
                 };
                 if let Some(name) = call_name {
+                    if let Some(enum_name) = self.find_enum_for_variant(name) {
+                        return AhaType::Enum(enum_name);
+                    }
                     if name == "list_push" || name == "list_push_string" {
                         if let Some(first) = call.arguments.first() {
                             return self.infer_expr_type_with_scope(first, scope);
@@ -863,6 +927,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Expression::Assignment(assign) => {
                 self.infer_expr_type_with_scope(&assign.value, scope)
             }
+            ast::Expression::Match(m) => {
+                if let Some(arm) = m.arms.first() {
+                    self.infer_expr_type_with_scope(&arm.body, scope)
+                } else {
+                    AhaType::Int
+                }
+            }
             _ => AhaType::Int,
         }
     }
@@ -886,45 +957,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.context.i8_type().ptr_type(inkwell::AddressSpace::default())
     }
 
-    /// DIAGNOSTIC: append a marker to /tmp/aha_diag.log (survives SIGSEGV
-    /// where stderr capture is lost). Remove once List<T> lands.
-    fn diag_mark(msg: &str) {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/aha_diag.log")
-        {
-            let _ = writeln!(f, "{}", msg);
-        }
-    }
-
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
-        let _ = std::fs::remove_file("/tmp/aha_diag.log");
-        Self::diag_mark("1: compile start");
         self.declare_printf();
         self.declare_c_runtime();
-        Self::diag_mark("2: c runtime declared");
-        // List builtins depend on malloc/realloc/free from the C runtime.
+        self.declare_actor_runtime();
+        self.declare_string_and_file_builtins();
         self.create_list_builtins();
-        Self::diag_mark("3: list builtins created");
         self.create_map_builtins();
-        Self::diag_mark("3m: map builtins created");
 
-        // DIAGNOSTIC: verify the module is valid before proceeding, so an
-        // invalid-IR bug surfaces as a message instead of a SIGSEGV in
-        // print_to_string. Remove once List<T> lands.
-        match self.module.verify() {
-            Ok(()) => Self::diag_mark("4: verify ok"),
-            Err(e) => {
-                Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
-                std::process::abort();
-            }
+        // Verify the module is valid before proceeding.
+        if let Err(e) = self.module.verify() {
+            return Err(format!("LLVM module verification failed: {}", e));
         }
 
         // Register struct definitions first so struct literals and field
         // access can resolve field layout during codegen.
         self.register_structs(&program.statements);
+        // Register enum definitions so constructors and match can resolve
+        // variant layout during codegen.
+        self.register_enums(&program.statements);
 
         // Pre-pass: iterate scanning until param types and return types
         // stabilize. A single pass is insufficient: a struct param's
@@ -963,49 +1014,70 @@ impl<'ctx> CodeGenerator<'ctx> {
         // is_even can call is_odd before is_odd's body is compiled.
         self.predeclare_functions(&program.statements);
 
-        let fn_type = self.i64_type.fn_type(&[], false);
-        let function = self.module.add_function("main", fn_type, None);
-        let basic_block = self.context.append_basic_block(function, "entry");
+        // ponytail: Create an implicit entry point ("main") that compiles
+        // all user statements. When the user defines fn main(),
+        // compile_function creates the real @main with the user's body.
+        let has_user_main = program.statements.iter().any(|s| {
+            matches!(s, ast::Statement::Expression(ast::ExpressionStatement {
+                expression: ast::Expression::Function(f), ..
+            }) if f.name.as_ref().map(|n| n.value.as_str()) == Some("main"))
+        });
 
-        self.builder.position_at_end(basic_block);
+        // When user defines fn main(), compile_function creates @main.
+        // We must NOT also create an implicit @main — that would give us
+        // two @main functions. The implicit @main is only for programs
+        // without a user-defined main (e.g. "1 + 2" → returns 3).
+        let implicit_entry = if !has_user_main {
+            let fn_type = self.i64_type.fn_type(&[], false);
+            let function = self.module.add_function("main", fn_type, None);
+            self.functions.insert("main".to_string(), function);
+            let bb = self.context.append_basic_block(function, "entry");
+            self.builder.position_at_end(bb);
+            Some(bb)
+        } else {
+            None
+        };
 
         let mut last_value: Option<TypedValue<'ctx>> = None;
-
         for (i, statement) in program.statements.iter().enumerate() {
             let is_last = i == program.statements.len() - 1;
-            
             if is_last {
                 if let ast::Statement::Expression(expr_stmt) = statement {
-                    let val = self.compile_expression(&expr_stmt.expression)?;
-                    last_value = Some(val);
+                    if has_user_main {
+                        let _val = self.compile_expression(&expr_stmt.expression)?;
+                        // Restore to @main's entry block for the implicit
+                        // return that compile() adds after the loop.
+                        if let Some(&main_fn) = self.functions.get("main") {
+                            if let Some(entry) = main_fn.get_first_basic_block() {
+                                self.builder.position_at_end(entry);
+                            }
+                        }
+                    } else {
+                        let val = self.compile_expression(&expr_stmt.expression)?;
+                        last_value = Some(val);
+                    }
                     continue;
                 }
             }
             self.compile_statement(statement)?;
         }
-        
-        let return_val = match last_value {
-            Some(tv) => match tv.aha_type {
-                // main is always an i64 entry point; a String/Struct result
-                // has no meaningful i64 value, so return 0 (callers use len()
-                // etc. to inspect it instead).
-                AhaType::String | AhaType::Struct(_) => self.i64_type.const_int(0, false).into(),
-                _ => tv.value,
-            },
-            None => self.i64_type.const_int(0, false).into(),
-        };
-        let _ = self.builder.build_return(Some(&return_val));
+        if has_user_main {
+            // User's fn main() already has a return. The build_return below
+            // would be unreachable (second terminator). Skip it.
+        } else {
+            let return_val = match last_value {
+                Some(tv) => match tv.aha_type {
+                    AhaType::String | AhaType::Struct(_) | AhaType::Enum(_) => self.i64_type.const_int(0, false).into(),
+                    _ => tv.value,
+                },
+                None => self.i64_type.const_int(0, false).into(),
+            };
+            let _ = self.builder.build_return(Some(&return_val));
+        }
 
-        Self::diag_mark("5: main compiled");
-
-        // DIAGNOSTIC: second verify after main compilation, before
-        // returning to the caller (print_to_string / JIT).
-        match self.module.verify() {
-            Ok(()) => Self::diag_mark("6: verify after main ok"),
-            Err(e) => {
-                Self::diag_mark(&format!("6: VERIFY AFTER MAIN FAILED: {}", e));
-                std::process::abort();
-            }
+        // Final module verification.
+        if let Err(e) = self.module.verify() {
+            return Err(format!("LLVM module verification failed: {}", e));
         }
 
         Ok(())
@@ -1030,6 +1102,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("min".to_string(), AhaType::Int);
         self.fn_types.insert("max".to_string(), AhaType::Int);
         self.fn_types.insert("len".to_string(), AhaType::Int);
+    }
+
+    /// Declare string + file I/O builtins (depend on C runtime: malloc, snprintf, fopen, etc.)
+    fn declare_string_and_file_builtins(&mut self) {
+        self.create_int_to_string_builtin();
+        self.create_string_to_int_builtin();
+        self.create_string_sub_builtin();
+        self.create_char_at_builtin();
+        self.create_file_read_builtin();
+        self.create_file_write_builtin();
+
+        self.fn_types.insert("int_to_string".to_string(), AhaType::String);
+        self.fn_types.insert("string_to_int".to_string(), AhaType::Int);
+        self.fn_types.insert("string_sub".to_string(), AhaType::String);
+        self.fn_types.insert("char_at".to_string(), AhaType::Int);
+        self.fn_types.insert("file_read".to_string(), AhaType::String);
+        self.fn_types.insert("file_write".to_string(), AhaType::Int);
     }
 
     // Builtin: print(int) -> prints integer with newline
@@ -1169,6 +1258,266 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     // =====================================================================
+    // String builtins — conversion, substring, character access.
+    // =====================================================================
+
+    // Builtin: int_to_string(value: int) -> string
+    // Uses snprintf to format i64 into a heap-allocated buffer.
+    fn create_int_to_string_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = self.string_type.fn_type(&[i64_type.into()], false);
+        let function = self.module.add_function("int_to_string", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let value = function.get_nth_param(0).expect("int_to_string: missing param").into_int_value();
+
+        // Alloc 32-byte buffer
+        let buf_size = i64_type.const_int(32, false);
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let buf = self.builder.build_call(malloc_fn, &[buf_size.into()], "buf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // snprintf(buf, 32, "%lld", value)
+        let fmt = self.builder.build_global_string_ptr("%lld", "fmt").expect("fmt failed");
+        let snprintf_fn = *self.functions.get("snprintf").expect("snprintf not declared");
+        let _ = self.builder.build_call(snprintf_fn, &[buf.into(), buf_size.into(), fmt.as_pointer_value().into(), value.into()], "snprintf_call");
+
+        // len = strlen(buf)
+        let strlen_fn = *self.functions.get("strlen").expect("strlen not declared");
+        let len = self.builder.build_call(strlen_fn, &[buf.into()], "str_len")
+            .expect("strlen failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, len, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("int_to_string".to_string(), function);
+    }
+
+    // Builtin: string_to_int(str: string) -> int
+    // Uses strtol to parse a string to i64.
+    fn create_string_to_int_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into()], false);
+        let function = self.module.add_function("string_to_int", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("string_to_int: missing param").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+
+        // strtol(str_ptr, NULL, 10)
+        let strtol_fn = *self.functions.get("strtol").expect("strtol not declared");
+        let i8_type = self.context.i8_type();
+        let i8_ptr_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default()).ptr_type(inkwell::AddressSpace::default());
+        let null_ptr = i8_ptr_ptr_type.const_null();
+        let base_10 = i64_type.const_int(10, false);
+        let result = self.builder.build_call(strtol_fn, &[str_ptr.into(), null_ptr.into(), base_10.into()], "strtol_result")
+            .expect("strtol failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("string_to_int".to_string(), function);
+    }
+
+    // Builtin: string_sub(str: string, start: int, len: int) -> string
+    // Extracts a substring via malloc + memcpy.
+    fn create_string_sub_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = self.string_type.fn_type(&[self.string_type.into(), i64_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("string_sub", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("string_sub: missing str").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+        let str_len = self.builder.build_extract_value(str_struct, 1, "slen")
+            .expect("extract len").into_int_value();
+        let start = function.get_nth_param(1).expect("string_sub: missing start").into_int_value();
+        let req_len = function.get_nth_param(2).expect("string_sub: missing len").into_int_value();
+
+        // Clamp: actual_len = min(req_len, str_len - start)
+        let i64_zero = i64_type.const_int(0, false);
+        let remaining = self.builder.build_int_sub(str_len, start, "remaining").expect("sub failed");
+        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, req_len, remaining, "cmp_len").expect("cmp failed");
+        let actual_len = self.builder.build_select(cmp, remaining, req_len, "actual_len").expect("select failed").into_int_value();
+
+        // src = str_ptr + start
+        let src = unsafe { self.builder.build_gep(str_ptr, &[start], "src").expect("gep failed") };
+
+        // alloc actual_len + 1
+        let one = i64_type.const_int(1, false);
+        let alloc_size = self.builder.build_int_add(actual_len, one, "alloc_sz").expect("add failed");
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let new_buf = self.builder.build_call(malloc_fn, &[alloc_size.into()], "newbuf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // memcpy(new_buf, src, actual_len)
+        let memcpy_fn = *self.functions.get("memcpy").expect("memcpy not declared");
+        let _ = self.builder.build_call(memcpy_fn, &[new_buf.into(), src.into(), actual_len.into()], "cp");
+
+        // null terminate
+        let null_pos = unsafe { self.builder.build_gep(new_buf, &[actual_len], "nullpos").expect("gep null") };
+        let i8_type = self.context.i8_type();
+        let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, new_buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, actual_len, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("string_sub".to_string(), function);
+    }
+
+    // Builtin: char_at(str: string, index: int) -> int
+    // Returns the character at the given index as an integer (ASCII value).
+    fn create_char_at_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into(), i64_type.into()], false);
+        let function = self.module.add_function("char_at", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let str_struct = function.get_nth_param(0).expect("char_at: missing str").into_struct_value();
+        let str_ptr = self.builder.build_extract_value(str_struct, 0, "sptr")
+            .expect("extract ptr").into_pointer_value();
+        let index = function.get_nth_param(1).expect("char_at: missing index").into_int_value();
+
+        // char_ptr = str_ptr + index
+        let char_ptr = unsafe { self.builder.build_gep(str_ptr, &[index], "char_ptr").expect("gep failed") };
+
+        // Load i8 value and extend to i64
+        let i8_type = self.context.i8_type();
+        let char_val = self.builder.build_load(char_ptr, "char_val")
+            .expect("load failed").into_int_value();
+        let result = self.builder.build_int_z_extend(char_val, i64_type, "char_ext").expect("zext failed");
+
+        let _ = self.builder.build_return(Some(&result));
+        self.functions.insert("char_at".to_string(), function);
+    }
+
+    // =====================================================================
+    // File I/O builtins — fopen/fread/fwrite/fclose wrappers.
+    // =====================================================================
+
+    // Builtin: file_read(path: string) -> string
+    // Reads entire file into a heap-allocated string.
+    fn create_file_read_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = self.string_type.fn_type(&[self.string_type.into()], false);
+        let function = self.module.add_function("file_read", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Extract path string
+        let path_struct = function.get_nth_param(0).expect("file_read: missing path").into_struct_value();
+        let path_ptr = self.builder.build_extract_value(path_struct, 0, "path_ptr")
+            .expect("extract ptr").into_pointer_value();
+
+        // fopen(path, "rb")
+        let fopen_fn = *self.functions.get("fopen").expect("fopen not declared");
+        let mode = self.builder.build_global_string_ptr("rb", "mode").expect("mode failed");
+        let fp = self.builder.build_call(fopen_fn, &[path_ptr.into(), mode.as_pointer_value().into()], "fp")
+            .expect("fopen failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // fseek(fp, 0, SEEK_END) — SEEK_END = 2
+        let fseek_fn = *self.functions.get("fseek").expect("fseek not declared");
+        let zero = i64_type.const_int(0, false);
+        let seek_end = self.context.i32_type().const_int(2, false);
+        let _ = self.builder.build_call(fseek_fn, &[fp.into(), zero.into(), seek_end.into()], "fseek_end");
+
+        // size = ftell(fp)
+        let ftell_fn = *self.functions.get("ftell").expect("ftell not declared");
+        let size = self.builder.build_call(ftell_fn, &[fp.into()], "size")
+            .expect("ftell failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // fseek(fp, 0, SEEK_SET) — SEEK_SET = 0
+        let seek_set = self.context.i32_type().const_int(0, false);
+        let _ = self.builder.build_call(fseek_fn, &[fp.into(), zero.into(), seek_set.into()], "fseek_set");
+
+        // buf = malloc(size + 1)
+        let one = i64_type.const_int(1, false);
+        let alloc_size = self.builder.build_int_add(size, one, "alloc_sz").expect("add failed");
+        let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+        let buf = self.builder.build_call(malloc_fn, &[alloc_size.into()], "buf")
+            .expect("malloc failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // fread(buf, 1, size, fp)
+        let fread_fn = *self.functions.get("fread").expect("fread not declared");
+        let one_64 = i64_type.const_int(1, false);
+        let _ = self.builder.build_call(fread_fn, &[buf.into(), one_64.into(), size.into(), fp.into()], "fread_call");
+
+        // fclose(fp)
+        let fclose_fn = *self.functions.get("fclose").expect("fclose not declared");
+        let _ = self.builder.build_call(fclose_fn, &[fp.into()], "fclose_call");
+
+        // null terminate
+        let null_pos = unsafe { self.builder.build_gep(buf, &[size], "nullpos").expect("gep null") };
+        let i8_type = self.context.i8_type();
+        let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
+
+        // Build {i8*, i64} string struct
+        let s = self.string_type.const_zero();
+        let s = self.builder.build_insert_value(s, buf, 0, "sptr").expect("insert ptr").into_struct_value();
+        let s = self.builder.build_insert_value(s, size, 1, "slen").expect("insert len").into_struct_value();
+
+        let _ = self.builder.build_return(Some(&s));
+        self.functions.insert("file_read".to_string(), function);
+    }
+
+    // Builtin: file_write(path: string, content: string) -> int
+    // Writes string content to file. Returns bytes written.
+    fn create_file_write_builtin(&mut self) {
+        let i64_type = self.i64_type;
+        let fn_type = i64_type.fn_type(&[self.string_type.into(), self.string_type.into()], false);
+        let function = self.module.add_function("file_write", fn_type, None);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Extract path
+        let path_struct = function.get_nth_param(0).expect("file_write: missing path").into_struct_value();
+        let path_ptr = self.builder.build_extract_value(path_struct, 0, "path_ptr")
+            .expect("extract path ptr").into_pointer_value();
+
+        // Extract content
+        let content_struct = function.get_nth_param(1).expect("file_write: missing content").into_struct_value();
+        let content_ptr = self.builder.build_extract_value(content_struct, 0, "content_ptr")
+            .expect("extract content ptr").into_pointer_value();
+        let content_len = self.builder.build_extract_value(content_struct, 1, "content_len")
+            .expect("extract content len").into_int_value();
+
+        // fopen(path, "wb")
+        let fopen_fn = *self.functions.get("fopen").expect("fopen not declared");
+        let mode = self.builder.build_global_string_ptr("wb", "mode").expect("mode failed");
+        let fp = self.builder.build_call(fopen_fn, &[path_ptr.into(), mode.as_pointer_value().into()], "fp")
+            .expect("fopen failed").try_as_basic_value().left().unwrap().into_pointer_value();
+
+        // bytes_written = fwrite(content_ptr, 1, content_len, fp)
+        let fwrite_fn = *self.functions.get("fwrite").expect("fwrite not declared");
+        let one = i64_type.const_int(1, false);
+        let written = self.builder.build_call(fwrite_fn, &[content_ptr.into(), one.into(), content_len.into(), fp.into()], "written")
+            .expect("fwrite failed").try_as_basic_value().left().unwrap().into_int_value();
+
+        // fclose(fp)
+        let fclose_fn = *self.functions.get("fclose").expect("fclose not declared");
+        let _ = self.builder.build_call(fclose_fn, &[fp.into()], "fclose_call");
+
+        let _ = self.builder.build_return(Some(&written));
+        self.functions.insert("file_write".to_string(), function);
+    }
+
+    // =====================================================================
     // List<T> builtins — dynamic array with heap allocation.
     //
     // A list is an opaque i64 handle = pointer to a heap header struct:
@@ -1189,7 +1538,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     // =====================================================================
 
     fn create_list_builtins(&mut self) {
-        Self::diag_mark("3a: create_list_builtins start");
         let i64_type = self.i64_type;
         let i8_ptr = self.i8_ptr_type();
         let header = self.list_header_type;
@@ -1200,19 +1548,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let header_from_handle = |builder: &Builder<'ctx>, handle: inkwell::values::IntValue<'ctx>| {
             builder.build_int_to_ptr(handle, header_ptr, "list_hdr").expect("int_to_ptr failed")
         };
-        Self::diag_mark("3b: header_from_handle closure created");
 
         // --- list_new() -> List<Int> ---
         {
-            Self::diag_mark("3c: list_new start");
             let fn_type = i64_type.fn_type(&[], false);
-            Self::diag_mark("3c1: fn_type ok");
             let function = self.module.add_function("list_new", fn_type, None);
-            Self::diag_mark("3c2: add_function ok");
             let entry = self.context.append_basic_block(function, "entry");
-            Self::diag_mark("3c3: append_basic_block ok");
             self.builder.position_at_end(entry);
-            Self::diag_mark("3c4: position ok");
 
             let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
             let hdr_size = i64_type.const_int(32, false); // 4 x i64 header
@@ -1220,47 +1562,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .expect("malloc failed")
                 .try_as_basic_value().left().expect("malloc void")
                 .into_pointer_value();
-            Self::diag_mark("3c5: malloc call ok");
 
             // Zero the whole header explicitly — malloc memory is garbage.
             let zero = i64_type.const_int(0, false);
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
                 .expect("bitcast failed").into_pointer_value();
-            Self::diag_mark("3c6: bitcast ok");
-            Self::diag_mark("3c6a: before gep");
             let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
-            Self::diag_mark("3c6b: gep ok");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
-            Self::diag_mark("3c7: data store ok");
             let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
             self.builder.build_store(len_ptr, zero).expect("store failed");
-            Self::diag_mark("3c8: len store ok");
             let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
             self.builder.build_store(cap_ptr, zero).expect("store failed");
-            Self::diag_mark("3c9: cap store ok");
 
             // elem_size = 8 (Int)
             let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
             self.builder.build_store(es_ptr, i64_type.const_int(8, false)).expect("store failed");
-            Self::diag_mark("3c10: es store ok");
 
             // Return handle as i64 (header address).
             let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle")
                 .expect("ptr_to_int failed");
-            Self::diag_mark("3c11: ptr_to_int ok");
             let _ = self.builder.build_return(Some(&handle));
-            Self::diag_mark("3c12: return ok");
             self.functions.insert("list_new".to_string(), function);
-            Self::diag_mark("3c13: list_new done");
         }
 
         // --- list_new_string() -> List<String> (elem_size 16) ---
         {
-            Self::diag_mark("3d: list_new_string start");
             let fn_type = i64_type.fn_type(&[], false);
             let function = self.module.add_function("list_new_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1294,7 +1624,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_push(list, value) -> list ---
         {
-            Self::diag_mark("3e: list_push start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1379,7 +1708,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (i8* pointer, i64 length) and passes both; this builtin stores
         // the full 16-byte element {i8*, i64} at data[len].
         {
-            Self::diag_mark("3f: list_push_string start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i8_ptr.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1462,7 +1790,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get(list, index) -> i64 (Int element or string ptr) ---
         {
-            Self::diag_mark("3g: list_get start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1518,7 +1845,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get_string(list, index) -> {i8*, i64} string element ---
         {
-            Self::diag_mark("3h: list_get_string start");
             let fn_type = self.string_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1572,7 +1898,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_len(list) -> i64 ---
         {
-            Self::diag_mark("3i: list_len start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_len", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1589,7 +1914,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_free(list) -> i64 (0) ---
         {
-            Self::diag_mark("3j: list_free start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_free", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1619,7 +1943,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("list_get_string".to_string(), AhaType::String);
         self.fn_types.insert("list_len".to_string(), AhaType::Int);
         self.fn_types.insert("list_free".to_string(), AhaType::Int);
-        Self::diag_mark("3k: create_list_builtins done");
     }
 
     /// Generate LLVM IR for a deterministic hash table (open addressing,
@@ -2817,7 +3140,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn create_map_builtins(&mut self) {
-        Self::diag_mark("3m: create_map_builtins start");
 
         // Map<Int, Int> — prefix "map_"
         self.emit_map_combo("map", 8, 8, false, false);
@@ -2831,7 +3153,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Map<String, String> — prefix "map_strings_"
         self.emit_map_combo("map_strings", 16, 16, true, true);
 
-        Self::diag_mark("3n: create_map_builtins done");
     }
 
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
@@ -2843,17 +3164,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let alloc_type = if let Some(ref hint) = let_stmt.type_annotation {
                     let hint_type = AhaType::from_hint(hint)
                         .unwrap_or(AhaType::Int);
-                    // If the struct_defs registry has a matching name, use Struct.
+                    // If the struct_defs or enum_defs registry has a matching name.
                     let hint_type = if self.struct_defs.contains_key(hint) {
                         AhaType::Struct(hint.clone())
+                    } else if self.enum_defs.contains_key(hint) {
+                        AhaType::Enum(hint.clone())
                     } else {
                         hint_type
                     };
                     // Type-check: annotation must match the inferred type.
-                    // Struct("Point") vs Struct("Point") is compatible.
-                    // Int annotation with String value → error.
+                    // Struct("Point") vs Struct("Point") or Enum("Color") vs Enum("Color") is compatible.
                     let compatible = match (&hint_type, &typed_val.aha_type) {
                         (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                        (AhaType::Enum(a), AhaType::Enum(b)) => a == b,
                         _ => hint_type == typed_val.aha_type,
                     };
                     if !compatible {
@@ -2889,6 +3212,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Statement::Import(_) => {
                 // Import statements are handled by the compiler orchestrator
+            }
+            ast::Statement::Actor(_) => {
+                // Actor definitions are registered as structs (actor = struct + thread)
+            }
+            ast::Statement::Enum(_) => {
+                // Enum definitions are compile-time metadata
             }
         }
         Ok(())
@@ -2950,6 +3279,76 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
             },
+            ast::Expression::Spawn(spawn_expr) => {
+                // Phase 1: spawn ActorName { field: value, ... }
+                // Compiles to: actor_spawn(handler_fn_ptr, state_ptr)
+                // The handler function is a JIT function: fn(state: i64, msg: i64) -> i64
+                // Convention: handler is the function named "handle" in the module.
+                let struct_name = &spawn_expr.actor_name.value;
+                let field_names: Vec<String> = match self.struct_defs.get(struct_name) {
+                    Some(fields) => fields.iter().map(|(n, _)| n.clone()).collect(),
+                    None => return Err(format!("Unknown actor type: {}", struct_name)),
+                };
+
+                let mut field_values = Vec::new();
+                for field_name in &field_names {
+                    let val = spawn_expr.fields.iter()
+                        .find(|(k, _)| &k.value == field_name)
+                        .map(|(_, v)| self.compile_expression(v))
+                        .transpose()?
+                        .unwrap_or_else(|| TypedValue::int(self.i64_type.const_int(0, false).into()));
+                    field_values.push(val);
+                }
+
+                // Allocate the struct on the heap.
+                let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
+                let struct_size = self.i64_type.const_int((field_names.len() * 8) as u64, false);
+                let raw_ptr = self.builder.build_call(malloc_fn, &[struct_size.into()], "actor_alloc")
+                    .expect("malloc failed")
+                    .try_as_basic_value().left().expect("malloc void")
+                    .into_pointer_value();
+
+                // Cast i8* from malloc to i64* for field access.
+                let i64_ptr_type = self.i64_type.ptr_type(inkwell::AddressSpace::default());
+                let ptr = self.builder.build_pointer_cast(raw_ptr, i64_ptr_type, "actor_struct_ptr")
+                    .expect("bitcast failed");
+
+                for (i, val) in field_values.iter().enumerate() {
+                    let field_ptr = unsafe {
+                        self.builder.build_gep(
+                            ptr,
+                            &[self.i64_type.const_int(i as u64, false)],
+                            &format!("actor_field_{}", i),
+                        ).expect("gep failed")
+                    };
+                    self.builder.build_store(field_ptr, val.value).expect("store failed");
+                }
+
+                // state_ptr = i64 handle to the heap-allocated struct.
+                let state_ptr = self.builder.build_ptr_to_int(raw_ptr, self.i64_type, "actor_state_ptr")
+                    .expect("ptr_to_int failed");
+
+                // Get handler function pointer (convention: fn handle(state, msg) -> int).
+                let handler_fn = self.module.get_function("handle")
+                    .ok_or("Actor requires a 'handle' function: fn handle(state, msg) -> int")?;
+                let handler_ptr = self.builder.build_ptr_to_int(
+                    handler_fn.as_global_value().as_pointer_value(),
+                    self.i64_type,
+                    "handler_ptr",
+                ).expect("ptr_to_int failed");
+
+                // Call actor_spawn(handler_ptr, state_ptr) -> handle.
+                let actor_spawn_fn = *self.functions.get("actor_spawn").expect("actor_spawn not declared");
+                let args_meta: Vec<BasicMetadataValueEnum> = vec![handler_ptr.into(), state_ptr.into()];
+                let call_result = self.builder.build_call(actor_spawn_fn, &args_meta, "actor_handle")
+                    .map_err(|e| e.to_string())?;
+                let handle = call_result.try_as_basic_value()
+                    .left()
+                    .ok_or("actor_spawn did not return a handle")?;
+
+                Ok(TypedValue::new(handle.into(), AhaType::Int))
+            },
+            ast::Expression::Match(m) => self.compile_match_expression(m),
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
     }
@@ -3066,6 +3465,57 @@ impl<'ctx> CodeGenerator<'ctx> {
         let memcmp_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i8_ptr.into(), i64_t.into()], false);
         let memcmp_fn = self.module.add_function("memcmp", memcmp_ty, None);
         self.functions.insert("memcmp".to_string(), memcmp_fn);
+        // snprintf(buf, size, fmt, ...) — for int_to_string
+        let snprintf_ty = self.context.i32_type().fn_type(&[i8_ptr.into(), i64_t.into(), i8_ptr.into()], true);
+        let snprintf_fn = self.module.add_function("snprintf", snprintf_ty, None);
+        self.functions.insert("snprintf".to_string(), snprintf_fn);
+        // strtol(str, NULL, base) — for string_to_int
+        let strtol_ty = i64_t.fn_type(&[i8_ptr.into(), i8_ptr.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
+        let strtol_fn = self.module.add_function("strtol", strtol_ty, None);
+        self.functions.insert("strtol".to_string(), strtol_fn);
+        // FILE* fopen(path, mode)
+        let i8_ptr_2 = self.i8_ptr_type();
+        let fopen_ty = i8_ptr_2.fn_type(&[i8_ptr_2.into(), i8_ptr_2.into()], false);
+        let fopen_fn = self.module.add_function("fopen", fopen_ty, None);
+        self.functions.insert("fopen".to_string(), fopen_fn);
+        // int fclose(FILE*)
+        let fclose_ty = self.context.i32_type().fn_type(&[i8_ptr_2.into()], false);
+        let fclose_fn = self.module.add_function("fclose", fclose_ty, None);
+        self.functions.insert("fclose".to_string(), fclose_fn);
+        // size_t fread(buf, size, count, FILE*)
+        let fread_ty = i64_t.fn_type(&[i8_ptr_2.into(), i64_t.into(), i64_t.into(), i8_ptr_2.into()], false);
+        let fread_fn = self.module.add_function("fread", fread_ty, None);
+        self.functions.insert("fread".to_string(), fread_fn);
+        // size_t fwrite(buf, size, count, FILE*)
+        let fwrite_ty = i64_t.fn_type(&[i8_ptr_2.into(), i64_t.into(), i64_t.into(), i8_ptr_2.into()], false);
+        let fwrite_fn = self.module.add_function("fwrite", fwrite_ty, None);
+        self.functions.insert("fwrite".to_string(), fwrite_fn);
+        // int fseek(FILE*, offset, whence)
+        let fseek_ty = self.context.i32_type().fn_type(&[i8_ptr_2.into(), i64_t.into(), self.context.i32_type().into()], false);
+        let fseek_fn = self.module.add_function("fseek", fseek_ty, None);
+        self.functions.insert("fseek".to_string(), fseek_fn);
+        // long ftell(FILE*)
+        let ftell_ty = i64_t.fn_type(&[i8_ptr_2.into()], false);
+        let ftell_fn = self.module.add_function("ftell", ftell_ty, None);
+        self.functions.insert("ftell".to_string(), ftell_fn);
+    }
+
+    /// Declare actor runtime functions (actor_spawn, actor_send, actor_call)
+    /// for Phase 2 threading. Mapped to actual Rust functions via add_global_mapping in run_jit.
+    fn declare_actor_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        // actor_spawn(fn_ptr: i64, init_state: i64) -> i64
+        let spawn_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let spawn_fn = self.module.add_function("actor_spawn", spawn_ty, None);
+        self.functions.insert("actor_spawn".to_string(), spawn_fn);
+        // actor_send(handle: i64, msg: i64) -> void
+        let send_ty = self.context.void_type().fn_type(&[i64_t.into(), i64_t.into()], false);
+        let send_fn = self.module.add_function("actor_send", send_ty, None);
+        self.functions.insert("actor_send".to_string(), send_fn);
+        // actor_call(handle: i64, msg: i64) -> i64
+        let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let call_fn = self.module.add_function("actor_call", call_ty, None);
+        self.functions.insert("actor_call".to_string(), call_fn);
     }
 
     /// Type-checked infix operator compilation
@@ -3253,12 +3703,30 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Infer parameter types by scanning call expressions in the program.
     /// If a call passes a string arg, that param is String. Otherwise Int.
-    fn infer_param_types(&mut self, func_name: &str, params: &[ast::Identifier]) -> Vec<AhaType> {
+    fn infer_param_types(&mut self, func_name: &str, params: &[ast::Identifier], hints: &[Option<String>]) -> Vec<AhaType> {
         let mut types = vec![AhaType::Int; params.len()];
+        // Use type hints first (e.g. `d: Day` → Enum("Day"))
+        for (i, hint) in hints.iter().enumerate() {
+            if i < types.len() {
+                if let Some(h) = hint {
+                    types[i] = if self.enum_defs.contains_key(h.as_str()) {
+                        AhaType::Enum(h.clone())
+                    } else if self.struct_defs.contains_key(h.as_str()) {
+                        AhaType::Struct(h.clone())
+                    } else {
+                        AhaType::from_hint(h).unwrap_or(AhaType::Int)
+                    };
+                }
+            }
+        }
+        // Override with call-site inference only when the hint didn't set a
+        // specific type (Enum/Struct). Explicit annotations take precedence.
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
-                    types[i] = t.clone();
+                    if matches!(types[i], AhaType::Int) {
+                        types[i] = t.clone();
+                    }
                 }
             }
         }
@@ -3277,7 +3745,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Infer param types from call sites: scan all call expressions
         // in already-compiled code for this function name
-        let param_aha_types = self.infer_param_types(&func_name, &func.parameters);
+        let param_aha_types = self.infer_param_types(&func_name, &func.parameters, &func.param_type_hints);
 
         // Determine return type — reuse the pre-declared type if present
         // (set by predeclare_functions), otherwise infer it now.
@@ -3288,7 +3756,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // If a return type annotation is present, validate it against the
         // body's inferred return type to catch mismatches early.
         if let Some(ref hint) = func.return_type_hint {
-            let param_aha_types_imm = self.infer_param_types_immutable(&func_name, &func.parameters);
+            let param_aha_types_imm = self.infer_param_types_immutable(&func_name, &func.parameters, &func.param_type_hints);
             let scope: HashMap<String, AhaType> = func.parameters.iter().enumerate()
                 .map(|(i, p)| (p.value.clone(), param_aha_types_imm.get(i).cloned().unwrap_or(AhaType::Int)))
                 .collect();
@@ -3309,11 +3777,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             let hint_type = if self.struct_defs.contains_key(hint.as_str()) {
                 AhaType::Struct(hint.clone())
+            } else if self.enum_defs.contains_key(hint.as_str()) {
+                AhaType::Enum(hint.clone())
             } else {
                 AhaType::from_hint(hint).unwrap_or(AhaType::Int)
             };
             let compatible = match (&hint_type, &body_type) {
                 (AhaType::Struct(a), AhaType::Struct(b)) => a == b,
+                (AhaType::Enum(a), AhaType::Enum(b)) => a == b,
                 (AhaType::Int, t) if t.is_bool() => true, // Int and Bool are both i64
                 (t, AhaType::Int) if t.is_bool() => true,
                 // Body inferred as Int but hint is complex — trust the hint
@@ -3353,7 +3824,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
-
         let result = (|| -> Result<(), String> {
             for (i, param) in func.parameters.iter().enumerate() {
                 let param_value = function.get_nth_param(i as u32)
@@ -3397,6 +3867,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 AhaType::Struct(name) => {
                     self.struct_llvm_type(name)?.const_zero().into()
                 }
+                AhaType::Enum(name) => {
+                    self.enum_llvm_type(name)?.const_zero().into()
+                }
                 _ => self.i64_type.const_int(0, false).into(),
             };
 
@@ -3426,14 +3899,35 @@ impl<'ctx> CodeGenerator<'ctx> {
             } else if !has_return {
                 self.builder.build_return(Some(&last_value))
                     .map_err(|e| e.to_string())?;
+            } else {
+                // has_return = true: the return statement's build_return
+                // went into merge_block (after match). The entry block
+                // is still unterminated — the safety net after the closure
+                // will add a terminator there.
             }
             Ok(())
         })();
         
+        // Safety: guarantee every function's entry block has a terminator.
+        // Without this, a match body in a non-main function can leave the
+        // entry block unterminated (LLVM rejects such modules).
+        if entry_block.get_terminator().is_none() {
+            self.builder.position_at_end(entry_block);
+            let default_val: BasicValueEnum<'ctx> = match &return_type {
+                AhaType::String => self.string_type.const_zero().into(),
+                AhaType::Struct(name) => self.struct_llvm_type(name)?.const_zero().into(),
+                AhaType::Enum(name) => self.enum_llvm_type(name)?.const_zero().into(),
+                _ => self.i64_type.const_int(0, false).into(),
+            };
+            self.builder.build_return(Some(&default_val)).map_err(|e| e.to_string())?;
+        }
+
         self.scopes = saved_scopes;
         self.current_function = saved_function;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
+        } else {
+            self.builder.position_at_end(entry_block);
         }
         result?;
         Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
@@ -3443,7 +3937,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let func_name = match call.function.as_ref() {
             ast::Expression::Identifier(id) => id.value.clone(),
             ast::Expression::ModuleAccess(ma) => ma.name.clone(),
-            _ => return Err("Can only call named functions".to_string()),
+            _ => return Err(format!("Can only call named functions, got: {:?}", call.function)),
         };
         // Generic function call → monomorphize (lazy per call-site type).
         if self.generic_defs.contains_key(&func_name) {
@@ -3458,6 +3952,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         // site, so dispatch here like list builtins.
         if func_name.starts_with("map_") {
             return self.compile_map_call(&func_name, call);
+        }
+        // F6 Actor builtins: send(handle, msg), call(handle, msg) -> i64
+        if func_name == "send" || func_name == "call" {
+            return self.compile_actor_call(&func_name, call);
+        }
+        // Enum variant constructor: Variant(args...) or Variant
+        if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
+            return self.compile_enum_constructor(&enum_name, &func_name, call);
         }
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for arg in &call.arguments {
@@ -3479,6 +3981,34 @@ impl<'ctx> CodeGenerator<'ctx> {
             .left()
             .ok_or_else(|| "Function call did not return a value".to_string())?;
         Ok(TypedValue::new(val, ret_type))
+    }
+
+    /// Compile actor_send / actor_call builtin calls via the threaded runtime.
+    /// call(a, msg) -> actor_call(handle, msg) -> blocking request-response.
+    /// send(a, msg) -> actor_send(handle, msg) -> fire-and-forget.
+    fn compile_actor_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        if call.arguments.len() != 2 {
+            return Err(format!("{} expects 2 arguments (handle, msg)", func_name));
+        }
+        let handle = self.compile_expression(&call.arguments[0])?.value;
+        let msg = self.compile_expression(&call.arguments[1])?.value;
+
+        let runtime_fn_name = if func_name == "send" { "actor_send" } else { "actor_call" };
+        let function = *self.functions.get(runtime_fn_name)
+            .ok_or_else(|| format!("{} not declared", runtime_fn_name))?;
+
+        let args_meta: Vec<BasicMetadataValueEnum> = vec![handle.into(), msg.into()];
+        let call_result = self.builder.build_call(function, &args_meta, "actor_tmp")
+            .map_err(|e| e.to_string())?;
+
+        if func_name == "call" {
+            let val = call_result.try_as_basic_value()
+                .left()
+                .ok_or_else(|| "actor_call did not return a value".to_string())?;
+            Ok(TypedValue::int(val))
+        } else {
+            Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
+        }
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
@@ -3851,7 +4381,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
-
         let result = (|| -> Result<(), String> {
             for (i, param) in generic.parameters.iter().enumerate() {
                 let param_value = function.get_nth_param(i as u32)
@@ -3891,6 +4420,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 AhaType::String => self.string_type.const_zero().into(),
                 AhaType::Struct(name) => {
                     self.struct_llvm_type(name)?.const_zero().into()
+                }
+                AhaType::Enum(name) => {
+                    self.enum_llvm_type(name)?.const_zero().into()
                 }
                 _ => self.i64_type.const_int(0, false).into(),
             };
@@ -4024,6 +4556,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             (AhaType::String, _) | (_, AhaType::String) => self.string_type.into(),
             (AhaType::Struct(name), _) => self.struct_llvm_type(name)?.into(),
             (_, AhaType::Struct(name)) => self.struct_llvm_type(name)?.into(),
+            (AhaType::Enum(name), _) => self.enum_llvm_type(name)?.into(),
+            (_, AhaType::Enum(name)) => self.enum_llvm_type(name)?.into(),
             _ => self.i64_type.into(),
         };
         let phi_node = self.builder.build_phi(phi_type, "iftmp")
@@ -4275,17 +4809,25 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// resolve layout and check types.
     fn register_structs(&mut self, statements: &[ast::Statement]) {
         for stmt in statements {
-            if let ast::Statement::Struct(def) = stmt {
-                let fields: Vec<(String, AhaType)> = def.fields.iter()
-                    .map(|f| {
-                        let t = f.type_hint.as_deref()
-                            .and_then(AhaType::from_hint)
-                            .unwrap_or(AhaType::Int);
-                        (f.name.value.clone(), t)
-                    })
-                    .collect();
-                self.struct_defs.insert(def.name.value.clone(), fields);
-            }
+            let fields = match stmt {
+                ast::Statement::Struct(def) => &def.fields,
+                ast::Statement::Actor(def) => &def.fields,
+                _ => continue,
+            };
+            let field_data: Vec<(String, AhaType)> = fields.iter()
+                .map(|f| {
+                    let t = f.type_hint.as_deref()
+                        .and_then(AhaType::from_hint)
+                        .unwrap_or(AhaType::Int);
+                    (f.name.value.clone(), t)
+                })
+                .collect();
+            let name = match stmt {
+                ast::Statement::Struct(def) => def.name.value.clone(),
+                ast::Statement::Actor(def) => def.name.value.clone(),
+                _ => unreachable!(),
+            };
+            self.struct_defs.insert(name, field_data);
         }
     }
 
@@ -4320,6 +4862,318 @@ impl<'ctx> CodeGenerator<'ctx> {
         fields.iter().position(|(f, _)| f == field)
             .map(|i| i as u32)
             .ok_or_else(|| format!("Struct '{}' has no field '{}'", struct_name, field))
+    }
+
+    // --- Enum support ---
+
+    /// Walk top-level statements and record every enum definition's
+    /// variant names + payload types for constructors and match.
+    fn register_enums(&mut self, statements: &[ast::Statement]) {
+        for stmt in statements {
+            if let ast::Statement::Enum(def) = stmt {
+                let variants: Vec<(String, Vec<AhaType>)> = def.variants.iter()
+                    .map(|v| {
+                        let types: Vec<AhaType> = v.payload_types.iter()
+                            .map(|t| {
+                                // Check if t is a known enum name (nested enum)
+                                if self.enum_defs.contains_key(t.as_str()) {
+                                    AhaType::Enum(t.clone())
+                                } else {
+                                    AhaType::from_hint(t).unwrap_or(AhaType::Int)
+                                }
+                            })
+                            .collect();
+                        (v.name.value.clone(), types)
+                    })
+                    .collect();
+                self.enum_defs.insert(def.name.value.clone(), variants);
+            }
+        }
+    }
+
+    /// Find which enum owns a variant name by scanning all registered enums.
+    fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
+        for (enum_name, variants) in &self.enum_defs {
+            if variants.iter().any(|(name, _)| name == variant_name) {
+                return Some(enum_name.clone());
+            }
+        }
+        None
+    }
+
+    /// LLVM struct type for an enum: {i64 tag, i64, i64, ...} where
+    /// the number of i64 slots after the tag equals the max payload size.
+    fn enum_llvm_type(&self, name: &str) -> Result<inkwell::types::StructType<'ctx>, String> {
+        let variants = self.enum_defs.get(name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", name))?;
+        // Count total payload slots, expanding nested enums recursively.
+        let max_payload: usize = variants.iter()
+            .map(|(_, types)| -> usize {
+                types.iter().map(|t| match t {
+                    AhaType::Enum(inner) => {
+                        // Nested enum: tag + its own payload slots
+                        let inner_variants = self.enum_defs.get(inner).map_or(1, |v| {
+                            1 + v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                        });
+                        inner_variants
+                    }
+                    _ => 1,
+                }).sum()
+            })
+            .max()
+            .unwrap_or(0);
+        let mut field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
+            Vec::with_capacity(1 + max_payload);
+        field_types.push(self.i64_type.into()); // tag
+        for _ in 0..max_payload {
+            field_types.push(self.i64_type.into()); // payload slots
+        }
+        Ok(self.context.struct_type(&field_types, false))
+    }
+
+    /// Variant tag index (0-based, declaration order).
+    fn variant_tag(&self, enum_name: &str, variant_name: &str) -> Result<u64, String> {
+        let variants = self.enum_defs.get(enum_name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", enum_name))?;
+        variants.iter()
+            .position(|(name, _)| name == variant_name)
+            .map(|i| i as u64)
+            .ok_or_else(|| format!("Enum '{}' has no variant '{}'", enum_name, variant_name))
+    }
+
+    /// Payload types for a variant.
+    fn variant_payload(&self, enum_name: &str, variant_name: &str) -> Result<Vec<AhaType>, String> {
+        let variants = self.enum_defs.get(enum_name)
+            .ok_or_else(|| format!("Unknown enum type '{}'", enum_name))?;
+        variants.iter()
+            .find(|(name, _)| name == variant_name)
+            .map(|(_, types)| types.clone())
+            .ok_or_else(|| format!("Enum '{}' has no variant '{}'", enum_name, variant_name))
+    }
+
+    /// Compile an enum constructor call: `Variant(args...)` or `Variant`.
+    /// Called from compile_call when the name matches a registered enum variant.
+    fn compile_enum_constructor(&mut self, enum_name: &str, variant_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let tag = self.variant_tag(enum_name, variant_name)?;
+        let payload_types = self.variant_payload(enum_name, variant_name)?;
+        let enum_type = self.enum_llvm_type(enum_name)?;
+
+        // Verify argument count matches payload arity.
+        if call.arguments.len() != payload_types.len() {
+            return Err(format!(
+                "Enum variant '{}::{}' expects {} arguments, got {}",
+                enum_name, variant_name, payload_types.len(), call.arguments.len()
+            ));
+        }
+
+        let mut val = enum_type.const_zero();
+        // Set tag (field 0).
+        val = self.builder.build_insert_value(val, self.i64_type.const_int(tag, false), 0, "tag")
+            .map_err(|e| e.to_string())?
+            .into_struct_value();
+
+        // Set payload fields (field 1, 2, ...).
+        let mut field_idx: u32 = 1;
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let tv = self.compile_expression(arg)?;
+            let expected = &payload_types[i];
+            if !Self::types_compatible(&tv.aha_type, expected) {
+                return Err(format!(
+                    "Enum variant '{}::{}' arg {} expects {}, got {}",
+                    enum_name, variant_name, i, expected, tv.aha_type
+                ));
+            }
+            if let AhaType::Enum(_) = &tv.aha_type {
+                // Flatten nested enum: extract tag + payload fields as separate i64s
+                let inner_struct = tv.value.into_struct_value();
+                let inner_tag = self.builder.build_extract_value(inner_struct, 0, "inner_tag")
+                    .map_err(|e| e.to_string())?;
+                val = self.builder.build_insert_value(val, inner_tag, field_idx, "payload")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                field_idx += 1;
+                // Extract inner payload slots
+                let inner_variants = self.enum_defs.get(match &tv.aha_type {
+                    AhaType::Enum(n) => n.as_str(),
+                    _ => unreachable!(),
+                });
+                let inner_max_payload = inner_variants.map_or(0, |v| {
+                    v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                });
+                for j in 0..inner_max_payload {
+                    let slot = self.builder.build_extract_value(inner_struct, (j + 1) as u32, "inner_payload")
+                        .map_err(|e| e.to_string())?;
+                    val = self.builder.build_insert_value(val, slot, field_idx, "payload")
+                        .map_err(|e| e.to_string())?
+                        .into_struct_value();
+                    field_idx += 1;
+                }
+            } else {
+                val = self.builder.build_insert_value(val, tv.value, field_idx, "payload")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                field_idx += 1;
+            }
+        }
+
+        Ok(TypedValue::new(val.into(), AhaType::Enum(enum_name.to_string())))
+    }
+
+    /// Loose type compatibility check for enum payloads (Int~Bool, same name).
+    fn types_compatible(a: &AhaType, b: &AhaType) -> bool {
+        if a == b { return true; }
+        match (a, b) {
+            (AhaType::Int, AhaType::Bool) | (AhaType::Bool, AhaType::Int) => true,
+            _ => false,
+        }
+    }
+
+    /// Compile: match expr { Pattern => body, ... }
+    fn compile_match_expression(&mut self, m: &ast::MatchExpression) -> Result<TypedValue<'ctx>, String> {
+        let scrutinee = self.compile_expression(&m.value)?;
+        let enum_name = match &scrutinee.aha_type {
+            AhaType::Enum(name) => name.clone(),
+            _ => return Err(format!(
+                "match requires an enum value, got {}", scrutinee.aha_type
+            )),
+        };
+
+        let enum_type = self.enum_llvm_type(&enum_name)?;
+        let current_fn = self.current_function.ok_or("match outside function")?;
+        let merge_block = self.context.append_basic_block(current_fn, "match.merge");
+
+        // Load the tag (field 0) for branching.
+        let tag_val = self.builder.build_extract_value(scrutinee.value.into_struct_value(), 0, "tag")
+            .map_err(|e| e.to_string())?
+            .into_int_value();
+
+        // Create blocks for each arm.
+        let arm_count = m.arms.len();
+        let mut arm_blocks = Vec::with_capacity(arm_count);
+        for i in 0..arm_count {
+            let bb = self.context.append_basic_block(current_fn, &format!("match.arm{}", i));
+            arm_blocks.push(bb);
+        }
+
+        // Build switch cases: collect all (IntValue, BasicBlock) pairs.
+        // For exhaustive matches (no wildcard), default goes to an unreachable
+        // dead block — never executed but satisfies LLVM IR predecessor requirements.
+        let default_bb = if let Some(wi) = m.arms.iter().position(|a| matches!(a.pattern, ast::Pattern::Wildcard)) {
+            arm_blocks[wi]
+        } else {
+            let saved_block = self.builder.get_insert_block();
+            let dead = self.context.append_basic_block(current_fn, "match.dead");
+            self.builder.position_at_end(dead);
+            self.builder.build_unreachable().map_err(|e| e.to_string())?;
+            if let Some(prev) = saved_block {
+                self.builder.position_at_end(prev);
+            }
+            dead
+        };
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        for (i, arm) in m.arms.iter().enumerate() {
+            if let ast::Pattern::EnumUnit(name) | ast::Pattern::EnumTuple(name, _) = &arm.pattern {
+                let tag = self.variant_tag(&enum_name, name)?;
+                let case_val = self.i64_type.const_int(tag, false);
+                cases.push((case_val, arm_blocks[i]));
+            }
+        }
+        self.builder.build_switch(tag_val, default_bb, &cases)
+            .map_err(|e| e.to_string())?;
+
+        // Compile each arm body.
+        let mut results: Vec<(BasicValueEnum<'ctx>, AhaType, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        for (i, arm) in m.arms.iter().enumerate() {
+            self.builder.position_at_end(arm_blocks[i]);
+            self.enter_scope();
+
+            // Destructure bindings for tuple patterns.
+            if let ast::Pattern::EnumTuple(name, bindings) = &arm.pattern {
+                let payload = self.variant_payload(&enum_name, name)?;
+                let mut field_idx: u32 = 1;
+                for (j, binding) in bindings.iter().enumerate() {
+                    if j >= payload.len() { break; }
+                    if let AhaType::Enum(inner_name) = &payload[j] {
+                        // Reconstruct nested enum from flattened fields
+                        let inner_type = self.enum_llvm_type(inner_name)?;
+                        let mut inner_val = inner_type.const_zero();
+                        // Extract inner tag
+                        let inner_tag = self.builder.build_extract_value(
+                            scrutinee.value.into_struct_value(),
+                            field_idx,
+                            "inner_tag",
+                        ).map_err(|e| e.to_string())?;
+                        inner_val = self.builder.build_insert_value(inner_val, inner_tag, 0, "tag")
+                            .map_err(|e| e.to_string())?
+                            .into_struct_value();
+                        field_idx += 1;
+                        // Extract inner payload slots
+                        let inner_variants = self.enum_defs.get(inner_name.as_str());
+                        let inner_max_payload = inner_variants.map_or(0, |v| {
+                            v.iter().map(|(_, ts)| ts.len()).max().unwrap_or(0)
+                        });
+                        for k in 0..inner_max_payload {
+                            let slot = self.builder.build_extract_value(
+                                scrutinee.value.into_struct_value(),
+                                field_idx,
+                                "inner_payload",
+                            ).map_err(|e| e.to_string())?;
+                            inner_val = self.builder.build_insert_value(inner_val, slot, (k + 1) as u32, "payload")
+                                .map_err(|e| e.to_string())?
+                                .into_struct_value();
+                            field_idx += 1;
+                        }
+                        let ptr = self.builder.build_alloca(inner_type, binding)
+                            .map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, inner_val).map_err(|e| e.to_string())?;
+                        self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                    } else {
+                        let field_val = self.builder.build_extract_value(
+                            scrutinee.value.into_struct_value(),
+                            field_idx,
+                            "destructure",
+                        ).map_err(|e| e.to_string())?;
+                        let ptr = self.builder.build_alloca(
+                            self.aha_type_to_llvm_type(&payload[j])?,
+                            binding,
+                        ).map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, field_val).map_err(|e| e.to_string())?;
+                        self.insert_variable(binding.clone(), ptr, payload[j].clone());
+                        field_idx += 1;
+                    }
+                }
+            }
+
+            let tv = self.compile_expression(&arm.body)?;
+            self.exit_scope();
+            // After compiling the body, the builder may have moved to a
+            // different block (e.g. nested match merge block). Ensure BOTH
+            // the original arm block and the current block terminate.
+            let end_block = self.builder.get_insert_block().unwrap();
+            if !end_block.get_terminator().is_some() {
+                self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
+            }
+            // The original arm block may lack a terminator if the body
+            // created nested blocks. Wire it to the end block so LLVM's
+            // verifier is satisfied.
+            if !arm_blocks[i].get_terminator().is_some() {
+                self.builder.position_at_end(arm_blocks[i]);
+                self.builder.build_unconditional_branch(end_block).map_err(|e| e.to_string())?;
+            }
+            results.push((tv.value, tv.aha_type, end_block));
+        }
+
+        // Merge: phi node across all arms.
+        self.builder.position_at_end(merge_block);
+        let result_type = &results[0].1;
+        let phi_llvm_type = self.aha_type_to_llvm_type(result_type)?;
+        let phi = self.builder.build_phi(phi_llvm_type, "match.result").map_err(|e| e.to_string())?;
+        for (val, _typ, block) in &results {
+            // ponytail: every arm block branches to merge — add all unconditionally
+            phi.add_incoming(&[(val as &dyn inkwell::values::BasicValue, *block)]);
+        }
+
+        Ok(TypedValue::new(phi.as_basic_value(), result_type.clone()))
     }
 
     fn compile_struct_literal(&mut self, lit: &ast::StructLiteral) -> Result<TypedValue<'ctx>, String> {
@@ -4390,18 +5244,98 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn run_jit(&self) -> Result<i64, String> {
         let execution_engine = self.module.create_jit_execution_engine(inkwell::OptimizationLevel::None)
             .map_err(|e| format!("Failed to create JIT engine: {}", e))?;
-            
+
+        // Register native runtime functions so the JIT can call them.
+        // Without add_global_mapping, MCJIT can't resolve #[no_mangle] symbols
+        // in test binaries on Linux.
+        if let Some(f) = self.module.get_function("actor_spawn") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_spawn as usize);
+        }
+        if let Some(f) = self.module.get_function("actor_send") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_send as usize);
+        }
+        if let Some(f) = self.module.get_function("actor_call") {
+            execution_engine.add_global_mapping(&f, crate::runtime::actor_call as usize);
+        }
+
         let function_name = "main";
         let _function = self.module.get_function(function_name)
             .ok_or_else(|| format!("Function '{}' not found", function_name))?;
-            
+
         unsafe {
             let compiled_fn: unsafe extern "C" fn() -> i64 = execution_engine.get_function_address(function_name)
                 .map_err(|e| format!("Failed to get function address: {}", e))
                 .map(|addr| std::mem::transmute(addr))?;
-                
+
             Ok(compiled_fn())
         }
+    }
+
+    /// Rename the LLVM `main` function to `new_name`.
+    /// Used during AOT compilation to free up the name for a C-compatible wrapper.
+    pub fn rename_main(&mut self, new_name: &str) {
+        if let Some(f) = self.module.get_function("main") {
+            f.as_global_value().set_name(new_name);
+        }
+    }
+
+    /// Add a C-compatible `main` wrapper that calls `__aha_main() -> i64`.
+    /// Must be called after `rename_main("__aha_main")`.
+    pub fn add_c_main_wrapper(&mut self) {
+        let i32_type = self.context.i32_type();
+
+        // Declare __aha_main() -> i64
+        let aha_main_fn = self.module.get_function("__aha_main")
+            .expect("__aha_main not found — call rename_main first");
+        let wrapper_type = i32_type.fn_type(&[], false);
+        let wrapper_fn = self.module.add_function("main", wrapper_type, None);
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let call = self.builder.build_call(aha_main_fn, &[], "aha_result")
+            .expect("failed to call __aha_main");
+        let result = call.try_as_basic_value().left().unwrap().into_int_value();
+
+        // Truncate i64 to i32 for C main return
+        let truncated = self.builder.build_int_truncate(result, i32_type, "ret")
+            .expect("truncate failed");
+        self.builder.build_return(Some(&truncated)).expect("return failed");
+    }
+
+    /// Emit object file (.o) for AOT compilation.
+    /// Returns the path to the written object file.
+    pub fn emit_object_file(&self, path: &std::path::Path) -> Result<(), String> {
+        use inkwell::targets::{Target, TargetMachine, FileType, InitializationConfig, RelocMode, CodeModel};
+
+        // Initialize native target
+        Target::initialize_native(&InitializationConfig::default())
+            .map_err(|e| format!("Failed to init native target: {}", e))?;
+        Target::initialize_x86(&InitializationConfig::default());
+        Target::initialize_aarch64(&InitializationConfig::default());
+
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple)
+            .map_err(|e| format!("Failed to get target: {}", e))?;
+
+        let cpu = TargetMachine::get_host_cpu_name()
+            .to_string_lossy().to_string();
+        let features = TargetMachine::get_host_cpu_features()
+            .to_string_lossy().to_string();
+
+        let target_machine = target.create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            inkwell::OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::Default,
+        ).ok_or("Failed to create target machine")?;
+
+        target_machine.write_to_file(&self.module, FileType::Object, path)
+            .map_err(|e| format!("Failed to write object file: {}", e))?;
+
+        Ok(())
     }
 }
 
