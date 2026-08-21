@@ -5141,11 +5141,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             let tv = self.compile_expression(&arm.body)?;
             self.exit_scope();
-            if !self.builder.get_insert_block().unwrap().get_terminator().is_some() {
+            // After compiling the body, the builder may have moved to a
+            // different block (e.g. nested match merge block). Ensure BOTH
+            // the original arm block and the current block terminate.
+            let end_block = self.builder.get_insert_block().unwrap();
+            if !end_block.get_terminator().is_some() {
                 self.builder.build_unconditional_branch(merge_block).map_err(|e| e.to_string())?;
             }
-            let block = self.builder.get_insert_block().unwrap();
-            results.push((tv.value, tv.aha_type, block));
+            // The original arm block may lack a terminator if the body
+            // created nested blocks. Wire it to the end block so LLVM's
+            // verifier is satisfied.
+            if !arm_blocks[i].get_terminator().is_some() {
+                self.builder.position_at_end(arm_blocks[i]);
+                self.builder.build_unconditional_branch(end_block).map_err(|e| e.to_string())?;
+            }
+            results.push((tv.value, tv.aha_type, end_block));
         }
 
         // Merge: phi node across all arms.
