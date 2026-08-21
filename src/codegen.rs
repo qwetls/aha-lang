@@ -744,6 +744,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                         return AhaType::Int;
                     }
+                    // Result constructors: ok(val) → Result<T, string>, err(msg) → Result<int, string>
+                    if id.value == "ok" {
+                        if let Some(first) = call.arguments.first() {
+                            let inner = self.infer_expr_type(first);
+                            return AhaType::Result(Box::new(inner), Box::new(AhaType::String));
+                        }
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
+                    if id.value == "err" {
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
                     // Prefer a known return type (fn_types), then fall back
                     // to the builtin len() = Int.
                     if let Some(rt) = self.fn_types.get(&id.value) {
@@ -917,6 +928,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                     if name == "len" {
                         return AhaType::Int;
+                    }
+                    // Result constructors
+                    if name == "ok" {
+                        if let Some(first) = call.arguments.first() {
+                            let inner = self.infer_expr_type_with_scope(first, scope);
+                            return AhaType::Result(Box::new(inner), Box::new(AhaType::String));
+                        }
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
+                    if name == "err" {
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
                     }
                     if let Some(rt) = self.fn_types.get(name) {
                         return rt.clone();
