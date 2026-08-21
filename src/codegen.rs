@@ -1069,9 +1069,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             None
         };
 
+        Self::diag_mark(&format!("LOOP: {} statements, has_user_main={}", program.statements.len(), has_user_main));
         let mut last_value: Option<TypedValue<'ctx>> = None;
         for (i, statement) in program.statements.iter().enumerate() {
             let is_last = i == program.statements.len() - 1;
+            let stmt_desc = match statement {
+                ast::Statement::Enum(e) => format!("Enum({})", e.name.value),
+                ast::Statement::Expression(es) => match &es.expression {
+                    ast::Expression::Function(f) => format!("Fn({})", f.name.as_ref().map(|n| n.value.as_str()).unwrap_or("?")),
+                    other => format!("Expr({:?})", std::mem::discriminant(other)),
+                },
+                other => format!("{:?}", std::mem::discriminant(other)),
+            };
+            Self::diag_mark(&format!("LOOP[{}]: is_last={} stmt={}", i, is_last, stmt_desc));
             if is_last {
                 if let ast::Statement::Expression(expr_stmt) = statement {
                     if has_user_main {
