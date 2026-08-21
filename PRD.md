@@ -1,7 +1,7 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.3.6
-**Tanggal:** 2026-08-20
+**Versi PRD:** 0.3.7
+**Tanggal:** 2026-08-21
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
 
@@ -136,8 +136,9 @@ kompromi.
 | **F4** | Module system — namespace & visibilitas | ✅ Selesai (v1.5.6) — `use "file"` + `pub` + `module::name` + visibility filter |
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
-| **F7** | Self-hosting | ⏳ Setelah F6 |
-| **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
+| **F7** | Enum keyword + pattern matching | ✅ Selesai (v1.6.0) — unit/tuple variants, match, destructuring, wildcards, nested enums |
+| **F8** | Self-hosting | ⏳ Setelah F7 |
+| **F9** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
 
 Setiap langkah: development → test → CI hijau → review → (jika mantap) merge
 ke main. Tidak ada loncatan.
@@ -146,7 +147,7 @@ ke main. Tidak ada loncatan.
 
 ## 8. Kondisi Saat Ini (Status Jujur, per 2026-08-20)
 
-### ✅ Sudah stabil (di `main` — 600+ test)
+### ✅ Sudah stabil (di `main` — 581+ test)
 - Lexer, Pratt parser dengan error reporting penuh
 - Tipe `Int` (i64), `Bool`, `String` (struct `{ptr, len}`)
 - Operator aritmatika, perbandingan, `&&`/`||`, prefix, assignment
@@ -160,7 +161,7 @@ ke main. Tidak ada loncatan.
 - File I/O: `file_read`, `file_write`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
-- CI: `cargo check`, 571+ test, `cargo build --release`
+- CI: `cargo check`, 581+ test, `cargo build --release`
 
 ### ✅ F1 — Struct (v1.5.0, di `main`)
 - Struct codegen & field access at runtime
@@ -302,7 +303,17 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] `emit_object_file()` — inkwell `TargetMachine::write_to_file()` → `.o`
 - [x] Link with `cc` — produces native executable
 
-### ⏳ F7. Self-hosting
+### ✅ F7. Enum keyword + pattern matching — SELESAI (v1.6.0)
+- [x] `enum` keyword — unit variants (`Color { Red, Green, Blue }`) dan tuple variants (`Op { Add(int, int) }`)
+- [x] LLVM struct layout: `{i64 tag, i64, i64, ...}` — tag di index 0, payload slots di index 1+
+- [x] `match` expression — `build_switch` on tag value; arms dispatch ke typed basic blocks; phi node merges results
+- [x] Destructuring — `match x { Some(v) => v, None => 0 }` bind tuple payload ke local variables
+- [x] Wildcard `_` arm — acts as default case; exhaustive matches without wildcard create unreachable dead block
+- [x] Nested enum payloads — `enum Outer { X(Inner) }` where `Inner` is itself an enum
+- [x] Functions with enum params — `fn is_weekend(d: Day) -> int` with proper type inference
+- [x] 17 tests: unit basic, unit second/third variant, wildcard, tuple one/two fields, destructure math, mixed unit+tuple, match in function, match arithmetic, nested match, two tuple variants, single variant, parse diagnostics
+
+### ⏳ F8. Self-hosting
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa)
 
 ---
@@ -382,3 +393,4 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.4 | F5 SELESAI — Phase 3 escape analysis: `find_heap_vars_in_expr()` deteksi variabel yang di-return, skip auto-free. 6 tests baru (total 25 ownership tests). F5 lengkap: scope-based + last-use + escape. |
 | 2026-08-20 | 0.3.5 | F4 SELESAI — Visibility filter: non-pub items dari imports di-drop saat AST merge. `is_pub_item()` cek FunctionLiteral & StructDefinition. 5 tests baru, 3 namespace tests di-update. F4 lengkap: use + pub + namespace + visibility. |
 | 2026-08-20 | 0.3.6 | F6 SELESAI + AOT Compilation. Actor-model: spawn/call/send threaded via mpsc+Condvar. AOT: `--emit-exe` → rename main + C wrapper + emit .o + link with cc. inkwell v0.4 API: `as_global_value().set_name()`, explicit `RelocMode::Default`/`CodeModel::Default`. |
+| 2026-08-21 | 0.3.7 | F7 SELESAI — Enum keyword + pattern matching (v1.6.0). Unit/tuple variants, match expression, destructuring, wildcard arms, nested enums. 17 tests. Fixes: entry block terminator safety net, dead block builder position, arm block terminators, type hint preservation. |
