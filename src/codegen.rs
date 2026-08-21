@@ -4024,17 +4024,25 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let mut args: Vec<BasicValueEnum> = Vec::new();
         for (i, arg) in call.arguments.iter().enumerate() {
-            let val = self.compile_expression(arg)?.value;
-            // Auto-coerce i64 → pointer for pointer parameters (FFI inttoptr)
+            let typed_val = self.compile_expression(arg)?;
+            let val = typed_val.value;
+            // Auto-coerce for pointer parameters (FFI)
             if let Some(param) = function.get_nth_param(i as u32) {
                 if let inkwell::types::BasicTypeEnum::PointerType(ptr_ty) = param.get_type() {
                     if val.is_int_value() {
+                        // i64 → pointer (inttoptr)
                         let ptr = self.builder.build_int_to_ptr(
                             val.into_int_value(),
                             ptr_ty,
                             "arg_cast",
                         ).map_err(|e| e.to_string())?;
                         args.push(ptr.into());
+                        continue;
+                    }
+                    if val.is_struct_value() && typed_val.aha_type == AhaType::String {
+                        // string struct {i8*, i64} → i8* (extract pointer)
+                        let str_ptr = self.extract_str_ptr(&typed_val)?;
+                        args.push(str_ptr.into());
                         continue;
                     }
                 }

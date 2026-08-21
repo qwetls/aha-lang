@@ -150,6 +150,56 @@ fn extern_fn_jit_pointer_param_compile_only() {
     assert_eq!(result, 77);
 }
 
+// --- End-to-end JIT tests (call C functions with string args) ---
+
+#[test]
+fn extern_fn_call_atoi() {
+    // atoi("42") -> 42 — string-to-pointer coercion extracts i8* from {i8*, i64}
+    let result = run(r#"
+        extern fn atoi(s: *void) -> int;
+        atoi("42")
+    "#);
+    assert_eq!(result, 42);
+}
+
+#[test]
+fn extern_fn_call_atoi_negative() {
+    let result = run(r#"
+        extern fn atoi(s: *void) -> int;
+        atoi("-7")
+    "#);
+    assert_eq!(result, -7);
+}
+
+#[test]
+fn extern_fn_call_atol() {
+    let result = run(r#"
+        extern fn atol(s: *void) -> int;
+        atol("12345")
+    "#);
+    assert_eq!(result, 12345);
+}
+
+#[test]
+fn extern_fn_call_atoi_combined() {
+    // atoi("100") + atoi("23") = 123
+    let result = run(r#"
+        extern fn atoi(s: *void) -> int;
+        atoi("100") + atoi("23")
+    "#);
+    assert_eq!(result, 123);
+}
+
+#[test]
+fn extern_fn_call_strlen() {
+    // strlen is already declared in C runtime with i8* param
+    let result = run(r#"
+        extern fn strlen(s: *void) -> int;
+        strlen("hello")
+    "#);
+    assert_eq!(result, 5);
+}
+
 // --- Error cases ---
 
 #[test]
