@@ -11,13 +11,6 @@ use inkwell::context::Context;
 
 /// Helper: compile and JIT-execute AHA! source, returning the i64 result.
 fn run(source: &str) -> i64 {
-    let mut lexer = Lexer::new(source.to_string());
-    // Debug: print all tokens
-    loop {
-        let tok = lexer.next_token();
-        eprintln!("TOKEN: {:?} = {:?}", tok.kind, tok.literal);
-        if tok.kind == aha_lang::ast::TokenType::Eof { break; }
-    }
     let lexer = Lexer::new(source.to_string());
     let mut parser = Parser::new(lexer);
     let program = parser.parse_program();

@@ -816,7 +816,9 @@ impl Parser {
         let hint = if self.peek_token_is(TokenType::Colon) {
             self.next_token(); // skip ':'
             self.next_token(); // advance to type token
-            self.parse_type_hint()
+            let h = self.parse_type_hint();
+            self.next_token(); // advance past type token
+            h
         } else {
             None
         };
@@ -829,7 +831,9 @@ impl Parser {
             let hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // skip ':'
                 self.next_token(); // advance to type token
-                self.parse_type_hint()
+                let h = self.parse_type_hint();
+                self.next_token(); // advance past type token
+                h
             } else {
                 None
             };
