@@ -2,6 +2,15 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.2] — 2026-08-21
+
+### Added
+
+- **FFI — string-to-pointer auto-coercion:**
+  - When calling an extern fn with a pointer param (`*void`), string literals `{i8*, i64}` are auto-coerced: the `i8*` pointer field is extracted and passed directly.
+  - Enables `atoi("42")`, `strlen("hello")`, `atol("12345")` via JIT — real C function calls with string arguments.
+  - 5 end-to-end JIT tests: atoi, atoi-negative, atol, atoi-combined, strlen.
+
 ## [1.6.1] — 2026-08-21
 
 ### Added
