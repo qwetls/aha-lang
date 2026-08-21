@@ -118,15 +118,15 @@ impl Parser {
             self.next_token(); // current = inner hint start, peek = '>' or '<'
             let first_hint = self.parse_type_hint()?;
             if self.peek_token_is(TokenType::Comma) {
-                // Map<K, V>: after the key hint comes a comma, then the value hint.
+                // Map<K, V> or Result<T, E>: after the first hint comes a comma, then the second hint.
                 self.next_token(); // current = ','
                 self.next_token(); // current = value hint start
                 let second_hint = self.parse_type_hint()?;
                 if !self.expect_peek(TokenType::GT) {
-                    self.errors.push("Expected '>' to close Map<K,V> type hint".to_string());
+                    self.errors.push("Expected '>' to close generic type hint".to_string());
                     return None;
                 }
-                return Some(format!("Map<{}, {}>", first_hint, second_hint));
+                return Some(format!("{hint}<{first_hint}, {second_hint}>"));
             }
             if !self.expect_peek(TokenType::GT) {
                 self.errors.push("Expected '>' to close List<T> type hint".to_string());
