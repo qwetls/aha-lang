@@ -212,6 +212,7 @@ impl Parser {
         }
 
         let (parameters, param_type_hints) = self.parse_function_parameters();
+        eprintln!("DEBUG parse_extern_function: after params current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
 
         // Optional return type: -> T
         let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
@@ -845,6 +846,7 @@ impl Parser {
         if !self.expect_peek(TokenType::RightParen) {
             self.errors.push("Expected ')' after function parameters".to_string());
         }
+        eprintln!("DEBUG parse_function_parameters: current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
 
         (params, hints)
     }
