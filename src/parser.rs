@@ -217,8 +217,9 @@ impl Parser {
         // Optional return type: -> T
         let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
             self.next_token(); // skip '->'
+            eprintln!("DEBUG parse_extern_function: about to call parse_type_hint current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
             let h = self.parse_type_hint();
-            eprintln!("DEBUG parse_extern_function: after return type current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
+            eprintln!("DEBUG parse_extern_function: after parse_type_hint current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
             h
         } else {
             None
@@ -805,6 +806,7 @@ impl Parser {
 
     // Parse function parameters: (a, b, c) or (a: T, b: int)
     fn parse_function_parameters(&mut self) -> (Vec<Identifier>, Vec<Option<String>>) {
+        eprintln!("DEBUG parse_function_parameters: ENTER current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
         let mut params = Vec::new();
         let mut hints = Vec::new();
 
