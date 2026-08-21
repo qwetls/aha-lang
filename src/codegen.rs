@@ -959,62 +959,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.context.i8_type().ptr_type(inkwell::AddressSpace::default())
     }
 
-    /// DIAGNOSTIC: append a marker to /tmp/aha_diag.log (survives SIGSEGV
-    /// where stderr capture is lost). Remove once List<T> lands.
-    fn diag_mark(msg: &str) {
-        use std::io::Write;
-        // Write to stderr so it shows in test output even if process aborts
-        eprintln!("DIAG: {}", msg);
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/aha_diag.log")
-        {
-            let _ = writeln!(f, "{}", msg);
-        }
-    }
-
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
-        let _ = std::fs::remove_file("/tmp/aha_diag.log");
-        Self::diag_mark("1: compile start");
-        // Log statement names to identify which test this is
-        {
-            let names: Vec<String> = program.statements.iter().map(|s| {
-                match s {
-                    ast::Statement::Enum(e) => format!("Enum({})", e.name.value),
-                    ast::Statement::Expression(es) => match &es.expression {
-                        ast::Expression::Function(f) => format!("Fn({})", f.name.as_ref().map(|n| n.value.as_str()).unwrap_or("?")),
-                        _ => "Expr(...)".to_string(),
-                    },
-                    _ => "Other".to_string(),
-                }
-            }).collect();
-            Self::diag_mark(&format!("1a: program has {} stmts: [{}]", program.statements.len(), names.join(", ")));
-        }
         self.declare_printf();
         self.declare_c_runtime();
-        Self::diag_mark("2: c runtime declared");
-        // Phase 1: actors are pure JIT — no runtime functions needed.
         self.declare_actor_runtime();
-        Self::diag_mark("2a: actor runtime declared");
-        // String + file builtins depend on C runtime (malloc, snprintf, fopen, etc.)
         self.declare_string_and_file_builtins();
-        Self::diag_mark("2b: string/file builtins declared");
-        // List builtins depend on malloc/realloc/free from the C runtime.
         self.create_list_builtins();
-        Self::diag_mark("3: list builtins created");
         self.create_map_builtins();
-        Self::diag_mark("3m: map builtins created");
 
-        // DIAGNOSTIC: verify the module is valid before proceeding, so an
-        // invalid-IR bug surfaces as a message instead of a SIGSEGV in
-        // print_to_string. Remove once List<T> lands.
-        match self.module.verify() {
-            Ok(()) => Self::diag_mark("4: verify ok"),
-            Err(e) => {
-                Self::diag_mark(&format!("4: MODULE VERIFY FAILED: {}", e));
-                return Err(format!("LLVM module verification failed: {}", e));
-            }
+        // Verify the module is valid before proceeding.
+        if let Err(e) = self.module.verify() {
+            return Err(format!("LLVM module verification failed: {}", e));
         }
 
         // Register struct definitions first so struct literals and field
@@ -1085,26 +1040,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             None
         };
 
-        Self::diag_mark(&format!("LOOP: {} statements, has_user_main={}", program.statements.len(), has_user_main));
         let mut last_value: Option<TypedValue<'ctx>> = None;
         for (i, statement) in program.statements.iter().enumerate() {
             let is_last = i == program.statements.len() - 1;
-            let stmt_desc = match statement {
-                ast::Statement::Enum(e) => format!("Enum({})", e.name.value),
-                ast::Statement::Expression(es) => match &es.expression {
-                    ast::Expression::Function(f) => format!("Fn({})", f.name.as_ref().map(|n| n.value.as_str()).unwrap_or("?")),
-                    other => format!("Expr({:?})", std::mem::discriminant(other)),
-                },
-                other => format!("{:?}", std::mem::discriminant(other)),
-            };
-            Self::diag_mark(&format!("LOOP[{}]: is_last={} stmt={}", i, is_last, stmt_desc));
             if is_last {
                 if let ast::Statement::Expression(expr_stmt) = statement {
                     if has_user_main {
                         let _val = self.compile_expression(&expr_stmt.expression)?;
-                        // compile_function leaves builder inside user's @main
-                        // or a callee. Restore to the entry block of the
-                        // user's @main so build_return below targets it.
+                        // Restore to @main's entry block for the implicit
+                        // return that compile() adds after the loop.
                         if let Some(&main_fn) = self.functions.get("main") {
                             if let Some(entry) = main_fn.get_first_basic_block() {
                                 self.builder.position_at_end(entry);
@@ -1133,38 +1077,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let _ = self.builder.build_return(Some(&return_val));
         }
 
-        Self::diag_mark("5: main compiled");
-
-        // DIAGNOSTIC: dump ALL functions and their blocks
-        {
-            let mut func_count = 0;
-            for f in self.module.get_functions() {
-                func_count += 1;
-                let name = f.get_name().to_str().unwrap_or("?");
-                let block_count = f.get_basic_blocks().len();
-                let first_term = f.get_first_basic_block()
-                    .and_then(|bb| bb.get_terminator())
-                    .is_some();
-                Self::diag_mark(&format!("5a: @{} #{} has {} blocks, entry_has_term={}", name, func_count, block_count, first_term));
-                // Dump block names
-                for bb in f.get_basic_blocks() {
-                    let bname = bb.get_name().to_str().unwrap_or("?");
-                    let has_term = bb.get_terminator().is_some();
-                    Self::diag_mark(&format!("5c: @{} block '{}' has_terminator={}", name, bname, has_term));
-                }
-            }
-            Self::diag_mark(&format!("5a2: total functions in module: {}, self.functions keys: {:?}", func_count,
-                self.functions.keys().collect::<Vec<_>>()));
-        }
-
-        // DIAGNOSTIC: second verify after main compilation, before
-        // returning to the caller (print_to_string / JIT).
-        match self.module.verify() {
-            Ok(()) => Self::diag_mark("6: verify after main ok"),
-            Err(e) => {
-                Self::diag_mark(&format!("6: VERIFY AFTER MAIN FAILED: {}", e));
-                std::process::abort();
-            }
+        // Final module verification.
+        if let Err(e) = self.module.verify() {
+            return Err(format!("LLVM module verification failed: {}", e));
         }
 
         Ok(())
@@ -1625,7 +1540,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     // =====================================================================
 
     fn create_list_builtins(&mut self) {
-        Self::diag_mark("3a: create_list_builtins start");
         let i64_type = self.i64_type;
         let i8_ptr = self.i8_ptr_type();
         let header = self.list_header_type;
@@ -1636,19 +1550,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let header_from_handle = |builder: &Builder<'ctx>, handle: inkwell::values::IntValue<'ctx>| {
             builder.build_int_to_ptr(handle, header_ptr, "list_hdr").expect("int_to_ptr failed")
         };
-        Self::diag_mark("3b: header_from_handle closure created");
 
         // --- list_new() -> List<Int> ---
         {
-            Self::diag_mark("3c: list_new start");
             let fn_type = i64_type.fn_type(&[], false);
-            Self::diag_mark("3c1: fn_type ok");
             let function = self.module.add_function("list_new", fn_type, None);
-            Self::diag_mark("3c2: add_function ok");
             let entry = self.context.append_basic_block(function, "entry");
-            Self::diag_mark("3c3: append_basic_block ok");
             self.builder.position_at_end(entry);
-            Self::diag_mark("3c4: position ok");
 
             let malloc_fn = *self.functions.get("malloc").expect("malloc not declared");
             let hdr_size = i64_type.const_int(32, false); // 4 x i64 header
@@ -1656,47 +1564,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .expect("malloc failed")
                 .try_as_basic_value().left().expect("malloc void")
                 .into_pointer_value();
-            Self::diag_mark("3c5: malloc call ok");
 
             // Zero the whole header explicitly — malloc memory is garbage.
             let zero = i64_type.const_int(0, false);
             let hdr_ptr = self.builder.build_bitcast(hdr, header_ptr, "hdr_typed")
                 .expect("bitcast failed").into_pointer_value();
-            Self::diag_mark("3c6: bitcast ok");
-            Self::diag_mark("3c6a: before gep");
             let data_ptr = self.builder.build_struct_gep(hdr_ptr, 0, "data_ptr")
                 .expect("gep failed");
-            Self::diag_mark("3c6b: gep ok");
             self.builder.build_store(data_ptr, self.i8_ptr_type().const_null()).expect("store failed");
-            Self::diag_mark("3c7: data store ok");
             let len_ptr = self.builder.build_struct_gep(hdr_ptr, 1, "len_ptr")
                 .expect("gep failed");
             self.builder.build_store(len_ptr, zero).expect("store failed");
-            Self::diag_mark("3c8: len store ok");
             let cap_ptr = self.builder.build_struct_gep(hdr_ptr, 2, "cap_ptr")
                 .expect("gep failed");
             self.builder.build_store(cap_ptr, zero).expect("store failed");
-            Self::diag_mark("3c9: cap store ok");
 
             // elem_size = 8 (Int)
             let es_ptr = self.builder.build_struct_gep(hdr_ptr, 3, "es_ptr")
                 .expect("gep failed");
             self.builder.build_store(es_ptr, i64_type.const_int(8, false)).expect("store failed");
-            Self::diag_mark("3c10: es store ok");
 
             // Return handle as i64 (header address).
             let handle = self.builder.build_ptr_to_int(hdr, i64_type, "list_handle")
                 .expect("ptr_to_int failed");
-            Self::diag_mark("3c11: ptr_to_int ok");
             let _ = self.builder.build_return(Some(&handle));
-            Self::diag_mark("3c12: return ok");
             self.functions.insert("list_new".to_string(), function);
-            Self::diag_mark("3c13: list_new done");
         }
 
         // --- list_new_string() -> List<String> (elem_size 16) ---
         {
-            Self::diag_mark("3d: list_new_string start");
             let fn_type = i64_type.fn_type(&[], false);
             let function = self.module.add_function("list_new_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1730,7 +1626,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_push(list, value) -> list ---
         {
-            Self::diag_mark("3e: list_push start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1815,7 +1710,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (i8* pointer, i64 length) and passes both; this builtin stores
         // the full 16-byte element {i8*, i64} at data[len].
         {
-            Self::diag_mark("3f: list_push_string start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i8_ptr.into(), i64_type.into()], false);
             let function = self.module.add_function("list_push_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1898,7 +1792,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get(list, index) -> i64 (Int element or string ptr) ---
         {
-            Self::diag_mark("3g: list_get start");
             let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -1954,7 +1847,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_get_string(list, index) -> {i8*, i64} string element ---
         {
-            Self::diag_mark("3h: list_get_string start");
             let fn_type = self.string_type.fn_type(&[i64_type.into(), i64_type.into()], false);
             let function = self.module.add_function("list_get_string", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -2008,7 +1900,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_len(list) -> i64 ---
         {
-            Self::diag_mark("3i: list_len start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_len", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -2025,7 +1916,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- list_free(list) -> i64 (0) ---
         {
-            Self::diag_mark("3j: list_free start");
             let fn_type = i64_type.fn_type(&[i64_type.into()], false);
             let function = self.module.add_function("list_free", fn_type, None);
             let entry = self.context.append_basic_block(function, "entry");
@@ -2055,7 +1945,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.fn_types.insert("list_get_string".to_string(), AhaType::String);
         self.fn_types.insert("list_len".to_string(), AhaType::Int);
         self.fn_types.insert("list_free".to_string(), AhaType::Int);
-        Self::diag_mark("3k: create_list_builtins done");
     }
 
     /// Generate LLVM IR for a deterministic hash table (open addressing,
@@ -3253,7 +3142,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn create_map_builtins(&mut self) {
-        Self::diag_mark("3m: create_map_builtins start");
 
         // Map<Int, Int> — prefix "map_"
         self.emit_map_combo("map", 8, 8, false, false);
@@ -3267,7 +3155,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Map<String, String> — prefix "map_strings_"
         self.emit_map_combo("map_strings", 16, 16, true, true);
 
-        Self::diag_mark("3n: create_map_builtins done");
     }
 
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
@@ -3851,10 +3738,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let func_name = func.name.as_ref()
             .map(|id| id.value.clone())
             .unwrap_or_else(|| format!("anonymous_{}", self.functions.len()));
-        Self::diag_mark(&format!("COMPILE_FN: func_name='{}', current_function={:?}, builder_block={:?}",
-            func_name,
-            self.current_function.map(|f| f.get_name().to_str().unwrap_or("?").to_string()),
-            self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string())));
         if !func.type_params.is_empty() {
             return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
         }
@@ -3940,11 +3823,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
-        Self::diag_mark(&format!("COMPILE_FN_ENTRY: func='{}', entry='{}', fn_blocks={}",
-            func_name,
-            entry_block.get_name().to_str().unwrap_or("?"),
-            function.get_basic_blocks().len()));
-
         let result = (|| -> Result<(), String> {
             for (i, param) in func.parameters.iter().enumerate() {
                 let param_value = function.get_nth_param(i as u32)
@@ -4023,32 +3901,31 @@ impl<'ctx> CodeGenerator<'ctx> {
             } else {
                 // has_return = true: the return statement's build_return
                 // went into merge_block (after match). The entry block
-                // is still unterminated. Add build_return in entry block
-                // so LLVM has a valid entry point. This is dead code in
-                // practice (switch dispatches to arm blocks first).
-                let entry_has_term = entry_block.get_terminator().is_some();
-                Self::diag_mark(&format!("FIX: has_return=true, entry_has_term={}, builder_block={:?}",
-                    entry_has_term,
-                    self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string())));
-                if !entry_has_term {
-                    let return_val: inkwell::values::BasicValueEnum = self.i64_type.const_int(0, false).into();
-                    self.builder.position_at_end(entry_block);
-                    let r = self.builder.build_return(Some(&return_val));
-                    Self::diag_mark(&format!("FIX: build_return result={:?}", r.is_ok()));
-                    r.map_err(|e| e.to_string())?;
-                }
+                // is still unterminated — the safety net after the closure
+                // will add a terminator there.
             }
             Ok(())
         })();
         
+        // Safety: guarantee every function's entry block has a terminator.
+        // Without this, a match body in a non-main function can leave the
+        // entry block unterminated (LLVM rejects such modules).
+        if entry_block.get_terminator().is_none() {
+            self.builder.position_at_end(entry_block);
+            let default_val: BasicValueEnum<'ctx> = match &return_type {
+                AhaType::String => self.string_type.const_zero().into(),
+                AhaType::Struct(name) => self.struct_llvm_type(name)?.const_zero().into(),
+                AhaType::Enum(name) => self.enum_llvm_type(name)?.const_zero().into(),
+                _ => self.i64_type.const_int(0, false).into(),
+            };
+            self.builder.build_return(Some(&default_val)).map_err(|e| e.to_string())?;
+        }
+
         self.scopes = saved_scopes;
         self.current_function = saved_function;
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
         } else {
-            // No previous block to restore to. Position the builder at the
-            // entry block of the function we just compiled so the caller
-            // (compile()) can add the implicit main's terminator there.
             self.builder.position_at_end(entry_block);
         }
         result?;
@@ -4503,11 +4380,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
-        Self::diag_mark(&format!("COMPILE_FN_ENTRY: func='{}', entry='{}', fn_blocks={}",
-            func_name,
-            entry_block.get_name().to_str().unwrap_or("?"),
-            function.get_basic_blocks().len()));
-
         let result = (|| -> Result<(), String> {
             for (i, param) in generic.parameters.iter().enumerate() {
                 let param_value = function.get_nth_param(i as u32)
@@ -5167,9 +5039,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let enum_type = self.enum_llvm_type(&enum_name)?;
         let current_fn = self.current_function.ok_or("match outside function")?;
-        Self::diag_mark(&format!("MATCH: current_fn='{}', builder_block='{}'",
-            current_fn.get_name().to_str().unwrap_or("?"),
-            self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string()).unwrap_or("?".to_string())));
         let merge_block = self.context.append_basic_block(current_fn, "match.merge");
 
         // Load the tag (field 0) for branching.
