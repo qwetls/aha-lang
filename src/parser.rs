@@ -10,6 +10,7 @@ use crate::ast::{
     AssignmentExpression, FunctionLiteral, ImportStatement, ModuleAccess,
     ActorDefinition, SpawnExpression,
     EnumDefinition, EnumVariant, MatchExpression, MatchArm, Pattern,
+    ExternFnDecl,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -100,6 +101,12 @@ impl Parser {
     /// the first identifier of the hint). Consumes the full hint and returns
     /// the canonical hint string ("List<int>", "Map<string,int>", ...).
     fn parse_type_hint(&mut self) -> Option<String> {
+        // *T — raw pointer prefix
+        if self.current_token_is(TokenType::Asterisk) {
+            self.next_token(); // skip '*'
+            let inner = self.parse_type_hint()?;
+            return Some(format!("*{}", inner));
+        }
         if !self.current_token_is(TokenType::Identifier) {
             return None;
         }
@@ -158,6 +165,7 @@ impl Parser {
             TokenType::Enum => self.parse_enum_definition(false),
             TokenType::Use => self.parse_use_statement(),
             TokenType::Pub => self.parse_pub_statement(),
+            TokenType::Extern => self.parse_extern_function(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -179,6 +187,54 @@ impl Parser {
     fn parse_function_statement(&mut self, is_pub: bool) -> Option<Statement> {
         let expr = self.parse_function_literal_with_pub(is_pub);
         Some(Statement::Expression(ExpressionStatement { expression: expr }))
+    }
+
+    /// Parse `extern fn name(param: Type, ...) -> RetType;`
+    fn parse_extern_function(&mut self) -> Option<Statement> {
+        self.next_token(); // Skip 'extern'
+
+        if !self.expect_peek(TokenType::Fn) {
+            self.errors.push("Expected 'fn' after 'extern'".to_string());
+            return None;
+        }
+
+        if !self.expect_peek(TokenType::Identifier) {
+            self.errors.push("Expected function name after 'extern fn'".to_string());
+            return None;
+        }
+
+        let name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftParen) {
+            self.errors.push("Expected '(' after extern function name".to_string());
+            return None;
+        }
+
+        let (parameters, param_type_hints) = self.parse_function_parameters();
+
+        // Optional return type: -> T
+        let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
+            self.next_token(); // skip '->'
+            if !self.expect_peek(TokenType::Asterisk) && !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after '->' in extern fn return".to_string());
+            }
+            self.parse_type_hint()
+        } else {
+            None
+        };
+
+        // Expect semicolon to close the declaration
+        if !self.expect_peek(TokenType::Semicolon) {
+            self.errors.push("Expected ';' after extern fn declaration".to_string());
+            return None;
+        }
+
+        Some(Statement::ExternFn(ExternFnDecl {
+            name,
+            parameters,
+            param_type_hints,
+            return_type_hint,
+        }))
     }
 
     fn parse_struct_definition(&mut self, is_pub: bool) -> Option<Statement> {

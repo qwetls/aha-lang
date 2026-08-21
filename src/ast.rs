@@ -29,6 +29,7 @@ pub enum TokenType {
     Spawn,
     Enum,
     Match,
+    Extern,
     // Operators
     Assign,       // =
     Plus,         // +
@@ -221,6 +222,7 @@ pub enum Statement {
     Actor(ActorDefinition),
     Enum(EnumDefinition),
     Import(ImportStatement),
+    ExternFn(ExternFnDecl),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +254,17 @@ pub struct BlockStatement {
 pub struct ImportStatement {
     /// The file path string literal, e.g. "math" or "utils/helper"
     pub path: String,
+}
+
+// --- Extern Function Declaration ---
+/// `extern fn name(param: Type, ...) -> RetType;`
+/// No body — the linker (AOT) or runtime (JIT) resolves the symbol.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFnDecl {
+    pub name: Identifier,
+    pub parameters: Vec<Identifier>,
+    pub param_type_hints: Vec<Option<String>>,
+    pub return_type_hint: Option<String>,
 }
 
 // --- Root Node ---

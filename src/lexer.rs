@@ -148,6 +148,7 @@ impl Lexer {
             "spawn" => TokenType::Spawn,
             "enum" => TokenType::Enum,
             "match" => TokenType::Match,
+            "extern" => TokenType::Extern,
             _ => TokenType::Identifier,
         }
     }

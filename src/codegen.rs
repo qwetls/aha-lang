@@ -442,6 +442,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ast::Statement::Actor(_) => {}
                 ast::Statement::Enum(_) => {}
                 ast::Statement::Import(_) => {}
+                ast::Statement::ExternFn(_) => {}
             }
         }
     }
@@ -562,6 +563,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
             AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type.into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -617,6 +619,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let et = self.enum_llvm_type(name)?;
                 Ok(et.fn_type(&meta, false))
             }
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type.fn_type(&meta, false)),
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
     }
@@ -657,6 +660,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.functions.insert(func_name.clone(), function);
                     self.fn_types.insert(func_name, return_type);
                 }
+            } else if let ast::Statement::ExternFn(decl) = stmt {
+                // Extern functions are compiled on-demand via compile_extern
+                // during the body compilation pass. No pre-declaration needed —
+                // compile_extern creates the LLVM declaration directly.
+                let _ = decl;
             }
         }
     }
@@ -1007,6 +1015,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             if self.param_type_map == before_params && self.fn_types == before_fns {
                 break;
+            }
+        }
+
+        // Register extern function declarations FIRST — user functions may
+        // call them, so they must be in self.functions before predeclare.
+        for stmt in &program.statements {
+            if let ast::Statement::ExternFn(decl) = stmt {
+                self.compile_extern(decl)?;
             }
         }
 
@@ -3219,6 +3235,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             ast::Statement::Enum(_) => {
                 // Enum definitions are compile-time metadata
             }
+            ast::Statement::ExternFn(_) => {
+                // Already compiled in the extern pre-pass before main loop
+            }
         }
         Ok(())
     }
@@ -3731,6 +3750,36 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
         types
+    }
+
+    /// Compile an `extern fn` declaration — creates an LLVM external function
+    /// with no body. The linker (AOT) or runtime (JIT) resolves the symbol.
+    fn compile_extern(&mut self, decl: &ast::ExternFnDecl) -> Result<(), String> {
+        let func_name = decl.name.value.clone();
+
+        // Resolve param types from hints
+        let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
+        for hint in &decl.param_type_hints {
+            let aha_type = hint.as_deref()
+                .and_then(AhaType::from_hint)
+                .unwrap_or(AhaType::Int);
+            param_types.push(self.aha_type_to_llvm_type(&aha_type)?.into());
+        }
+
+        // Resolve return type
+        let ret_type = decl.return_type_hint.as_deref()
+            .and_then(AhaType::from_hint)
+            .unwrap_or(AhaType::Int);
+
+        let fn_type = self.build_fn_type(&ret_type, &param_types)?;
+
+        let fn_value = self.module.add_function(&func_name, fn_type, Some(inkwell::module::Linkage::External));
+
+        // Register so compile_call can find it
+        self.functions.insert(func_name.clone(), fn_value);
+        self.fn_types.insert(func_name, ret_type);
+
+        Ok(())
     }
 
     // Compile function definition — FIX C-05 (double return) and C-06 (variable restore safety)
