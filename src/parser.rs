@@ -212,21 +212,19 @@ impl Parser {
         }
 
         let (parameters, param_type_hints) = self.parse_function_parameters();
-        eprintln!("DEBUG parse_extern_function: after params current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
 
         // Optional return type: -> T
         let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
             self.next_token(); // skip '->'
-            eprintln!("DEBUG parse_extern_function: about to call parse_type_hint current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
-            let h = self.parse_type_hint();
-            eprintln!("DEBUG parse_extern_function: after parse_type_hint current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
-            h
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after '->' in extern fn".to_string());
+            }
+            self.parse_type_hint()
         } else {
             None
         };
 
         // Expect semicolon to close the declaration
-        eprintln!("DEBUG parse_extern_function: before semicolon check current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
         if !self.expect_peek(TokenType::Semicolon) {
             self.errors.push("Expected ';' after extern fn declaration".to_string());
             return None;
@@ -806,7 +804,6 @@ impl Parser {
 
     // Parse function parameters: (a, b, c) or (a: T, b: int)
     fn parse_function_parameters(&mut self) -> (Vec<Identifier>, Vec<Option<String>>) {
-        eprintln!("DEBUG parse_function_parameters: ENTER current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
         let mut params = Vec::new();
         let mut hints = Vec::new();
 
@@ -851,7 +848,6 @@ impl Parser {
         if !self.expect_peek(TokenType::RightParen) {
             self.errors.push("Expected ')' after function parameters".to_string());
         }
-        eprintln!("DEBUG parse_function_parameters: current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
 
         (params, hints)
     }
