@@ -125,17 +125,14 @@ impl Parser {
                     self.errors.push("Expected '>' to close Map<K,V> type hint".to_string());
                     return None;
                 }
-                self.next_token(); // advance past '>'
                 return Some(format!("Map<{}, {}>", first_hint, second_hint));
             }
             if !self.expect_peek(TokenType::GT) {
                 self.errors.push("Expected '>' to close List<T> type hint".to_string());
                 return None;
             }
-            self.next_token(); // advance past '>'
             return Some(format!("List<{}>", first_hint));
         }
-        self.next_token(); // advance past type identifier
         Some(hint)
     }
     
@@ -819,7 +816,10 @@ impl Parser {
         let hint = if self.peek_token_is(TokenType::Colon) {
             self.next_token(); // skip ':'
             self.next_token(); // advance to type token
-            self.parse_type_hint()
+            let is_ptr = self.current_token_is(TokenType::Asterisk);
+            let h = self.parse_type_hint();
+            if is_ptr { self.next_token(); } // advance past base type for pointers
+            h
         } else {
             None
         };
@@ -832,7 +832,10 @@ impl Parser {
             let hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // skip ':'
                 self.next_token(); // advance to type token
-                self.parse_type_hint()
+                let is_ptr = self.current_token_is(TokenType::Asterisk);
+                let h = self.parse_type_hint();
+                if is_ptr { self.next_token(); } // advance past base type for pointers
+                h
             } else {
                 None
             };
