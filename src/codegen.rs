@@ -5228,7 +5228,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Err path: return error value matching the function's return type.
         self.builder.position_at_end(err_block);
         let fn_ret = function.get_type().get_return_type();
-        if let inkwell::types::BasicTypeEnum::StructType(st) = fn_ret {
+        if let Some(inkwell::types::BasicTypeEnum::StructType(st)) = fn_ret {
             // Function returns Result — build full Err struct.
             let err_struct = st.const_zero();
             let err_struct = self.builder.build_insert_value(err_struct, self.i64_type.const_int(1, false), 0, "err_tag")
