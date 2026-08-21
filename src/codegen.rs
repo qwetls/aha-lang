@@ -4015,12 +4015,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
             return self.compile_enum_constructor(&enum_name, &func_name, call);
         }
-        let mut args: Vec<BasicValueEnum> = Vec::new();
-        for arg in &call.arguments {
-            args.push(self.compile_expression(arg)?.value);
-        }
-        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
-
         let function = if let Some(f) = self.functions.get(&func_name) {
             *f
         } else if let Some(f) = self.module.get_function(&func_name) {
@@ -4028,6 +4022,27 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             return Err(format!("Unknown function: {}", func_name));
         };
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let val = self.compile_expression(arg)?.value;
+            // Auto-coerce i64 → pointer for pointer parameters (FFI inttoptr)
+            let meta_type: inkwell::types::BasicMetadataTypeEnum = function.get_nth_param(i as u32)
+                .map(|p| p.get_type().into())
+                .unwrap_or(inkwell::types::BasicMetadataTypeEnum::Type(self.i64_type.into()));
+            if let Ok(ptr_type) = meta_type.try_into_pointer_type() {
+                if val.is_int_value() {
+                    let ptr = self.builder.build_int_to_ptr(
+                        val.into_int_value(),
+                        ptr_type,
+                        "arg_cast",
+                    ).map_err(|e| e.to_string())?;
+                    args.push(ptr.into());
+                    continue;
+                }
+            }
+            args.push(val);
+        }
+        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
         let call_result = self.builder.build_call(function, &args_meta, "calltmp")
             .map_err(|e| e.to_string())?;
         let ret_type = self.fn_types.get(&func_name).cloned().unwrap_or(AhaType::Int);
