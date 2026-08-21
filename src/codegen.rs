@@ -4026,18 +4026,17 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (i, arg) in call.arguments.iter().enumerate() {
             let val = self.compile_expression(arg)?.value;
             // Auto-coerce i64 → pointer for pointer parameters (FFI inttoptr)
-            let meta_type: inkwell::types::BasicMetadataTypeEnum = function.get_nth_param(i as u32)
-                .map(|p| p.get_type().into())
-                .unwrap_or(inkwell::types::BasicMetadataTypeEnum::Type(self.i64_type.into()));
-            if let Ok(ptr_type) = meta_type.try_into_pointer_type() {
-                if val.is_int_value() {
-                    let ptr = self.builder.build_int_to_ptr(
-                        val.into_int_value(),
-                        ptr_type,
-                        "arg_cast",
-                    ).map_err(|e| e.to_string())?;
-                    args.push(ptr.into());
-                    continue;
+            if let Some(param) = function.get_nth_param(i as u32) {
+                if let inkwell::types::BasicTypeEnum::PointerType(ptr_ty) = param.get_type() {
+                    if val.is_int_value() {
+                        let ptr = self.builder.build_int_to_ptr(
+                            val.into_int_value(),
+                            ptr_ty,
+                            "arg_cast",
+                        ).map_err(|e| e.to_string())?;
+                        args.push(ptr.into());
+                        continue;
+                    }
                 }
             }
             args.push(val);
