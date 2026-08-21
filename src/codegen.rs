@@ -963,6 +963,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// where stderr capture is lost). Remove once List<T> lands.
     fn diag_mark(msg: &str) {
         use std::io::Write;
+        // Write to stderr so it shows in test output even if process aborts
+        eprintln!("DIAG: {}", msg);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -975,6 +977,20 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn compile(&mut self, program: &ast::Program) -> Result<(), String> {
         let _ = std::fs::remove_file("/tmp/aha_diag.log");
         Self::diag_mark("1: compile start");
+        // Log statement names to identify which test this is
+        {
+            let names: Vec<String> = program.statements.iter().map(|s| {
+                match s {
+                    ast::Statement::Enum(e) => format!("Enum({})", e.name.value),
+                    ast::Statement::Expression(es) => match &es.expression {
+                        ast::Expression::Function(f) => format!("Fn({})", f.name.as_ref().map(|n| n.value.as_str()).unwrap_or("?")),
+                        _ => "Expr(...)".to_string(),
+                    },
+                    _ => "Other".to_string(),
+                }
+            }).collect();
+            Self::diag_mark(&format!("1a: program has {} stmts: [{}]", program.statements.len(), names.join(", ")));
+        }
         self.declare_printf();
         self.declare_c_runtime();
         Self::diag_mark("2: c runtime declared");
