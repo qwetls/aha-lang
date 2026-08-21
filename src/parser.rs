@@ -217,12 +217,15 @@ impl Parser {
         // Optional return type: -> T
         let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
             self.next_token(); // skip '->'
-            self.parse_type_hint()
+            let h = self.parse_type_hint();
+            eprintln!("DEBUG parse_extern_function: after return type current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
+            h
         } else {
             None
         };
 
         // Expect semicolon to close the declaration
+        eprintln!("DEBUG parse_extern_function: before semicolon check current={:?} peek={:?}", self.current_token.kind, self.peek_token.kind);
         if !self.expect_peek(TokenType::Semicolon) {
             self.errors.push("Expected ';' after extern fn declaration".to_string());
             return None;
