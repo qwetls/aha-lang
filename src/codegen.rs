@@ -563,7 +563,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
             AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
-            AhaType::RawPtr(_) => Ok(self.i8_ptr_type.into()),
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type().into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -619,7 +619,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let et = self.enum_llvm_type(name)?;
                 Ok(et.fn_type(&meta, false))
             }
-            AhaType::RawPtr(_) => Ok(self.i8_ptr_type.fn_type(&meta, false)),
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type().fn_type(&meta, false)),
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
     }
@@ -3758,12 +3758,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         let func_name = decl.name.value.clone();
 
         // Resolve param types from hints
-        let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
+        let mut param_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> = Vec::new();
         for hint in &decl.param_type_hints {
             let aha_type = hint.as_deref()
                 .and_then(AhaType::from_hint)
                 .unwrap_or(AhaType::Int);
-            param_types.push(self.aha_type_to_llvm_type(&aha_type)?.into());
+            param_types.push(self.aha_type_to_llvm_type(&aha_type)?);
         }
 
         // Resolve return type
