@@ -646,13 +646,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if func_name == "main" {
                         continue;
                     }
-                    let param_types: Result<Vec<_>, _> = func.parameters.iter().enumerate()
-                        .map(|(i, _)| {
-                            let t = self.param_type_map.get(&func_name)
-                                .and_then(|types| types.get(i).cloned())
-                                .unwrap_or(AhaType::Int);
-                            self.aha_type_to_llvm_type(&t)
-                        })
+                    let param_aha = self.infer_param_types(&func_name, &func.parameters, &func.param_type_hints);
+                    let param_types: Result<Vec<_>, _> = param_aha.iter()
+                        .map(|t| self.aha_type_to_llvm_type(t))
                         .collect();
                     let Ok(param_types) = param_types else { continue; };
                     let return_type = self.infer_function_return_type(func, &func_name);
