@@ -2,6 +2,19 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.3] — 2026-08-21
+
+### Added
+
+- **Error Handling — Result<T, E> type (Roadmap Phase 9):**
+  - `Result<T, E>` built-in type — tagged union `{i64 tag, i64 payload}`, tag 0=Ok, tag 1=Err.
+  - `ok(val)` and `err("msg")` constructors — create Result values without new keywords.
+  - `?` postfix operator — checks tag, unwraps payload on Ok, early-returns on Err.
+  - `parse_type_hint` distinguishes `Result<T, E>` from `Map<K, V>` using identifier name.
+  - `?` operator respects function return type — returns full Result struct if fn returns Result, else returns error tag (1) for non-Result functions.
+  - Type inference: `ok()`/`err()` infer as `Result<T, string>` in both `infer_expr_type` and `infer_expr_type_with_scope`.
+  - 6 tests: question_mark_unwraps_ok, chain_question_marks, result_type_as_return_type, result_with_question_mark_compiles, err_propagation_compiles, ok_and_err_constructors_compile.
+
 ## [1.6.2] — 2026-08-21
 
 ### Added
