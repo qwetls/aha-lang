@@ -29,7 +29,8 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **📦 Strings Done Right:** Strings are a real `{pointer, length}` struct — safe concatenation, `==`/`!=` comparison, and an O(1) `len()` builtin.
 - **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
 - **🔗 Module System:** `use "file"` imports functions and structs from another `.aha` file — recursive resolution, cycle detection, zero config.
-- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 571+ tests on every commit.
+- **🧩 Enums & Pattern Matching:** `enum` keyword with unit and tuple variants, `match` expressions with destructuring, wildcard arms, and nested patterns — compiled to efficient LLVM switch + phi.
+- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 581+ tests on every commit.
 
 ---
 
@@ -148,6 +149,37 @@ print_str(greeting);   // Hello, world
 print(len(name));      // 5
 ```
 
+**Enums & pattern matching:**
+
+```aha
+enum Day { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+fn is_weekend(d: Day) -> int {
+    match d {
+        Sat => 1,
+        Sun => 1,
+        _ => 0,
+    }
+}
+
+let d = Sat()
+is_weekend(d)  // 1
+```
+
+```aha
+enum Op { Add(int, int), Sub(int, int) }
+
+fn calc(op: Op) -> int {
+    match op {
+        Add(a, b) => a + b,
+        Sub(a, b) => a - b,
+        _ => 0,
+    }
+}
+
+calc(Add(10, 20))  // 30
+```
+
 ---
 
 ## 🧠 Compiler Architecture
@@ -175,6 +207,8 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 | `Int` | 64-bit integer — the universal numeric type |
 | `Bool` | `true` / `false` literals; produced by `!` |
 | `String` | `"..."` with escape sequences (`\n`, `\t`, `\\`, `\"`, `\r`, `\0`) |
+| `Enum` | `enum Name { A, B(int), C(int, int) }` — unit or tuple variants, matched with `match` |
+| `Struct` | `struct Name { field: type }` — named fields, created with `Name { field: val }` |
 
 ### Operators
 
@@ -245,6 +279,8 @@ let result = add(2, 3);
 - [x] Generics / parametric types (List<T>, Map<K,V>)
 - [x] Module system (`use "file"` imports, multi-file compilation) — v1.5.0
 - [x] Resource lifetimes — compiler-inserted free, scope-based auto-free for Map/List (Phase 1)
+- [x] Enum keyword + pattern matching (`match`, destructuring, wildcards) — v1.6.0
+- [x] AOT compilation (`--emit-exe`)
 - [ ] Package manager (`aha install`)
 - [ ] Resource lifetimes Phase 2 — last-use analysis
 - [ ] Resource lifetimes Phase 3 — escape analysis (returned/passed allocations)

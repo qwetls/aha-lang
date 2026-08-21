@@ -2,6 +2,88 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.0] — 2026-08-21
+
+### Added
+
+- **Enum keyword + pattern matching (Roadmap Phase 7):**
+  - `enum` keyword — unit variants (`Color { Red, Green, Blue }`) and tuple variants (`Option { Some(int), None }`).
+  - LLVM struct layout: `{i64 tag, i64, i64, ...}` — tag at index 0, payload slots at indices 1+.
+  - `match` expression — `build_switch` on tag value; arms dispatch to typed basic blocks; phi node merges results.
+  - Destructuring — `match x { Some(v) => v, None => 0 }` binds tuple payload to local variables.
+  - Wildcard `_` arm — acts as default case; exhaustive matches without wildcard create unreachable dead block.
+  - Nested enum payloads — `enum Outer { X(Inner) }` where `Inner` is itself an enum.
+  - 17 tests: unit basic, unit second/third variant, wildcard, tuple one/two fields, destructure math, mixed unit+tuple, match in function, match arithmetic, nested match, two tuple variants, single variant, parse diagnostics.
+
+### Fixed
+
+- **Entry block terminator safety net** — match expressions in non-main functions could leave the entry block unterminated; safety net guarantees every function entry block has a terminator.
+- **Dead block builder position** — match.dead block (exhaustive match default) was created with unreachable but builder stayed positioned there; `build_switch` then appended a second terminator. Fixed by saving/restoring builder position.
+- **Match arm block terminators** — arm body compilation could move builder to inner match merge blocks, leaving original arm blocks unterminated. Added check to branch both original arm block and end block to merge.
+- **Type hint preservation for enum/struct params** — `infer_param_types` and `predeclare_functions` were overriding explicit type hints (e.g. `d: Day`) with call-site inferred `Int`. Fixed to respect annotations over inference.
+
+## [1.5.9] — 2026-08-20
+
+### Added
+
+- **AOT compilation (`--emit-exe <output>`):**
+  - `rename_main()` — renames LLVM `main` to free the name for C wrapper
+  - `add_c_main_wrapper()` — generates `int main()` that calls `__aha_main() -> i64`, truncates return
+  - `emit_object_file()` — uses inkwell `TargetMachine::write_to_file()` to produce native `.o`
+  - CLI: `--emit-exe <output>` emits object file + links with `cc` to produce native executable
+  - Flow: rename user main → add C wrapper → emit .o → link with cc
+
+- **String builtins:**
+  - `int_to_string(int) -> string` — i64 to string via snprintf
+  - `string_to_int(string) -> int` — string to i64 via strtol
+  - `string_sub(string, start, len) -> string` — substring extraction
+  - `char_at(string, index) -> int` — character access (ASCII value)
+
+- **File I/O builtins:**
+  - `file_read(path) -> string` — reads entire file into string
+  - `file_write(path, content) -> int` — writes string to file, returns bytes written
+
+### Fixed
+
+- **LLVM IR type mismatches in string/file builtins:**
+  - `int_to_string`, `string_sub`, `file_read` declared as returning `i64` but body returns `{i8*, i64}` string struct — fixed to return `string`
+  - `strtol` second parameter was `i8*` null but signature requires `i8**` — fixed cast
+  - `int_to_string` snprintf called without variadic value argument — undefined behavior producing garbage strings; fixed to pass `value` as 4th arg
+  - `module.verify()` changed from `std::process::abort()` to `return Err()` for better error reporting
+
+## [1.5.8] — 2026-08-20
+
+### Added
+
+- **F6 Phase 2 — Threaded actors (mpsc + Condvar):**
+  - `actor_spawn(fn_ptr, init_state)` — spawns actor thread with mpsc mailbox + Condvar result slot
+  - `actor_send(handle, msg)` — fire-and-forget message via mpsc channel
+  - `actor_call(handle, msg)` — blocking request-response: sends msg, waits for handler result
+  - `add_global_mapping` in `run_jit()` — explicitly registers native functions with MCJIT execution engine
+  - **Key fix:** MCJIT cannot resolve `#[no_mangle]` symbols in test binaries; `add_global_mapping` bypasses this
+
+### Changed
+
+- F6 is now COMPLETE: Phase 1 (synchronous) + Phase 2 (threaded) both passing.
+
+## [1.5.7] — 2026-08-20
+
+### Added
+
+- **F6 Phase 1 — Actor-model concurrency (synchronous):**
+  - `actor` keyword — parser (`parse_actor_definition`), AST (`ActorDefinition`, `Actor` token), codegen (registers as struct).
+  - `spawn` expression — allocates actor struct on heap via `malloc`, returns heap pointer as i64 handle.
+  - `call(handle, msg)` — compiles to direct JIT call `handle(state, msg)`.
+  - `send(handle, msg)` — no-op in Phase 1 (fire-and-forget, Phase 2 will add mailbox + threading).
+  - Convention: `fn handle(state, msg) -> int` is the message handler.
+  - 4 actor tests: `actor_basic_call`, `actor_multiple_calls`, `actor_send_then_call`, `actor_state_ignored_by_handler`.
+
+### Design note
+
+- Phase 1 is purely synchronous — no `std::thread::spawn`, no runtime actor registry.
+- The handle IS the heap-allocated struct pointer (as i64). `call()` passes it directly to `handle()`.
+- Phase 2 will add threading, mpsc mailbox, and Condvar-based request-response.
+
 ## [1.5.6] — 2026-08-20
 
 ### Added

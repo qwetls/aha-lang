@@ -8,6 +8,8 @@ use crate::ast::{
     ExpressionStatement, BlockStatement, WhileExpression, ForExpression, ArrayLiteral,
     IndexExpression, StructDefinition, StructField, StructLiteral, FieldAccess,
     AssignmentExpression, FunctionLiteral, ImportStatement, ModuleAccess,
+    ActorDefinition, SpawnExpression,
+    EnumDefinition, EnumVariant, MatchExpression, MatchArm, Pattern,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -152,6 +154,8 @@ impl Parser {
             TokenType::Let => self.parse_let_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Struct => self.parse_struct_definition(false),
+            TokenType::Actor => self.parse_actor_definition(false),
+            TokenType::Enum => self.parse_enum_definition(false),
             TokenType::Use => self.parse_use_statement(),
             TokenType::Pub => self.parse_pub_statement(),
             _ => self.parse_expression_statement(),
@@ -163,8 +167,10 @@ impl Parser {
         match self.current_token.kind {
             TokenType::Fn => self.parse_function_statement(true),
             TokenType::Struct => self.parse_struct_definition(true),
+            TokenType::Actor => self.parse_actor_definition(true),
+            TokenType::Enum => self.parse_enum_definition(true),
             _ => {
-                self.errors.push("Expected 'fn' or 'struct' after 'pub'".to_string());
+                self.errors.push("Expected 'fn', 'struct', 'enum', or 'actor' after 'pub'".to_string());
                 None
             }
         }
@@ -220,8 +226,183 @@ impl Parser {
         Some(Statement::Struct(StructDefinition { name, is_pub, fields }))
     }
 
-    // Parse a struct literal: TypeName { field: value, field2: value2 }
-    // The caller has already consumed the type name; current token is it.
+    fn parse_actor_definition(&mut self, is_pub: bool) -> Option<Statement> {
+        self.next_token(); // Skip 'actor'
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected actor name".to_string());
+            return None;
+        }
+        let name = Identifier { value: self.current_token.literal.clone() };
+        self.struct_names.insert(name.value.clone());
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return None;
+        }
+
+        let mut fields = Vec::new();
+        self.next_token(); // Skip '{'
+
+        while !self.current_token_is(TokenType::RightBrace) {
+            if !self.current_token_is(TokenType::Identifier) {
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            let type_hint = if self.peek_token_is(TokenType::Colon) {
+                self.next_token(); // Skip field name
+                self.next_token(); // Skip ':'
+                self.parse_type_hint()
+            } else {
+                None
+            };
+
+            fields.push(StructField { name: field_name, type_hint });
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token();
+                self.next_token();
+            } else {
+                self.next_token();
+            }
+        }
+
+        // current_token is '}' from the last else-branch next_token();
+        // Don't consume it here — parse_program's loop calls next_token().
+
+        Some(Statement::Actor(ActorDefinition { name, is_pub, fields }))
+    }
+
+    /// Parse: enum Name { Variant, Variant(Type, ...), ... }
+    fn parse_enum_definition(&mut self, is_pub: bool) -> Option<Statement> {
+        self.next_token(); // Skip 'enum'
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected enum name".to_string());
+            return None;
+        }
+        let name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return None;
+        }
+        self.next_token(); // Skip '{'
+
+        let mut variants = Vec::new();
+
+        while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
+            if !self.current_token_is(TokenType::Identifier) {
+                self.errors.push(format!(
+                    "Expected variant name, got {:?}",
+                    self.current_token.kind
+                ));
+                break;
+            }
+            let variant_name = Identifier { value: self.current_token.literal.clone() };
+
+            // Optional tuple payload: Variant(Type, Type, ...)
+            let payload_types = if self.peek_token_is(TokenType::LeftParen) {
+                self.next_token(); // '('
+                let mut types = Vec::new();
+                self.next_token(); // first token inside parens
+                while !self.current_token_is(TokenType::RightParen) && !self.current_token_is(TokenType::Eof) {
+                    if self.current_token_is(TokenType::Identifier) {
+                        types.push(self.current_token.literal.clone());
+                    }
+                    self.next_token();
+                }
+                self.next_token(); // skip ')'
+                types
+            } else {
+                Vec::new()
+            };
+
+            // For tuple variants, current is already on comma after ')'.
+            // For unit variants, current is still on variant name — advance first.
+            let is_tuple = !payload_types.is_empty();
+            variants.push(EnumVariant { name: variant_name, payload_types });
+
+            if is_tuple {
+                // Tuple: current = comma, check directly
+                if self.current_token_is(TokenType::Comma) {
+                    self.next_token(); // skip ','
+                    if self.current_token_is(TokenType::RightBrace) {
+                        break;
+                    }
+                } else if self.current_token_is(TokenType::RightBrace) {
+                    break;
+                }
+            } else {
+                // Unit: peek to check what's next
+                if self.peek_token_is(TokenType::Comma) {
+                    self.next_token(); // skip variant name
+                    self.next_token(); // skip ','
+                    if self.current_token_is(TokenType::RightBrace) {
+                        break;
+                    }
+                } else if self.peek_token_is(TokenType::RightBrace) {
+                    self.next_token(); // advance to '}'
+                    break; // last variant
+                } else {
+                    self.next_token(); // advance to next variant
+                }
+            }
+        }
+        // ponytail: current stays on '}' — parse_program advances past it
+
+        Some(Statement::Enum(EnumDefinition { name, is_pub, variants }))
+    }
+
+    /// Parse: spawn ActorName { field: value, ... }
+    /// Current token is `spawn` (already consumed by caller).
+    fn parse_spawn_expression(&mut self) -> Expression {
+        self.next_token(); // Skip 'spawn'
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push("Expected actor name after 'spawn'".to_string());
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+        let actor_name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+
+        let mut fields = Vec::new();
+        self.next_token(); // Skip '{'
+
+        while !self.current_token_is(TokenType::RightBrace)
+            && !self.current_token_is(TokenType::Eof)
+        {
+            if !self.current_token_is(TokenType::Identifier) {
+                break;
+            }
+            let field_name = Identifier { value: self.current_token.literal.clone() };
+
+            if !self.expect_peek(TokenType::Colon) {
+                break;
+            }
+            self.next_token(); // Skip ':'
+            let value = self.parse_expression(Precedence::Lowest);
+            fields.push((field_name, value));
+
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // Skip value
+                self.next_token(); // Skip ','
+            } else {
+                self.next_token();
+            }
+        }
+
+        // Don't consume '}' — parse_expression's while loop exits on it.
+        if !self.current_token_is(TokenType::RightBrace) {
+            self.errors.push("Expected '}' to close spawn expression".to_string());
+        }
+
+        Expression::Spawn(SpawnExpression { actor_name, fields })
+    }
+
+    /// Parse a struct literal: TypeName { field: value, field2: value2 }
     fn parse_struct_literal(&mut self, name: Identifier) -> Expression {
         // current token is the type name; peek is '{'
         self.next_token(); // move to '{'
@@ -255,6 +436,8 @@ impl Parser {
             }
         }
 
+        // Don't consume '}' — parse_expression's while loop will see it via peek
+        // and exit. parse_program's next_token() advances past it.
         if !self.current_token_is(TokenType::RightBrace) {
             self.errors.push("Expected '}' to close struct literal".to_string());
         }
@@ -486,6 +669,8 @@ impl Parser {
             TokenType::Fn => self.parse_function_literal_with_pub(false),
             TokenType::Break => Expression::Break,
             TokenType::Continue => Expression::Continue,
+            TokenType::Spawn => self.parse_spawn_expression(),
+            TokenType::Match => self.parse_match_expression(),
             TokenType::LeftBracket => self.parse_array_literal(),
             TokenType::Bang | TokenType::Minus => {
                 let operator = self.current_token.literal.clone();
@@ -680,6 +865,94 @@ impl Parser {
             iterable: Box::new(iterable),
             body,
         })
+    }
+
+    /// Parse: match expr { pattern => body, ... }
+    fn parse_match_expression(&mut self) -> Expression {
+        self.next_token(); // Skip 'match'
+
+        let value = self.parse_expression(Precedence::Lowest);
+
+        if !self.expect_peek(TokenType::LeftBrace) {
+            return Expression::Integer(IntegerLiteral { value: 0 });
+        }
+        self.next_token(); // Skip '{'
+
+        let mut arms = Vec::new();
+        while !self.current_token_is(TokenType::RightBrace) && !self.current_token_is(TokenType::Eof) {
+            let pattern = self.parse_pattern();
+
+            // parse_pattern leaves current_token on ',' (unit) or '=>' (tuple).
+            // For unit patterns, advance past comma to reach '=>'.
+            if self.current_token_is(TokenType::Comma) {
+                self.next_token(); // ',' → '=>'
+            }
+            if !self.current_token_is(TokenType::FatArrow) {
+                self.errors.push(format!(
+                    "Expected => after pattern, got {:?}",
+                    self.current_token.kind
+                ));
+                self.next_token();
+                continue;
+            }
+            self.next_token(); // Skip '=>'
+
+            let body = self.parse_expression(Precedence::Lowest);
+            arms.push(MatchArm { pattern, body });
+
+            // After parse_expression, current_token is on body's last token,
+            // peek_token is on ',' or '}'. Skip comma if present.
+            if self.peek_token_is(TokenType::Comma) {
+                self.next_token(); // advance to ','
+                self.next_token(); // advance past ',' to next arm
+            } else if self.peek_token_is(TokenType::RightBrace) {
+                self.next_token(); // advance to '}'
+                break; // last arm, exit loop
+            }
+        }
+
+        Expression::Match(MatchExpression {
+            value: Box::new(value),
+            arms,
+        })
+    }
+
+    /// Parse a match pattern: `_`, `Variant`, or `Variant(a, b, ...)`
+    /// Advances current_token to `=>` (FatArrow) in all cases.
+    fn parse_pattern(&mut self) -> Pattern {
+        if self.current_token_is(TokenType::Identifier) && self.current_token.literal == "_" {
+            self.next_token(); // Skip '_'
+            return Pattern::Wildcard;
+        }
+
+        if !self.current_token_is(TokenType::Identifier) {
+            self.errors.push(format!(
+                "Expected pattern, got {:?}",
+                self.current_token.kind
+            ));
+            self.next_token();
+            return Pattern::Wildcard;
+        }
+
+        let name = self.current_token.literal.clone();
+
+        // Check for tuple pattern: Variant(a, b, ...)
+        if self.peek_token_is(TokenType::LeftParen) {
+            self.next_token(); // Skip variant name
+            self.next_token(); // Skip '('
+            let mut bindings = Vec::new();
+            while !self.current_token_is(TokenType::RightParen) && !self.current_token_is(TokenType::Eof) {
+                if self.current_token_is(TokenType::Identifier) {
+                    bindings.push(self.current_token.literal.clone());
+                }
+                self.next_token();
+            }
+            self.next_token(); // Skip ')'
+            Pattern::EnumTuple(name, bindings)
+        } else {
+            self.next_token(); // Skip variant name → ','
+            Pattern::EnumUnit(name)
+        }
     }
 
     // Parse array literal: [elem1, elem2, ...]

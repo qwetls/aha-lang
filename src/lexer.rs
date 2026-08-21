@@ -144,6 +144,10 @@ impl Lexer {
             "struct" => TokenType::Struct,
             "use" => TokenType::Use,
             "pub" => TokenType::Pub,
+            "actor" => TokenType::Actor,
+            "spawn" => TokenType::Spawn,
+            "enum" => TokenType::Enum,
+            "match" => TokenType::Match,
             _ => TokenType::Identifier,
         }
     }
@@ -162,6 +166,9 @@ impl Lexer {
                 if self.peek_char() == '=' {
                     self.read_char();
                     tok = Token::new(TokenType::Eq, "==".to_string(), line, column);
+                } else if self.peek_char() == '>' {
+                    self.read_char();
+                    tok = Token::new(TokenType::FatArrow, "=>".to_string(), line, column);
                 } else {
                     tok = Token::new(TokenType::Assign, self.ch.to_string(), line, column);
                 }

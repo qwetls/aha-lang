@@ -21,6 +21,7 @@ fn is_pub_item(stmt: &Statement) -> bool {
             }
         }
         Statement::Struct(s) => s.is_pub,
+        Statement::Actor(a) => a.is_pub,
         _ => false,
     }
 }
