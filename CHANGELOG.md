@@ -2,6 +2,26 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.0] — 2026-08-21
+
+### Added
+
+- **Enum keyword + pattern matching (Roadmap Phase 7):**
+  - `enum` keyword — unit variants (`Color { Red, Green, Blue }`) and tuple variants (`Option { Some(int), None }`).
+  - LLVM struct layout: `{i64 tag, i64, i64, ...}` — tag at index 0, payload slots at indices 1+.
+  - `match` expression — `build_switch` on tag value; arms dispatch to typed basic blocks; phi node merges results.
+  - Destructuring — `match x { Some(v) => v, None => 0 }` binds tuple payload to local variables.
+  - Wildcard `_` arm — acts as default case; exhaustive matches without wildcard create unreachable dead block.
+  - Nested enum payloads — `enum Outer { X(Inner) }` where `Inner` is itself an enum.
+  - 17 tests: unit basic, unit second/third variant, wildcard, tuple one/two fields, destructure math, mixed unit+tuple, match in function, match arithmetic, nested match, two tuple variants, single variant, parse diagnostics.
+
+### Fixed
+
+- **Entry block terminator safety net** — match expressions in non-main functions could leave the entry block unterminated; safety net guarantees every function entry block has a terminator.
+- **Dead block builder position** — match.dead block (exhaustive match default) was created with unreachable but builder stayed positioned there; `build_switch` then appended a second terminator. Fixed by saving/restoring builder position.
+- **Match arm block terminators** — arm body compilation could move builder to inner match merge blocks, leaving original arm blocks unterminated. Added check to branch both original arm block and end block to merge.
+- **Type hint preservation for enum/struct params** — `infer_param_types` and `predeclare_functions` were overriding explicit type hints (e.g. `d: Day`) with call-site inferred `Int`. Fixed to respect annotations over inference.
+
 ## [1.5.9] — 2026-08-20
 
 ### Added
