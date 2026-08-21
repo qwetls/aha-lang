@@ -10,7 +10,7 @@ use crate::ast::{
     AssignmentExpression, FunctionLiteral, ImportStatement, ModuleAccess,
     ActorDefinition, SpawnExpression,
     EnumDefinition, EnumVariant, MatchExpression, MatchArm, Pattern,
-    ExternFnDecl,
+    ExternFnDecl, PostfixExpression,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
