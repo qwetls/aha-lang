@@ -831,7 +831,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
-                    types[i] = t.clone();
+                    if matches!(types[i], AhaType::Int) {
+                        types[i] = t.clone();
+                    }
                 }
             }
         }
@@ -3721,11 +3723,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
         }
-        // Override with call-site inference when available
+        // Override with call-site inference only when the hint didn't set a
+        // specific type (Enum/Struct). Explicit annotations take precedence.
         if let Some(inferred) = self.param_type_map.get(func_name) {
             for (i, t) in inferred.iter().enumerate() {
                 if i < types.len() {
-                    types[i] = t.clone();
+                    if matches!(types[i], AhaType::Int) {
+                        types[i] = t.clone();
+                    }
                 }
             }
         }
