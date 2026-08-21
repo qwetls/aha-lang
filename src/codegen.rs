@@ -1109,37 +1109,26 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         Self::diag_mark("5: main compiled");
 
-        // DIAGNOSTIC: dump only the main function's IR
-        if let Some(&main_fn) = self.functions.get("main") {
-            // Count how many @main functions exist in the module
-            let mut main_count = 0;
+        // DIAGNOSTIC: dump ALL functions and their blocks
+        {
+            let mut func_count = 0;
             for f in self.module.get_functions() {
-                if f.get_name().to_str() == Ok("main") {
-                    main_count += 1;
-                    let block_count = f.get_basic_blocks().len();
-                    let first_term = f.get_first_basic_block()
-                        .and_then(|bb| bb.get_terminator())
-                        .is_some();
-                    Self::diag_mark(&format!("5a: @main #{} has {} blocks, entry_has_term={}", main_count, block_count, first_term));
-                }
-            }
-            Self::diag_mark(&format!("5a2: self.functions['main'] blocks={}", main_fn.get_basic_blocks().len()));
-            if let Some(ir) = self.module.print_to_string().to_str().ok() {
-                // Find main function in IR
-                if let Some(start) = ir.find("define i64 @main") {
-                    let end = ir[start..].find("\n\n").map(|e| start + e).unwrap_or(ir.len());
-                    let snippet = &ir[start..end.min(start + 1500)];
-                    Self::diag_mark(&format!("5b: MAIN IR:\n{}", snippet));
-                } else {
-                    Self::diag_mark("5b: MAIN IR: @main not found in IR!");
-                }
-                // Also dump blocks
-                for bb in main_fn.get_basic_blocks() {
-                    let name = bb.get_name().to_str().unwrap_or("?");
+                func_count += 1;
+                let name = f.get_name().to_str().unwrap_or("?");
+                let block_count = f.get_basic_blocks().len();
+                let first_term = f.get_first_basic_block()
+                    .and_then(|bb| bb.get_terminator())
+                    .is_some();
+                Self::diag_mark(&format!("5a: @{} #{} has {} blocks, entry_has_term={}", name, func_count, block_count, first_term));
+                // Dump block names
+                for bb in f.get_basic_blocks() {
+                    let bname = bb.get_name().to_str().unwrap_or("?");
                     let has_term = bb.get_terminator().is_some();
-                    Self::diag_mark(&format!("5c: block '{}' has_terminator={}", name, has_term));
+                    Self::diag_mark(&format!("5c: @{} block '{}' has_terminator={}", name, bname, has_term));
                 }
             }
+            Self::diag_mark(&format!("5a2: total functions in module: {}, self.functions keys: {:?}", func_count,
+                self.functions.keys().collect::<Vec<_>>()));
         }
 
         // DIAGNOSTIC: second verify after main compilation, before
@@ -3836,6 +3825,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let func_name = func.name.as_ref()
             .map(|id| id.value.clone())
             .unwrap_or_else(|| format!("anonymous_{}", self.functions.len()));
+        Self::diag_mark(&format!("COMPILE_FN: func_name='{}', current_function={:?}, builder_block={:?}",
+            func_name,
+            self.current_function.map(|f| f.get_name().to_str().unwrap_or("?").to_string()),
+            self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string())));
         if !func.type_params.is_empty() {
             return Ok(TypedValue::void(self.i64_type.const_int(0, false).into()));
         }
@@ -3921,6 +3914,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
+        Self::diag_mark(&format!("COMPILE_FN_ENTRY: func='{}', entry='{}', fn_blocks={}",
+            func_name,
+            entry_block.get_name().to_str().unwrap_or("?"),
+            function.get_basic_blocks().len()));
 
         let result = (|| -> Result<(), String> {
             for (i, param) in func.parameters.iter().enumerate() {
@@ -4480,6 +4477,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_function = Some(function);
+        Self::diag_mark(&format!("COMPILE_FN_ENTRY: func='{}', entry='{}', fn_blocks={}",
+            func_name,
+            entry_block.get_name().to_str().unwrap_or("?"),
+            function.get_basic_blocks().len()));
 
         let result = (|| -> Result<(), String> {
             for (i, param) in generic.parameters.iter().enumerate() {
@@ -5140,6 +5141,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let enum_type = self.enum_llvm_type(&enum_name)?;
         let current_fn = self.current_function.ok_or("match outside function")?;
+        Self::diag_mark(&format!("MATCH: current_fn='{}', builder_block='{}'",
+            current_fn.get_name().to_str().unwrap_or("?"),
+            self.builder.get_insert_block().map(|b| b.get_name().to_str().unwrap_or("?").to_string()).unwrap_or("?".to_string())));
         let merge_block = self.context.append_basic_block(current_fn, "match.merge");
 
         // Load the tag (field 0) for branching.
