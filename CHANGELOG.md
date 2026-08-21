@@ -22,6 +22,10 @@ All notable changes to AHA! Lang are documented in this file.
 - **Match arm block terminators** — arm body compilation could move builder to inner match merge blocks, leaving original arm blocks unterminated. Added check to branch both original arm block and end block to merge.
 - **Type hint preservation for enum/struct params** — `infer_param_types` and `predeclare_functions` were overriding explicit type hints (e.g. `d: Day`) with call-site inferred `Int`. Fixed to respect annotations over inference.
 
+### Changed
+
+- **PRD v0.4** — Roadmap revision: self-hosting moved to long-term. Web backend is now priority — F8 (FFI), F9 (error handling), F10 (TCP/UDP), F11 (HTTP), F12 (JSON), F13 (async I/O). Game engine foundation (F14). Gap analysis added.
+
 ## [1.5.9] — 2026-08-20
 
 ### Added

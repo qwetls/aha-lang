@@ -1,6 +1,6 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.3.7
+**Versi PRD:** 0.4
 **Tanggal:** 2026-08-21
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
@@ -137,11 +137,34 @@ kompromi.
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
 | **F7** | Enum keyword + pattern matching | ✅ Selesai (v1.6.0) — unit/tuple variants, match, destructuring, wildcards, nested enums |
-| **F8** | Self-hosting | ⏳ Setelah F7 |
-| **F9** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
+| **F8** | FFI support — panggil C library dari AHA! | ⏳ Prioritas |
+| **F9** | Error handling — `Result<T, E>` type | ⏳ Prioritas |
+| **F10** | TCP/UDP sockets — fondasi networking | ⏳ Setelah F8 |
+| **F11** | HTTP server — built-in HTTP/1.1 | ⏳ Setelah F10 |
+| **F12** | JSON ser/deser — data interchange | ⏳ Setelah F11 |
+| **F13** | Async I/O — event loop, non-blocking | ⏳ Setelah F10 |
+| **F14** | Game engine foundation — audio, input, rendering | ⏳ Setelah F8 |
+| **F15** | Package manager (`aha install`) | ⏳ Setelah komunitas |
+| **F?** | Self-hosting — compiler AHA! ditulis dalam AHA! | ⏳ Long-term (setelah semua stabil) |
 
 Setiap langkah: development → test → CI hijau → review → (jika mantap) merge
 ke main. Tidak ada loncatan.
+
+### Gap Analysis: AHA! vs Web Backend
+
+| Gap | Kritis? | Impact |
+|-----|---------|--------|
+| No FFI | ❌ KRITIS | Tidak bisa panggil C library (libcurl, OpenSSL, SQLite) — **blocker untuk web** |
+| No error handling | ❌ KRITIS | Tidak ada `Result`/`Option` type — web butuh error handling robust |
+| No closures | ⚠️ PENTING | Tidak bisa pass fungsi sebagai callback — essential untuk async/event-driven |
+| No null safety | ⚠️ PENTING | Pointer bisa null tanpa check — crash risk |
+| No TCP/UDP | ⚠️ PENTING | Tidak bisa bikin network server |
+| No async I/O | ⚠️ PENTING | Semua blocking — web server butuh non-blocking |
+| No JSON | ⚠️ PENTING | REST API butuh JSON ser/deser |
+| No string builder | 🟡 NICE | String concat O(n) terus — inefficient untuk response building |
+| No regex | 🟡 NICE | Validasi input butuh regex |
+| No enum methods | 🟡 NICE | Enum tidak bisa punya method |
+| No traits/interfaces | 🟡 NICE | Tidak bisa polymorphism |
 
 ---
 
@@ -313,8 +336,9 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] Functions with enum params — `fn is_weekend(d: Day) -> int` with proper type inference
 - [x] 17 tests: unit basic, unit second/third variant, wildcard, tuple one/two fields, destructure math, mixed unit+tuple, match in function, match arithmetic, nested match, two tuple variants, single variant, parse diagnostics
 
-### ⏳ F8. Self-hosting
+### ⏳ F8. Self-hosting — LONG-TERM
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa)
+- [ ] Hanya dikejar setelah semua domain aplikasi (web, game) stabil
 
 ---
 
@@ -394,3 +418,4 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.5 | F4 SELESAI — Visibility filter: non-pub items dari imports di-drop saat AST merge. `is_pub_item()` cek FunctionLiteral & StructDefinition. 5 tests baru, 3 namespace tests di-update. F4 lengkap: use + pub + namespace + visibility. |
 | 2026-08-20 | 0.3.6 | F6 SELESAI + AOT Compilation. Actor-model: spawn/call/send threaded via mpsc+Condvar. AOT: `--emit-exe` → rename main + C wrapper + emit .o + link with cc. inkwell v0.4 API: `as_global_value().set_name()`, explicit `RelocMode::Default`/`CodeModel::Default`. |
 | 2026-08-21 | 0.3.7 | F7 SELESAI — Enum keyword + pattern matching (v1.6.0). Unit/tuple variants, match expression, destructuring, wildcard arms, nested enums. 17 tests. Fixes: entry block terminator safety net, dead block builder position, arm block terminators, type hint preservation. |
+| 2026-08-21 | 0.4 | Roadmap revision: self-hosting dipindah ke long-term. Web backend jadi prioritas — F8 (FFI), F9 (error handling), F10 (TCP/UDP), F11 (HTTP), F12 (JSON), F13 (async I/O). Game engine foundation (F14). Gap analysis ditambahkan. |

@@ -278,14 +278,30 @@ let result = add(2, 3);
 - [x] Type inference & annotations
 - [x] Generics / parametric types (List<T>, Map<K,V>)
 - [x] Module system (`use "file"` imports, multi-file compilation) — v1.5.0
-- [x] Resource lifetimes — compiler-inserted free, scope-based auto-free for Map/List (Phase 1)
+- [x] Resource lifetimes — compiler-inserted free, scope-based auto-free for Map/List
+- [x] Actor-model concurrency (message passing, threading)
 - [x] Enum keyword + pattern matching (`match`, destructuring, wildcards) — v1.6.0
 - [x] AOT compilation (`--emit-exe`)
+
+### 🌐 Web Backend Roadmap
+
+- [ ] FFI support — call C libraries from AHA!
+- [ ] Error handling — `Result<T, E>` type
+- [ ] TCP/UDP sockets — networking foundation
+- [ ] HTTP server — built-in HTTP/1.1
+- [ ] JSON ser/deser — data interchange
+- [ ] Async I/O — event loop, non-blocking
+- [ ] String builder — efficient response building
+
+### 🎮 Game Engine Roadmap
+
+- [ ] Game engine foundation — audio, input, rendering
+- [ ] Window management (SDL/GLFW integration via FFI)
+
+### 📦 Distribution
+
 - [ ] Package manager (`aha install`)
-- [ ] Resource lifetimes Phase 2 — last-use analysis
-- [ ] Resource lifetimes Phase 3 — escape analysis (returned/passed allocations)
-- [ ] Actor-model concurrency (message passing, async/await)
-- [ ] Self-hosting — the AHA! compiler written in AHA!
+- [ ] Self-hosting — the AHA! compiler written in AHA! (long-term)
 
 ---
 
