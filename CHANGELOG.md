@@ -2,6 +2,19 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.1] — 2026-08-21
+
+### Added
+
+- **FFI — extern fn declarations (Roadmap Phase 8):**
+  - `extern fn name(params) -> RetType;` — declares foreign functions callable from AHA! code.
+  - `RawPtr(Box<AhaType>)` type variant — `*void`, `*int`, `*string` pointer types for FFI parameters.
+  - LLVM external linkage — `module.add_function(name, type, External)` creates unresolved declarations.
+  - JIT symbol resolution via `dlsym` at runtime; AOT via linker.
+  - `--ldflags` CLI option for extra linker flags.
+  - `inttoptr` auto-coercion — when calling extern fn with pointer params, integer args are automatically converted via `inttoptr`.
+  - 12 tests: parse (basic, pointer param, multiple, no return type), compile (basic, pointer, redeclare builtin), JIT (declared-not-called, pointer compile-only), error cases (missing fn keyword, missing semicolon).
+
 ## [1.6.0] — 2026-08-21
 
 ### Added
