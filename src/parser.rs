@@ -190,14 +190,15 @@ impl Parser {
     }
 
     /// Parse `extern fn name(param: Type, ...) -> RetType;`
+    /// Called when current_token is Extern. peek_token is the next token (fn).
     fn parse_extern_function(&mut self) -> Option<Statement> {
-        self.next_token(); // Skip 'extern'
-
+        // peek_token should be 'fn' — advance to verify
         if !self.expect_peek(TokenType::Fn) {
             self.errors.push("Expected 'fn' after 'extern'".to_string());
             return None;
         }
 
+        // Now current_token = Fn, peek_token = Identifier(name)
         if !self.expect_peek(TokenType::Identifier) {
             self.errors.push("Expected function name after 'extern fn'".to_string());
             return None;
@@ -215,9 +216,6 @@ impl Parser {
         // Optional return type: -> T
         let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
             self.next_token(); // skip '->'
-            if !self.expect_peek(TokenType::Asterisk) && !self.expect_peek(TokenType::Identifier) {
-                self.errors.push("Expected type after '->' in extern fn return".to_string());
-            }
             self.parse_type_hint()
         } else {
             None
