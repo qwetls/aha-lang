@@ -1020,6 +1020,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
+        self.create_socket_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -3221,7 +3222,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     // F10: Generate LLVM IR for TCP/UDP socket builtins.
     // Macros avoid borrow-checker issues with &self.functions + &self.builder.
-    #[allow(dead_code)]
     fn create_socket_builtins(&mut self) {
         use inkwell::AddressSpace;
 
@@ -4361,6 +4361,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
         }
+        // F10 TCP/UDP socket builtins
+        if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
+            return self.compile_socket_call(func_name, call);
+        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4439,6 +4443,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
         }
+    }
+
+    // F10: Dispatch socket builtin calls.
+    fn compile_socket_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("Socket builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
+        Ok(TypedValue::int(val))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
