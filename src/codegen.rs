@@ -1016,6 +1016,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
         self.declare_actor_runtime();
+        self.declare_socket_runtime();
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
@@ -3583,6 +3584,38 @@ impl<'ctx> CodeGenerator<'ctx> {
         let call_ty = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
         let call_fn = self.module.add_function("actor_call", call_ty, None);
         self.functions.insert("actor_call".to_string(), call_fn);
+    }
+
+    // F10: Declare C socket runtime functions (linked at JIT time).
+    fn declare_socket_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        // socket(domain: i32, type: i32, protocol: i32) -> i32
+        let i32_t = self.context.i32_type();
+        let sock_fn_type = i32_t.fn_type(&[i32_t.into(), i32_t.into(), i32_t.into()], false);
+        self.module.add_function("socket", sock_fn_type, None);
+        // bind, listen, accept, connect, send, recv, sendto, recvfrom: (i64 ptr args) -> i64/i32
+        let fn_type_i64_ptr = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        for name in &["bind", "listen", "send", "recv", "connect"] {
+            self.module.add_function(name, fn_type_i64_ptr, None);
+        }
+        let fn_type_accept = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        self.module.add_function("accept", fn_type_accept, None);
+        let fn_type_sendto = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        self.module.add_function("sendto", fn_type_sendto, None);
+        let fn_type_recvfrom = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        self.module.add_function("recvfrom", fn_type_recvfrom, None);
+        // close(fd: i64) -> i64
+        self.module.add_function("close", i64_t.fn_type(&[i64_t.into()], false), None);
+        // htons, htonl: (i64) -> i64
+        let fn_type_conv = i64_t.fn_type(&[i64_t.into()], false);
+        for name in &["htons", "htonl"] {
+            self.module.add_function(name, fn_type_conv, None);
+        }
+        // inet_addr: (i8*) -> i64
+        self.module.add_function("inet_addr", i64_t.fn_type(&[i8_ptr.into()], false), None);
+        // inet_ntoa: (i64) -> i8*
+        self.module.add_function("inet_ntoa", i8_ptr.fn_type(&[i64_t.into()], false), None);
     }
 
     /// Type-checked infix operator compilation
