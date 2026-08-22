@@ -1020,7 +1020,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
-        self.create_socket_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -3222,6 +3221,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     // F10: Generate LLVM IR for TCP/UDP socket builtins.
     // Macros avoid borrow-checker issues with &self.functions + &self.builder.
+    #[allow(dead_code)]
     fn create_socket_builtins(&mut self) {
         use inkwell::AddressSpace;
 
@@ -3351,13 +3351,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             let server_fd = func.get_nth_param(0).unwrap().into_int_value();
             let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
-            let sa_i8 = self.builder.build_bit_cast(sa, i8_ptr, "sa_i8").unwrap();
+            let _sa_i8 = self.builder.build_bit_cast(sa, i8_ptr, "sa_i8").unwrap();
             let sa_ptr = self.builder.build_bit_cast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
             let len = self.builder.build_alloca(i64_t, "len").unwrap();
             let _ = self.builder.build_store(len, i64_t.const_int(16, false));
             let len_i8 = self.builder.build_bit_cast(len, i8_ptr, "len_i8").unwrap();
-            let _ = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
-            self.builder.build_return(Some(&server_fd)).unwrap();
+            let new_fd = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
+            self.builder.build_return(Some(&new_fd)).unwrap();
             self.functions.insert("tcp_accept".to_string(), func);
         }
 
@@ -3414,10 +3414,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let msg_ptr = self.builder.build_extract_value(msg_struct, 0, "msg_ptr").unwrap().into_pointer_value();
             let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
             let addr = func.get_nth_param(2).unwrap().into_int_value();
-            let addr_ptr = self.builder.build_bit_cast(
-                self.builder.build_alloca(i64_t, "addr_tmp").unwrap(),
-                i64_t.ptr_type(AddressSpace::default()), "addr_ptr"
-            ).unwrap();
+            let addr_tmp = self.builder.build_alloca(i64_t, "addr_tmp").unwrap();
+            let addr_ptr = self.builder.build_bit_cast(addr_tmp, i64_t.ptr_type(AddressSpace::default()), "addr_ptr").unwrap();
             let _ = self.builder.build_store(addr_ptr, addr);
             let _ = call_c_i64!("sendto", vec![fd.into(), msg_ptr.into(), msg_len.into(), i64_t.const_int(0, false).into(), addr_ptr.into(), i64_t.const_int(16, false).into()]);
             self.builder.build_return(Some(&fd)).unwrap();
@@ -4363,10 +4361,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
         }
-        // F10 TCP/UDP socket builtins
-        if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
-            return self.compile_socket_call(func_name, call);
-        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4445,23 +4439,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
         }
-    }
-
-    // F10: Dispatch socket builtin calls.
-    fn compile_socket_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
-        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
-        for arg in &call.arguments {
-            let tv = self.compile_expression(arg)?;
-            args.push(tv.value.into());
-        }
-        let function = *self.functions.get(func_name)
-            .ok_or_else(|| format!("Socket builtin '{}' not declared", func_name))?;
-        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
-            .map_err(|e| e.to_string())?;
-        let val = call_result.try_as_basic_value()
-            .left()
-            .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
-        Ok(TypedValue::int(val))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
