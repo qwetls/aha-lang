@@ -1020,6 +1020,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
+        self.create_socket_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -3219,6 +3220,276 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     }
 
+    // F10: Generate LLVM IR for TCP/UDP socket builtins.
+    // Macros avoid borrow-checker issues with &self.functions + &self.builder.
+    fn create_socket_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i32_t = self.context.i32_type();
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        // --- macros for calling C runtime functions ---
+        macro_rules! call_c_i32 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        macro_rules! pack_sockaddr {
+            ($port_i32:expr, $ip_i32:expr) => {{
+                let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+                let sa_i8 = self.builder.build_bit_cast(sa, i8_ptr, "sa_i8").unwrap();
+                let zero = i64_t.const_int(0, false);
+                let _ = self.builder.build_store(sa, zero);
+
+                let family = i64_t.const_int(2, false); // AF_INET
+                let port_nbo = call_c_i64!("htons", vec![($port_i32).into()]);
+                let ip_i64 = self.builder.build_int_z_extend($ip_i32, i64_t, "ip_i64").unwrap();
+
+                let fam_shl = self.builder.build_left_shift(family, i64_t.const_int(0, false), "fam_shl").unwrap();
+                let port_shl = self.builder.build_left_shift(port_nbo, i64_t.const_int(16, false), "port_shl").unwrap();
+                let ip_shl = self.builder.build_left_shift(ip_i64, i64_t.const_int(32, false), "ip_shl").unwrap();
+                let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
+                let packed = self.builder.build_or(or1, ip_shl, "packed").unwrap();
+                let _ = self.builder.build_store(sa, packed);
+                (sa, sa_i8)
+            }};
+        }
+
+        macro_rules! build_sockaddr {
+            ($port_i32:expr, $ip_i32:expr) => {{
+                let (sa, sa_i8) = pack_sockaddr!($port_i32, $ip_i32);
+                let sa_ptr = self.builder.build_bit_cast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+                (sa_ptr, sa_i8)
+            }};
+        }
+
+        let fn_type_i64_0 = i64_t.fn_type(&[], false);
+
+        // --- tcp_socket() -> int ---
+        {
+            let func = self.module.add_function("tcp_socket", fn_type_i64_0, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let domain = i64_t.const_int(2, false);   // AF_INET
+            let socktype = i64_t.const_int(1, false);  // SOCK_STREAM
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_socket".to_string(), func);
+        }
+
+        // --- tcp_connect(host: String, port: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_connect", i64_t.fn_type(&[string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let host_ptr = self.builder.build_extract_value(func.get_nth_param(0).unwrap().into_struct_value(), 0, "host_ptr").unwrap().into_pointer_value();
+
+            let ip_i64 = call_c_i64!("inet_addr", vec![host_ptr.into()]);
+            let ip_i32 = self.builder.build_int_truncate(ip_i64, self.context.i32_type(), "ip_i32").unwrap();
+
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+
+            let port = func.get_nth_param(1).unwrap().into_int_value();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_i32);
+
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            let _ = call_c_i64!("connect", vec![fd_i64.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_connect".to_string(), func);
+        }
+
+        // --- tcp_bind_listen(port: int, backlog: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_bind_listen", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+
+            let port = func.get_nth_param(0).unwrap().into_int_value();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let ip_any = i32_t.const_int(0, false);
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_any);
+
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            let _ = call_c_i64!("bind", vec![fd_i64.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
+            let backlog = func.get_nth_param(1).unwrap().into_int_value();
+            let _ = call_c_i64!("listen", vec![fd_i64.into(), backlog.into(), i64_t.const_int(0, false).into()]);
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_bind_listen".to_string(), func);
+        }
+
+        // --- tcp_accept(server_fd: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_accept", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let server_fd = func.get_nth_param(0).unwrap().into_int_value();
+            let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+            let sa_i8 = self.builder.build_bit_cast(sa, i8_ptr, "sa_i8").unwrap();
+            let sa_ptr = self.builder.build_bit_cast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+            let len = self.builder.build_alloca(i64_t, "len").unwrap();
+            let _ = self.builder.build_store(len, i64_t.const_int(16, false));
+            let len_i8 = self.builder.build_bit_cast(len, i8_ptr, "len_i8").unwrap();
+            let _ = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
+            self.builder.build_return(Some(&server_fd)).unwrap();
+            self.functions.insert("tcp_accept".to_string(), func);
+        }
+
+        // --- tcp_send(fd: int, msg: String) -> int ---
+        {
+            let func = self.module.add_function("tcp_send", i64_t.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let msg_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let msg_ptr = self.builder.build_extract_value(msg_struct, 0, "msg_ptr").unwrap().into_pointer_value();
+            let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
+            let _ = call_c_i64!("send", vec![fd.into(), msg_ptr.into(), msg_len.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("tcp_send".to_string(), func);
+        }
+
+        // --- tcp_recv(fd: int, buf: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_recv", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let buf = func.get_nth_param(1).unwrap().into_int_value();
+            let n = call_c_i64!("recv", vec![fd.into(), buf.into(), i64_t.const_int(1024, false).into()]);
+            self.builder.build_return(Some(&n)).unwrap();
+            self.functions.insert("tcp_recv".to_string(), func);
+        }
+
+        // --- udp_socket() -> int ---
+        {
+            let func = self.module.add_function("udp_socket", fn_type_i64_0, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(2, false); // SOCK_DGRAM
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("udp_socket".to_string(), func);
+        }
+
+        // --- udp_send(fd: int, msg: String, addr: int) -> int ---
+        {
+            let func = self.module.add_function("udp_send", i64_t.fn_type(&[i64_t.into(), string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let msg_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let msg_ptr = self.builder.build_extract_value(msg_struct, 0, "msg_ptr").unwrap().into_pointer_value();
+            let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
+            let addr = func.get_nth_param(2).unwrap().into_int_value();
+            let addr_ptr = self.builder.build_bit_cast(
+                self.builder.build_alloca(i64_t, "addr_tmp").unwrap(),
+                i64_t.ptr_type(AddressSpace::default()), "addr_ptr"
+            ).unwrap();
+            let _ = self.builder.build_store(addr_ptr, addr);
+            let _ = call_c_i64!("sendto", vec![fd.into(), msg_ptr.into(), msg_len.into(), i64_t.const_int(0, false).into(), addr_ptr.into(), i64_t.const_int(16, false).into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("udp_send".to_string(), func);
+        }
+
+        // --- udp_recv(fd: int, buf: int) -> int ---
+        {
+            let func = self.module.add_function("udp_recv", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let buf = func.get_nth_param(1).unwrap().into_int_value();
+            let n = call_c_i64!("recvfrom", vec![fd.into(), buf.into(), i64_t.const_int(1024, false).into(), i64_t.const_int(0, false).into(), i64_t.const_int(0, false).into(), i64_t.const_int(0, false).into()]);
+            self.builder.build_return(Some(&n)).unwrap();
+            self.functions.insert("udp_recv".to_string(), func);
+        }
+
+        // --- close_fd(fd: int) -> int ---
+        {
+            let func = self.module.add_function("close_fd", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let _ = call_c_i64!("close", vec![fd.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("close_fd".to_string(), func);
+        }
+
+        // --- ip4_addr(host: String, port: int) -> int ---
+        {
+            let func = self.module.add_function("ip4_addr", i64_t.fn_type(&[string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let host_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let host_ptr = self.builder.build_extract_value(host_struct, 0, "host_ptr").unwrap().into_pointer_value();
+            let port = func.get_nth_param(1).unwrap().into_int_value();
+
+            let ip_i64 = call_c_i64!("inet_addr", vec![host_ptr.into()]);
+            let ip_i32 = self.builder.build_int_truncate(ip_i64, self.context.i32_type(), "ip_i32").unwrap();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_i32);
+
+            let sa_val = self.builder.build_load(i64_t, sa_ptr, "sa_val").unwrap().into_int_value();
+            self.builder.build_return(Some(&sa_val)).unwrap();
+            self.functions.insert("ip4_addr".to_string(), func);
+        }
+
+        // --- ip4_str(addr: int) -> String ---
+        {
+            let func = self.module.add_function("ip4_str", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let addr = func.get_nth_param(0).unwrap().into_int_value();
+            let ip_i32 = self.builder.build_right_shift(addr, i64_t.const_int(32, false), true, "ip_i32").unwrap();
+            let ip_trunc = self.builder.build_int_truncate(ip_i32, self.context.i32_type(), "ip_trunc").unwrap();
+            let ip_i64_ext = self.builder.build_int_z_extend(ip_trunc, i64_t, "ip_i64_ext").unwrap();
+
+            let c_str_ptr = call_c_i64!("inet_ntoa", vec![ip_i64_ext.into()]);
+            let c_str_i8 = self.builder.build_bit_cast(c_str_ptr, i8_ptr, "c_str_i8").unwrap();
+            let str_len_i64 = call_c_i64!("strlen", vec![c_str_i8.into()]);
+
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), c_str_i8, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len_i64, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("ip4_str".to_string(), func);
+        }
+    }
+
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
@@ -4092,6 +4363,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
         }
+        // F10 TCP/UDP socket builtins
+        if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
+            return self.compile_socket_call(func_name, call);
+        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4170,6 +4445,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
         }
+    }
+
+    // F10: Dispatch socket builtin calls.
+    fn compile_socket_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("Socket builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
+        Ok(TypedValue::int(val))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
