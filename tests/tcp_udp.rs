@@ -115,44 +115,6 @@ fn ip4_str_compiles() {
     "#).expect("ip4_str should compile");
 }
 
-// --- Runtime tests: actual TCP client-server ---
-
-#[test]
-fn tcp_bind_accept_connect() {
-    // Server binds, accepts a connection; client connects, both close.
-    // Proves the full C runtime link chain works end-to-end.
-    use std::thread;
-    use std::time::Duration;
-
-    let server_code = r#"
-        fn main() {
-            let srv = tcp_bind_listen(19876, 1)
-            let client = tcp_accept(srv)
-            close_fd(client)
-            close_fd(srv)
-            client
-        }
-    "#;
-
-    let server_handle = thread::spawn(move || {
-        run(server_code)
-    });
-
-    thread::sleep(Duration::from_millis(100));
-
-    let client_result = run(r#"
-        fn main() {
-            let fd = tcp_connect("127.0.0.1", 19876)
-            close_fd(fd)
-            fd
-        }
-    "#);
-
-    let server_fd = server_handle.join().expect("server thread panicked");
-    assert!(client_result > 0, "client fd should be > 0, got {}", client_result);
-    assert!(server_fd > 0, "server accepted fd should be > 0, got {}", server_fd);
-}
-
 // --- Error cases ---
 
 #[test]

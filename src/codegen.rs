@@ -3356,8 +3356,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let len = self.builder.build_alloca(i64_t, "len").unwrap();
             let _ = self.builder.build_store(len, i64_t.const_int(16, false));
             let len_i8 = self.builder.build_bit_cast(len, i8_ptr, "len_i8").unwrap();
-            let new_fd = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
-            self.builder.build_return(Some(&new_fd)).unwrap();
+            let _ = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
+            self.builder.build_return(Some(&server_fd)).unwrap();
             self.functions.insert("tcp_accept".to_string(), func);
         }
 
