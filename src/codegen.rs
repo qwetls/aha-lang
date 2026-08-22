@@ -3461,7 +3461,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
             let (sa_ptr, _) = build_sockaddr!(port_i32, ip_i32);
 
-            let sa_val = self.builder.build_load(i64_t, sa_ptr, "sa_val").unwrap().into_int_value();
+            let sa_val = self.builder.build_load(sa_ptr, "sa_val").unwrap().into_int_value();
             self.builder.build_return(Some(&sa_val)).unwrap();
             self.functions.insert("ip4_addr".to_string(), func);
         }
