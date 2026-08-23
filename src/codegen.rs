@@ -3254,7 +3254,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
                 let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
                 let zero = i64_t.const_int(0, false);
-                let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+                let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
                 let _ = self.builder.build_store(sa_ptr, zero);
 
                 let family = i64_t.const_int(2, false); // AF_INET
@@ -3353,7 +3353,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let server_fd = func.get_nth_param(0).unwrap().into_int_value();
             let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
             let _sa_i8 = self.builder.build_bitcast(sa, i8_ptr, "sa_i8").unwrap();
-            let sa_ptr = self.builder.build_bitcast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
             let len = self.builder.build_alloca(i64_t, "len").unwrap();
             let _ = self.builder.build_store(len, i64_t.const_int(16, false));
             let len_i8 = self.builder.build_bitcast(len, i8_ptr, "len_i8").unwrap();
@@ -3416,7 +3416,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
             let addr = func.get_nth_param(2).unwrap().into_int_value();
             let addr_tmp = self.builder.build_alloca(i64_t, "addr_tmp").unwrap();
-            let addr_ptr = self.builder.build_bitcast(addr_tmp, i64_t.ptr_type(AddressSpace::default()), "addr_ptr").unwrap();
+            let addr_ptr = self.builder.build_bitcast(addr_tmp, i64_t.ptr_type(AddressSpace::default()), "addr_ptr").unwrap().into_pointer_value();
             let _ = self.builder.build_store(addr_ptr, addr);
             let _ = call_c_i64!("sendto", vec![fd.into(), msg_ptr.into(), msg_len.into(), i64_t.const_int(0, false).into(), addr_ptr.into(), i64_t.const_int(16, false).into()]);
             self.builder.build_return(Some(&fd)).unwrap();
@@ -3480,7 +3480,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // inet_ntoa returns i8* (pointer) — cannot use call_c_i64! (calls into_int_value)
             let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
-            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
             let _ = self.builder.build_store(sa_ptr, ip_i64_ext);
             let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
             let inet_ntoa_fn = *self.functions.get("inet_ntoa").unwrap();
@@ -4370,7 +4370,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         // F10 TCP/UDP socket builtins
         if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
-            return self.compile_socket_call(func_name, call);
+            return self.compile_socket_call(func_name.as_str(), call);
         }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
