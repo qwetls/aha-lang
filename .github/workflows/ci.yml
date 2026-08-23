@@ -42,7 +42,14 @@ jobs:
 
       # Step 3: Periksa kode (cepat) untuk cari error sintaks
       - name: Run cargo check
-        run: cargo check --verbose
+        run: cargo check --verbose 2>&1 | tee cargo_check_output.txt || true
+
+      - name: Upload cargo check output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-output
+          path: cargo_check_output.txt
 
       # Step 4: Jalankan semua test yang ada
       # LLVM JIT tidak thread-safe — multiple Context::create() + JIT
