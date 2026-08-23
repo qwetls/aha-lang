@@ -3866,43 +3866,56 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_t = self.i64_type;
         let i32_t = self.context.i32_type();
         let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
-        // All socket functions use i64 params to match call sites (pointers passed as i64).
-        // socket(domain, type, protocol) -> fd
-        let fn_type_3i64 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
-        let sock_fn = self.module.add_function("socket", fn_type_3i64, None);
+        let i64_ptr = i64_t.ptr_type(inkwell::AddressSpace::default());
+        // socket(domain, type, protocol) -> fd — all i64
+        let fn_type_socket = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let sock_fn = self.module.add_function("socket", fn_type_socket, None);
         self.functions.insert("socket".to_string(), sock_fn);
-        // bind, listen, connect: (fd, addr, len) -> ret
-        for name in &["bind", "listen", "connect"] {
-            let f = self.module.add_function(name, fn_type_3i64, None);
-            self.functions.insert(name.to_string(), f);
-        }
-        // accept: (server_fd, addr, addrlen) -> new_fd
-        let accept_fn = self.module.add_function("accept", fn_type_3i64, None);
+        // bind(fd, addr: i64*, addrlen) -> ret
+        let fn_type_bind = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let bind_fn = self.module.add_function("bind", fn_type_bind, None);
+        self.functions.insert("bind".to_string(), bind_fn);
+        // listen(fd, backlog, unused) -> ret — backlog is i64 from .into()
+        let fn_type_listen = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let listen_fn = self.module.add_function("listen", fn_type_listen, None);
+        self.functions.insert("listen".to_string(), listen_fn);
+        // accept(server_fd, addr: i64*, addrlen: i8*) -> new_fd
+        let fn_type_accept = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i8_ptr.into()], false);
+        let accept_fn = self.module.add_function("accept", fn_type_accept, None);
         self.functions.insert("accept".to_string(), accept_fn);
-        // send, recv: (fd, buf, len) -> ret
-        for name in &["send", "recv"] {
-            let f = self.module.add_function(name, fn_type_3i64, None);
-            self.functions.insert(name.to_string(), f);
-        }
-        // sendto, recvfrom: 6 i64 params
-        let fn_type_6i64 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
-        let sendto_fn = self.module.add_function("sendto", fn_type_6i64, None);
+        // connect(fd, addr: i64*, addrlen) -> ret
+        let fn_type_connect = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let connect_fn = self.module.add_function("connect", fn_type_connect, None);
+        self.functions.insert("connect".to_string(), connect_fn);
+        // send(fd, buf: i8*, len) -> ret
+        let fn_type_send = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into()], false);
+        let send_fn = self.module.add_function("send", fn_type_send, None);
+        self.functions.insert("send".to_string(), send_fn);
+        // recv(fd, buf, len) -> ret — buf passed as i64
+        let fn_type_recv = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let recv_fn = self.module.add_function("recv", fn_type_recv, None);
+        self.functions.insert("recv".to_string(), recv_fn);
+        // sendto(fd, buf: i8*, len, flags, addr: i64*, addrlen) -> ret
+        let fn_type_sendto = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into(), i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let sendto_fn = self.module.add_function("sendto", fn_type_sendto, None);
         self.functions.insert("sendto".to_string(), sendto_fn);
-        let recvfrom_fn = self.module.add_function("recvfrom", fn_type_6i64, None);
+        // recvfrom(fd, buf, len, flags, addr, addrlen) -> ret — all i64
+        let fn_type_recvfrom = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let recvfrom_fn = self.module.add_function("recvfrom", fn_type_recvfrom, None);
         self.functions.insert("recvfrom".to_string(), recvfrom_fn);
         // close(fd) -> ret
         let close_fn = self.module.add_function("close", i64_t.fn_type(&[i64_t.into()], false), None);
         self.functions.insert("close".to_string(), close_fn);
-        // htons(port_i32) -> i64 — takes i32, returns i64
+        // htons(port_i32) -> i64
         let htons_fn = self.module.add_function("htons", i64_t.fn_type(&[i32_t.into()], false), None);
         self.functions.insert("htons".to_string(), htons_fn);
         // htonl(port_i32) -> i64
         let htonl_fn = self.module.add_function("htonl", i64_t.fn_type(&[i32_t.into()], false), None);
         self.functions.insert("htonl".to_string(), htonl_fn);
-        // inet_addr(str_ptr) -> i64 — takes i8*, returns i64
+        // inet_addr(str_ptr: i8*) -> i64
         let inet_addr_fn = self.module.add_function("inet_addr", i64_t.fn_type(&[i8_ptr.into()], false), None);
         self.functions.insert("inet_addr".to_string(), inet_addr_fn);
-        // inet_ntoa(addr_ptr) -> i64 — takes i8*, returns i64 (pointer as int)
+        // inet_ntoa(addr_ptr: i8*) -> i64
         let inet_ntoa_fn = self.module.add_function("inet_ntoa", i64_t.fn_type(&[i8_ptr.into()], false), None);
         self.functions.insert("inet_ntoa".to_string(), inet_ntoa_fn);
     }
