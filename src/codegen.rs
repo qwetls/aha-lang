@@ -3469,7 +3469,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- ip4_str(addr: int) -> String ---
         {
-            let func = self.module.add_function("ip4_str", i64_t.fn_type(&[i64_t.into()], false), None);
+            let func = self.module.add_function("ip4_str", string_type.fn_type(&[i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
 
@@ -3478,14 +3478,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             let ip_trunc = self.builder.build_int_truncate(ip_i32, self.context.i32_type(), "ip_trunc").unwrap();
             let ip_i64_ext = self.builder.build_int_z_extend(ip_trunc, i64_t, "ip_i64_ext").unwrap();
 
-            // inet_ntoa returns i8* (pointer) — cannot use call_c_i64! (calls into_int_value)
+            // inet_ntoa declared as (i8*) -> i64 — returns pointer as i64
             let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
             let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
             let _ = self.builder.build_store(sa_ptr, ip_i64_ext);
             let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
-            let inet_ntoa_fn = *self.functions.get("inet_ntoa").unwrap();
-            let c_str_ptr = self.builder.build_call(inet_ntoa_fn, &[sa_i8.into()], "c_str_ptr").unwrap()
-                .try_as_basic_value().left().unwrap().into_pointer_value();
+            let c_str_i64 = call_c_i64!("inet_ntoa", vec![sa_i8.into()]);
+            let c_str_ptr = self.builder.build_int_to_ptr(c_str_i64, i8_ptr, "c_str_ptr").unwrap();
             let str_len_i64 = call_c_i64!("strlen", vec![c_str_ptr.into()]);
 
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), c_str_ptr, 0, "str_ptr").unwrap();
@@ -3865,41 +3864,45 @@ impl<'ctx> CodeGenerator<'ctx> {
     // F10: Declare C socket runtime functions (linked at JIT time).
     fn declare_socket_runtime(&mut self) {
         let i64_t = self.i64_type;
-        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
-        // socket(domain: i32, type: i32, protocol: i32) -> i32
         let i32_t = self.context.i32_type();
-        let sock_fn_type = i32_t.fn_type(&[i32_t.into(), i32_t.into(), i32_t.into()], false);
+        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        // socket(domain: i64, type: i64, protocol: i64) -> i64
+        // (declared as i64 to match call sites that pass i64)
+        let sock_fn_type = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
         let sock_fn = self.module.add_function("socket", sock_fn_type, None);
         self.functions.insert("socket".to_string(), sock_fn);
-        // bind, listen, accept, connect, send, recv, sendto, recvfrom: (i64 ptr args) -> i64/i32
-        let fn_type_i64_ptr = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // bind, listen, connect, send, recv: (i64, i64*, i64) -> i64
+        let fn_type_i64_ptr = i64_t.fn_type(&[i64_t.into(), i64_t.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
         for name in &["bind", "listen", "send", "recv", "connect"] {
             let f = self.module.add_function(name, fn_type_i64_ptr, None);
             self.functions.insert(name.to_string(), f);
         }
-        let fn_type_accept = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // accept: (i64, i64*, i8*) -> i64
+        let fn_type_accept = i64_t.fn_type(&[i64_t.into(), i64_t.ptr_type(inkwell::AddressSpace::default()).into(), i8_ptr.into()], false);
         let accept_fn = self.module.add_function("accept", fn_type_accept, None);
         self.functions.insert("accept".to_string(), accept_fn);
-        let fn_type_sendto = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // sendto: (i64, i8*, i64, i64, i64*, i64) -> i64
+        let fn_type_sendto = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into(), i64_t.into(), i64_t.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
         let sendto_fn = self.module.add_function("sendto", fn_type_sendto, None);
         self.functions.insert("sendto".to_string(), sendto_fn);
-        let fn_type_recvfrom = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // recvfrom: (i64, i8*, i64, i64, i64*, i64) -> i64
+        let fn_type_recvfrom = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into(), i64_t.into(), i64_t.ptr_type(inkwell::AddressSpace::default()).into(), i64_t.into()], false);
         let recvfrom_fn = self.module.add_function("recvfrom", fn_type_recvfrom, None);
         self.functions.insert("recvfrom".to_string(), recvfrom_fn);
         // close(fd: i64) -> i64
         let close_fn = self.module.add_function("close", i64_t.fn_type(&[i64_t.into()], false), None);
         self.functions.insert("close".to_string(), close_fn);
-        // htons, htonl: (i64) -> i64
-        let fn_type_conv = i64_t.fn_type(&[i64_t.into()], false);
-        for name in &["htons", "htonl"] {
-            let f = self.module.add_function(name, fn_type_conv, None);
-            self.functions.insert(name.to_string(), f);
-        }
+        // htons: (i32) -> i64 — takes i32 port, returns i64 network-order value
+        let htons_fn = self.module.add_function("htons", i64_t.fn_type(&[i32_t.into()], false), None);
+        self.functions.insert("htons".to_string(), htons_fn);
+        // htonl: (i32) -> i64
+        let htonl_fn = self.module.add_function("htonl", i64_t.fn_type(&[i32_t.into()], false), None);
+        self.functions.insert("htonl".to_string(), htonl_fn);
         // inet_addr: (i8*) -> i64
         let inet_addr_fn = self.module.add_function("inet_addr", i64_t.fn_type(&[i8_ptr.into()], false), None);
         self.functions.insert("inet_addr".to_string(), inet_addr_fn);
-        // inet_ntoa: (i64) -> i8*
-        let inet_ntoa_fn = self.module.add_function("inet_ntoa", i8_ptr.fn_type(&[i64_t.into()], false), None);
+        // inet_ntoa: (i8*) -> i64 (returns pointer as i64 for call_c_i64! compat)
+        let inet_ntoa_fn = self.module.add_function("inet_ntoa", i64_t.fn_type(&[i8_ptr.into()], false), None);
         self.functions.insert("inet_ntoa".to_string(), inet_ntoa_fn);
     }
 
