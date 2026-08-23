@@ -3250,10 +3250,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         macro_rules! pack_sockaddr {
             ($port_i32:expr, $ip_i32:expr) => {{
-                let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
-                let sa_i8 = self.builder.build_bitcast(sa, i8_ptr, "sa_i8").unwrap();
+                // sockaddr_in = 16 bytes (family u16 + port u16 + addr u32 + padding u32x2)
+                let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+                let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
                 let zero = i64_t.const_int(0, false);
-                let _ = self.builder.build_store(sa, zero);
+                let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+                let _ = self.builder.build_store(sa_ptr, zero);
 
                 let family = i64_t.const_int(2, false); // AF_INET
                 let port_nbo = call_c_i64!("htons", vec![($port_i32).into()]);
@@ -3264,15 +3266,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let ip_shl = self.builder.build_left_shift(ip_i64, i64_t.const_int(32, false), "ip_shl").unwrap();
                 let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
                 let packed = self.builder.build_or(or1, ip_shl, "packed").unwrap();
-                let _ = self.builder.build_store(sa, packed);
-                (sa, sa_i8)
+                let _ = self.builder.build_store(sa_ptr, packed);
+                (sa_ptr, sa_i8)
             }};
         }
 
         macro_rules! build_sockaddr {
             ($port_i32:expr, $ip_i32:expr) => {{
-                let (sa, sa_i8) = pack_sockaddr!($port_i32, $ip_i32);
-                let sa_ptr = self.builder.build_bitcast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+                let (sa_ptr, sa_i8) = pack_sockaddr!($port_i32, $ip_i32);
                 (sa_ptr, sa_i8)
             }};
         }
@@ -3477,11 +3478,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             let ip_trunc = self.builder.build_int_truncate(ip_i32, self.context.i32_type(), "ip_trunc").unwrap();
             let ip_i64_ext = self.builder.build_int_z_extend(ip_trunc, i64_t, "ip_i64_ext").unwrap();
 
-            let c_str_ptr = call_c_i64!("inet_ntoa", vec![ip_i64_ext.into()]);
-            let c_str_i8 = self.builder.build_bitcast(c_str_ptr, i8_ptr, "c_str_i8").unwrap();
-            let str_len_i64 = call_c_i64!("strlen", vec![c_str_i8.into()]);
+            // inet_ntoa returns i8* (pointer) — cannot use call_c_i64! (calls into_int_value)
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap();
+            let _ = self.builder.build_store(sa_ptr, ip_i64_ext);
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let inet_ntoa_fn = *self.functions.get("inet_ntoa").unwrap();
+            let c_str_ptr = self.builder.build_call(inet_ntoa_fn, &[sa_i8.into()], "c_str_ptr").unwrap()
+                .try_as_basic_value().left().unwrap().into_pointer_value();
+            let str_len_i64 = call_c_i64!("strlen", vec![c_str_ptr.into()]);
 
-            let str_struct = self.builder.build_insert_value(string_type.const_zero(), c_str_i8, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), c_str_ptr, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, str_len_i64, 1, "str_len").unwrap();
             self.builder.build_return(Some(&str_struct)).unwrap();
             self.functions.insert("ip4_str".to_string(), func);
