@@ -1,0 +1,26 @@
+// rest_api.aha — Simple REST API
+// Demo: HTTP (F11) + JSON (F12)
+
+let server = http_listen(8080)
+print("Server running on port 8080")
+
+while 1 {
+    let client = http_accept(server)
+    let request = http_recv(client)
+    let method = http_request_method(request)
+    let path = http_request_path(request)
+
+    if method == "GET" && path == "/" {
+        let resp = http_response(200, "Hello from AHA! Lang")
+        http_send(client, resp)
+    }
+
+    if method == "GET" && path == "/api/health" {
+        let health = json_parse("{\"status\": \"ok\", \"version\": \"1.6.6\"}")
+        let body = json_stringify(health)
+        let resp = http_response(200, body)
+        http_send(client, resp)
+    }
+
+    close_fd(client)
+}
