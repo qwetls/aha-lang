@@ -3544,7 +3544,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let sa_ptr = self.builder.build_bitcast(sa_buf, i64_ptr, "sa_ptr").unwrap().into_pointer_value();
             let _ = self.builder.build_store(sa_ptr, zero);
             let family = i64_t.const_int(2, false); // AF_INET
-            let port_nbo = call_c_i64!("htons", vec![port.into()]);
+            let i32_t = self.context.i32_type();
+            let port_i32 = self.builder.build_int_truncate(port, i32_t, "port_i32").unwrap();
+            let port_nbo = call_c_i64!("htons", vec![port_i32.into()]);
             let fam_shl = self.builder.build_left_shift(family, i64_t.const_int(0, false), "fam_shl").unwrap();
             let port_shl = self.builder.build_left_shift(port_nbo, i64_t.const_int(16, false), "port_shl").unwrap();
             let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
