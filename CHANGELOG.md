@@ -2,6 +2,16 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.4] — 2026-08-22
+
+### Added
+
+- **TCP/UDP Sockets — Networking builtins (Roadmap Phase 10):**
+  - 12 networking builtins: `tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`.
+  - All builtins return `int` (file descriptors / error codes), except `ip4_str` which returns `String`.
+  - C runtime support: `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `close`, `htons`, `htonl`, `inet_addr`, `inet_ntoa`.
+  - 9 compile-only tests: `tests/tcp_udp.rs`.
+
 ## [1.6.3] — 2026-08-21
 
 ### Added
