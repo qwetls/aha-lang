@@ -1017,10 +1017,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_c_runtime();
         self.declare_actor_runtime();
         self.declare_socket_runtime();
+        self.declare_http_runtime();
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
         self.create_socket_builtins();
+        self.create_http_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -3494,6 +3496,215 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    // --- F11 HTTP Server builtins ---
+    // http_listen(port) -> int
+    // http_accept(server_fd) -> int
+    // http_recv(fd) -> String
+    // http_send(fd, data) -> int
+    // http_request_method(req: String) -> String
+    // http_request_path(req: String) -> String
+    // http_request_body(req: String) -> String
+    // http_request_header(req: String, name: String) -> String
+    // http_response(status: int, body: String) -> String
+    fn create_http_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+        let i64_ptr = i64_t.ptr_type(AddressSpace::default());
+
+        // Macros for calling C runtime functions
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        let fn_type_i64_0 = i64_t.fn_type(&[], false);
+
+        // --- http_listen(port: int) -> int ---
+        {
+            let func = self.module.add_function("http_listen", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let port = func.get_nth_param(0).unwrap().into_int_value();
+            // socket(AF_INET=2, SOCK_STREAM=1, 0)
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i64!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            // sockaddr_in: family=AF_INET(2), port=htons(port), addr=INADDR_ANY(0)
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let zero = i64_t.const_int(0, false);
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_ptr, "sa_ptr").unwrap().into_pointer_value();
+            let _ = self.builder.build_store(sa_ptr, zero);
+            let family = i64_t.const_int(2, false); // AF_INET
+            let port_nbo = call_c_i64!("htons", vec![port.into()]);
+            let fam_shl = self.builder.build_left_shift(family, i64_t.const_int(0, false), "fam_shl").unwrap();
+            let port_shl = self.builder.build_left_shift(port_nbo, i64_t.const_int(16, false), "port_shl").unwrap();
+            let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
+            let _ = self.builder.build_store(sa_ptr, or1);
+            // bind(fd, &sa, 16)
+            let _ = call_c_i64!("bind", vec![fd.into(), sa_i8.into(), i64_t.const_int(16, false).into()]);
+            // listen(fd, 128)
+            let _ = call_c_i64!("listen", vec![fd.into(), i64_t.const_int(128, false).into(), zero.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("http_listen".to_string(), func);
+        }
+
+        // --- http_accept(server_fd: int) -> int ---
+        {
+            let func = self.module.add_function("http_accept", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let server_fd = func.get_nth_param(0).unwrap().into_int_value();
+            // Allocate sockaddr for accept
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_ptr, "sa_ptr").unwrap().into_pointer_value();
+            let zero = i64_t.const_int(0, false);
+            let _ = self.builder.build_store(sa_ptr, zero);
+            let len_buf = self.builder.build_alloca(i64_t, "len_buf").unwrap();
+            let _ = self.builder.build_store(len_buf, i64_t.const_int(16, false));
+            let len_i8 = self.builder.build_bitcast(len_buf, i8_ptr, "len_i8").unwrap();
+            let fd = call_c_i64!("accept", vec![server_fd.into(), sa_i8.into(), len_i8.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("http_accept".to_string(), func);
+        }
+
+        // --- http_recv(fd: int) -> String ---
+        {
+            let func = self.module.add_function("http_recv", string_type.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            // Allocate 64KB buffer
+            let buf_size = i64_t.const_int(65536, false);
+            let buf = self.builder.build_alloca(i8_type.array_type(65536), "recv_buf").unwrap();
+            let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap();
+            // recv(fd, buf, 65536, 0)
+            let flags = i64_t.const_int(0, false);
+            let n = call_c_i64!("recv", vec![fd.into(), buf_i8.into(), buf_size.into(), flags.into()]);
+            // Build string: {ptr, len}
+            let buf_as_i64 = self.builder.build_ptr_to_int(buf_i8, i64_t, "buf_as_i64").unwrap();
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), buf_i8, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, n, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_recv".to_string(), func);
+        }
+
+        // --- http_send(fd: int, data: String) -> int ---
+        {
+            let func = self.module.add_function("http_send", i64_t.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let data_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let data_ptr = self.builder.build_extract_value(data_struct, 0, "data_ptr").unwrap().into_pointer_value();
+            let data_len = self.builder.build_extract_value(data_struct, 1, "data_len").unwrap().into_int_value();
+            // send(fd, data_ptr, data_len, 0)
+            let flags = i64_t.const_int(0, false);
+            let sent = call_c_i64!("send", vec![fd.into(), data_ptr.into(), data_len.into(), flags.into()]);
+            self.builder.build_return(Some(&sent)).unwrap();
+            self.functions.insert("http_send".to_string(), func);
+        }
+
+        // --- http_request_method(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_method", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            // Call runtime: aha_http_request_method(req_ptr) -> i8*
+            let c_fn = *self.functions.get("aha_http_request_method").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "method_ptr").unwrap();
+            let method_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            // Build string: {ptr, len} — need strlen
+            let str_len = call_c_i64!("strlen", vec![method_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), method_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_method".to_string(), func);
+        }
+
+        // --- http_request_path(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_path", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let c_fn = *self.functions.get("aha_http_request_path").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "path_ptr").unwrap();
+            let path_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let str_len = call_c_i64!("strlen", vec![path_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), path_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_path".to_string(), func);
+        }
+
+        // --- http_request_body(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_body", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let c_fn = *self.functions.get("aha_http_request_body").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "body_ptr").unwrap();
+            let body_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let str_len = call_c_i64!("strlen", vec![body_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), body_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_body".to_string(), func);
+        }
+
+        // --- http_request_header(req: String, name: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_header", string_type.fn_type(&[string_type.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let name_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let name_ptr = self.builder.build_extract_value(name_struct, 0, "name_ptr").unwrap().into_pointer_value();
+            let c_fn = *self.functions.get("aha_http_request_header").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_ptr.into(), name_ptr.into()], "header_ptr").unwrap();
+            let header_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let str_len = call_c_i64!("strlen", vec![header_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), header_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_header".to_string(), func);
+        }
+
+        // --- http_response(status: int, body: String) -> String ---
+        {
+            let func = self.module.add_function("http_response", string_type.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let status = func.get_nth_param(0).unwrap().into_int_value();
+            let body_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let body_ptr = self.builder.build_extract_value(body_struct, 0, "body_ptr").unwrap().into_pointer_value();
+            let c_fn = *self.functions.get("aha_http_response").unwrap();
+            let result = self.builder.build_call(c_fn, &[status.into(), body_ptr.into()], "resp_ptr").unwrap();
+            let resp_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let str_len = call_c_i64!("strlen", vec![resp_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), resp_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_response".to_string(), func);
+        }
+    }
+
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
@@ -3918,6 +4129,38 @@ impl<'ctx> CodeGenerator<'ctx> {
         // inet_ntoa(addr_ptr: i8*) -> i64
         let inet_ntoa_fn = self.module.add_function("inet_ntoa", i64_t.fn_type(&[i8_ptr.into()], false), None);
         self.functions.insert("inet_ntoa".to_string(), inet_ntoa_fn);
+    }
+
+    // Declare HTTP parser runtime functions (Rust #[no_mangle] in runtime.rs)
+    fn declare_http_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        // aha_http_request_method(req: i8*) -> i8*
+        let fn_req_method = self.module.add_function("aha_http_request_method", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        self.functions.insert("aha_http_request_method".to_string(), fn_req_method);
+        // aha_http_request_path(req: i8*) -> i8*
+        let fn_req_path = self.module.add_function("aha_http_request_path", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        self.functions.insert("aha_http_request_path".to_string(), fn_req_path);
+        // aha_http_request_body(req: i8*) -> i8*
+        let fn_req_body = self.module.add_function("aha_http_request_body", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        self.functions.insert("aha_http_request_body".to_string(), fn_req_body);
+        // aha_http_request_header(req: i8*, name: i8*) -> i8*
+        let fn_req_header = self.module.add_function("aha_http_request_header", i8_ptr.fn_type(&[i8_ptr.into(), i8_ptr.into()], false), None);
+        self.functions.insert("aha_http_request_header".to_string(), fn_req_header);
+        // aha_http_response(status: i64, body: i8*) -> i8*
+        let fn_response = self.module.add_function("aha_http_response", i8_ptr.fn_type(&[i64_t.into(), i8_ptr.into()], false), None);
+        self.functions.insert("aha_http_response".to_string(), fn_response);
+
+        // AHA! builtin return types for type inference
+        self.fn_types.insert("http_listen".to_string(), AhaType::Int);
+        self.fn_types.insert("http_accept".to_string(), AhaType::Int);
+        self.fn_types.insert("http_recv".to_string(), AhaType::String);
+        self.fn_types.insert("http_send".to_string(), AhaType::Int);
+        self.fn_types.insert("http_request_method".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_path".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_body".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_header".to_string(), AhaType::String);
+        self.fn_types.insert("http_response".to_string(), AhaType::String);
     }
 
     /// Type-checked infix operator compilation
@@ -4398,6 +4641,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
             return self.compile_socket_call(func_name.as_str(), call);
         }
+        // F11 HTTP Server builtins
+        if matches!(func_name.as_str(), "http_listen" | "http_accept" | "http_recv" | "http_send" | "http_request_method" | "http_request_path" | "http_request_body" | "http_request_header" | "http_response") {
+            return self.compile_http_call(func_name.as_str(), call);
+        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4495,6 +4742,28 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "ip4_str" {
             return Ok(TypedValue::string(val));
         }
+        Ok(TypedValue::int(val))
+    }
+
+    // F11: Dispatch HTTP builtin calls.
+    fn compile_http_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("HTTP builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("HTTP builtin '{}' did not return a value", func_name))?;
+        // HTTP builtins that return String: http_recv, http_request_method/path/body/header, http_response
+        if matches!(func_name, "http_recv" | "http_request_method" | "http_request_path" | "http_request_body" | "http_request_header" | "http_response") {
+            return Ok(TypedValue::string(val));
+        }
+        // http_listen, http_accept, http_send return int
         Ok(TypedValue::int(val))
     }
 
@@ -5858,6 +6127,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         if let Some(f) = self.module.get_function("actor_call") {
             execution_engine.add_global_mapping(&f, crate::runtime::actor_call as usize);
+        }
+
+        // F11 HTTP runtime functions
+        if let Some(f) = self.module.get_function("aha_http_request_method") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_method as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_path") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_path as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_body") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_body as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_header") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_header as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_response") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_response as usize);
         }
 
         let function_name = "main";

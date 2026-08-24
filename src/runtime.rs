@@ -116,3 +116,127 @@ pub extern "C" fn actor_call(handle: i64, msg: i64) -> i64 {
     }
     guard.unwrap_or(0)
 }
+
+// ===========================================================================
+// F11 HTTP Parser — native functions for HTTP request/response handling
+// ===========================================================================
+
+/// Parse HTTP method from request string. Returns pointer to static buffer.
+/// # Safety
+/// req must be a valid null-terminated UTF-8 string from AHA! String.
+#[no_mangle]
+pub extern "C" fn aha_http_request_method(req: i64) -> i64 {
+    let req_str = unsafe {
+        let ptr = req as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let method = match req_str.split_once(' ') {
+        Some((m, _)) => m,
+        None => return 0,
+    };
+    // Leak a Rust String so the pointer stays valid until next call
+    let boxed = method.to_string().into_boxed_str();
+    let ptr = Box::into_raw(boxed) as i64;
+    ptr
+}
+
+/// Parse HTTP path from request string. Returns pointer to static buffer.
+/// # Safety
+/// req must be a valid null-terminated UTF-8 string from AHA! String.
+#[no_mangle]
+pub extern "C" fn aha_http_request_path(req: i64) -> i64 {
+    let req_str = unsafe {
+        let ptr = req as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let path = match req_str.split_once(' ') {
+        Some((_, rest)) => match rest.split_once(' ') {
+            Some((p, _)) => p,
+            None => return 0,
+        },
+        None => return 0,
+    };
+    let boxed = path.to_string().into_boxed_str();
+    Box::into_raw(boxed) as i64
+}
+
+/// Parse HTTP body from request string (everything after \r\n\r\n).
+/// # Safety
+/// req must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub extern "C" fn aha_http_request_body(req: i64) -> i64 {
+    let req_str = unsafe {
+        let ptr = req as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let body = match req_str.split_once("\r\n\r\n") {
+        Some((_, b)) => b,
+        None => "",
+    };
+    let boxed = body.to_string().into_boxed_str();
+    Box::into_raw(boxed) as i64
+}
+
+/// Find header value by name (case-insensitive).
+/// # Safety
+/// req and name must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub extern "C" fn aha_http_request_header(req: i64, name: i64) -> i64 {
+    let req_str = unsafe {
+        let ptr = req as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let name_str = unsafe {
+        let ptr = name as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let name_lower = name_str.to_lowercase();
+    for line in req_str.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().to_lowercase() == name_lower {
+                let val = v.trim();
+                let boxed = val.to_string().into_boxed_str();
+                return Box::into_raw(boxed) as i64;
+            }
+        }
+    }
+    let empty = "".to_string().into_boxed_str();
+    Box::into_raw(empty) as i64
+}
+
+/// Build HTTP response string from status code and body.
+/// # Safety
+/// body must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub extern "C" fn aha_http_response(status: i64, body: i64) -> i64 {
+    let body_str = unsafe {
+        let ptr = body as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let status_text = match status {
+        200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let resp = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status, status_text, body_str.len(), body_str
+    );
+    let boxed = resp.into_boxed_str();
+    Box::into_raw(boxed) as i64
+}
