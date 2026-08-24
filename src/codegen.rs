@@ -6290,6 +6290,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             execution_engine.add_global_mapping(&f, crate::runtime::aha_http_response as usize);
         }
 
+        // F12 JSON runtime functions
+        if let Some(f) = self.module.get_function("aha_json_parse") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_parse as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_stringify") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_stringify as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_get") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_get as usize);
+        }
+
         let function_name = "main";
         let _function = self.module.get_function(function_name)
             .ok_or_else(|| format!("Function '{}' not found", function_name))?;
