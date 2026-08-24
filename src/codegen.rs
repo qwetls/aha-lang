@@ -3550,7 +3550,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
             let _ = self.builder.build_store(sa_ptr, or1);
             // bind(fd, &sa, 16)
-            let _ = call_c_i64!("bind", vec![fd.into(), sa_i8.into(), i64_t.const_int(16, false).into()]);
+            let _ = call_c_i64!("bind", vec![fd.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
             // listen(fd, 128)
             let _ = call_c_i64!("listen", vec![fd.into(), i64_t.const_int(128, false).into(), zero.into()]);
             self.builder.build_return(Some(&fd)).unwrap();
@@ -3572,7 +3572,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let len_buf = self.builder.build_alloca(i64_t, "len_buf").unwrap();
             let _ = self.builder.build_store(len_buf, i64_t.const_int(16, false));
             let len_i8 = self.builder.build_bitcast(len_buf, i8_ptr, "len_i8").unwrap();
-            let fd = call_c_i64!("accept", vec![server_fd.into(), sa_i8.into(), len_i8.into()]);
+            let fd = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
             self.builder.build_return(Some(&fd)).unwrap();
             self.functions.insert("http_accept".to_string(), func);
         }
@@ -3587,11 +3587,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let buf_size = i64_t.const_int(65536, false);
             let buf = self.builder.build_alloca(i8_type.array_type(65536), "recv_buf").unwrap();
             let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap();
-            // recv(fd, buf, 65536, 0)
-            let flags = i64_t.const_int(0, false);
-            let n = call_c_i64!("recv", vec![fd.into(), buf_i8.into(), buf_size.into(), flags.into()]);
-            // Build string: {ptr, len}
             let buf_as_i64 = self.builder.build_ptr_to_int(buf_i8, i64_t, "buf_as_i64").unwrap();
+            // recv(fd, buf, 65536) — recv declared with 3 args, no flags
+            let n = call_c_i64!("recv", vec![fd.into(), buf_as_i64.into(), buf_size.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), buf_i8, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, n, 1, "str_len").unwrap();
             self.builder.build_return(Some(&str_struct)).unwrap();
@@ -3607,9 +3605,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             let data_struct = func.get_nth_param(1).unwrap().into_struct_value();
             let data_ptr = self.builder.build_extract_value(data_struct, 0, "data_ptr").unwrap().into_pointer_value();
             let data_len = self.builder.build_extract_value(data_struct, 1, "data_len").unwrap().into_int_value();
-            // send(fd, data_ptr, data_len, 0)
-            let flags = i64_t.const_int(0, false);
-            let sent = call_c_i64!("send", vec![fd.into(), data_ptr.into(), data_len.into(), flags.into()]);
+            // send(fd, data_ptr, data_len) — send declared with 3 args
+            let sent = call_c_i64!("send", vec![fd.into(), data_ptr.into(), data_len.into()]);
             self.builder.build_return(Some(&sent)).unwrap();
             self.functions.insert("http_send".to_string(), func);
         }
@@ -3621,10 +3618,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
             let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
-            // Call runtime: aha_http_request_method(req_ptr) -> i8*
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
+            // Call runtime: aha_http_request_method(req_i64) -> i64
             let c_fn = *self.functions.get("aha_http_request_method").unwrap();
-            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "method_ptr").unwrap();
-            let method_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "method_ptr").unwrap();
+            let method_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "method_ptr_ptr").unwrap();
             // Build string: {ptr, len} — need strlen
             let str_len = call_c_i64!("strlen", vec![method_ptr.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), method_ptr, 0, "str_ptr").unwrap();
@@ -3640,9 +3638,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
             let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
             let c_fn = *self.functions.get("aha_http_request_path").unwrap();
-            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "path_ptr").unwrap();
-            let path_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "path_ptr").unwrap();
+            let path_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "path_ptr_ptr").unwrap();
             let str_len = call_c_i64!("strlen", vec![path_ptr.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), path_ptr, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
@@ -3657,9 +3656,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
             let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
             let c_fn = *self.functions.get("aha_http_request_body").unwrap();
-            let result = self.builder.build_call(c_fn, &[req_ptr.into()], "body_ptr").unwrap();
-            let body_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "body_ptr").unwrap();
+            let body_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "body_ptr_ptr").unwrap();
             let str_len = call_c_i64!("strlen", vec![body_ptr.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), body_ptr, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
@@ -3674,11 +3674,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
             let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
             let name_struct = func.get_nth_param(1).unwrap().into_struct_value();
             let name_ptr = self.builder.build_extract_value(name_struct, 0, "name_ptr").unwrap().into_pointer_value();
+            let name_i64 = self.builder.build_ptr_to_int(name_ptr, i64_t, "name_i64").unwrap();
             let c_fn = *self.functions.get("aha_http_request_header").unwrap();
-            let result = self.builder.build_call(c_fn, &[req_ptr.into(), name_ptr.into()], "header_ptr").unwrap();
-            let header_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let result = self.builder.build_call(c_fn, &[req_i64.into(), name_i64.into()], "header_ptr").unwrap();
+            let header_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "header_ptr_ptr").unwrap();
             let str_len = call_c_i64!("strlen", vec![header_ptr.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), header_ptr, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
@@ -3694,9 +3696,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let status = func.get_nth_param(0).unwrap().into_int_value();
             let body_struct = func.get_nth_param(1).unwrap().into_struct_value();
             let body_ptr = self.builder.build_extract_value(body_struct, 0, "body_ptr").unwrap().into_pointer_value();
+            let body_i64 = self.builder.build_ptr_to_int(body_ptr, i64_t, "body_i64").unwrap();
             let c_fn = *self.functions.get("aha_http_response").unwrap();
-            let result = self.builder.build_call(c_fn, &[status.into(), body_ptr.into()], "resp_ptr").unwrap();
-            let resp_ptr = result.try_as_basic_value().left().unwrap().into_pointer_value();
+            let result = self.builder.build_call(c_fn, &[status.into(), body_i64.into()], "resp_ptr").unwrap();
+            let resp_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "resp_ptr_ptr").unwrap();
             let str_len = call_c_i64!("strlen", vec![resp_ptr.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), resp_ptr, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
@@ -4134,21 +4137,24 @@ impl<'ctx> CodeGenerator<'ctx> {
     // Declare HTTP parser runtime functions (Rust #[no_mangle] in runtime.rs)
     fn declare_http_runtime(&mut self) {
         let i64_t = self.i64_type;
-        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
-        // aha_http_request_method(req: i8*) -> i8*
-        let fn_req_method = self.module.add_function("aha_http_request_method", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        // Rust extern "C" functions take i64 (raw pointer as integer) and return i64.
+        // All params/return are i64 to match the actual ABI.
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        // aha_http_request_method(req: i64) -> i64
+        let fn_req_method = self.module.add_function("aha_http_request_method", fn_type_i64_1, None);
         self.functions.insert("aha_http_request_method".to_string(), fn_req_method);
-        // aha_http_request_path(req: i8*) -> i8*
-        let fn_req_path = self.module.add_function("aha_http_request_path", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        // aha_http_request_path(req: i64) -> i64
+        let fn_req_path = self.module.add_function("aha_http_request_path", fn_type_i64_1, None);
         self.functions.insert("aha_http_request_path".to_string(), fn_req_path);
-        // aha_http_request_body(req: i8*) -> i8*
-        let fn_req_body = self.module.add_function("aha_http_request_body", i8_ptr.fn_type(&[i8_ptr.into()], false), None);
+        // aha_http_request_body(req: i64) -> i64
+        let fn_req_body = self.module.add_function("aha_http_request_body", fn_type_i64_1, None);
         self.functions.insert("aha_http_request_body".to_string(), fn_req_body);
-        // aha_http_request_header(req: i8*, name: i8*) -> i8*
-        let fn_req_header = self.module.add_function("aha_http_request_header", i8_ptr.fn_type(&[i8_ptr.into(), i8_ptr.into()], false), None);
+        // aha_http_request_header(req: i64, name: i64) -> i64
+        let fn_req_header = self.module.add_function("aha_http_request_header", fn_type_i64_2, None);
         self.functions.insert("aha_http_request_header".to_string(), fn_req_header);
-        // aha_http_response(status: i64, body: i8*) -> i8*
-        let fn_response = self.module.add_function("aha_http_response", i8_ptr.fn_type(&[i64_t.into(), i8_ptr.into()], false), None);
+        // aha_http_response(status: i64, body: i64) -> i64
+        let fn_response = self.module.add_function("aha_http_response", fn_type_i64_2, None);
         self.functions.insert("aha_http_response".to_string(), fn_response);
 
         // AHA! builtin return types for type inference
