@@ -4824,18 +4824,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }};
         }
 
-        // --- json_parse(json_string: string) -> int (handle) ---
+        // --- json_parse(json_string: i64) -> i64 (handle) ---
         {
             let func = self.module.add_function("json_parse", i64_t.fn_type(&[i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let json_str = func.get_nth_param(0).unwrap().into_int_value();
-            // json_str is i64 representing a pointer to {i8*, i64} struct
-            let json_ptr = self.builder.build_int_to_ptr(json_str, i8_ptr, "json_ptr").unwrap();
-            let str_gep = self.builder.build_struct_gep(json_ptr, 0, "str_ptr_gep").unwrap();
-            let str_ptr = self.builder.build_load(str_gep, "str_ptr").unwrap().into_pointer_value();
-            let ptr_as_i64 = self.builder.build_ptr_to_int(str_ptr, i64_t, "ptr_i64").unwrap();
-            let handle = call_c_i64!("aha_json_parse", vec![ptr_as_i64.into()]);
+            // compile_json_call already extracts the i8* ptr and converts to i64
+            let handle = call_c_i64!("aha_json_parse", vec![json_str.into()]);
             self.builder.build_return(Some(&handle)).unwrap();
             self.functions.insert("json_parse".to_string(), func);
         }
@@ -4859,18 +4855,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.functions.insert("json_stringify".to_string(), func);
         }
 
-        // --- json_get(handle: int, path: string) -> string ---
+        // --- json_get(handle: i64, path: i64) -> string ---
         {
             let func = self.module.add_function("json_get", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
-            let path_struct = func.get_nth_param(1).unwrap().into_int_value();
-            // path_struct is i64 representing a pointer to {i8*, i64} struct
-            let path_ptr_raw = self.builder.build_int_to_ptr(path_struct, i8_ptr, "path_raw").unwrap();
-            let path_gep = self.builder.build_struct_gep(path_ptr_raw, 0, "path_ptr_gep").unwrap();
-            let path_ptr = self.builder.build_load(path_gep, "path_ptr").unwrap().into_pointer_value();
-            let path_i64 = self.builder.build_ptr_to_int(path_ptr, i64_t, "path_i64").unwrap();
+            let path_i64 = func.get_nth_param(1).unwrap().into_int_value();
+            // compile_json_call already extracts the path i8* and converts to i64
             let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
