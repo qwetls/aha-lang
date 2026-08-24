@@ -4845,13 +4845,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result_ptr = call_c_i64!("aha_json_stringify", vec![handle.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
-            let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
-            let ptr_gep = self.builder.build_struct_gep(str_struct, 0, "ptr_gep").unwrap();
-            let _ = self.builder.build_store(ptr_gep, ptr_val);
-            let len_gep = self.builder.build_struct_gep(str_struct, 1, "len_gep").unwrap();
-            let _ = self.builder.build_store(len_gep, len);
-            let loaded = self.builder.build_load(str_struct, "str_val").unwrap();
-            self.builder.build_return(Some(&loaded)).unwrap();
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
             self.functions.insert("json_stringify".to_string(), func);
         }
 
@@ -4866,13 +4862,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
-            let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
-            let ptr_gep = self.builder.build_struct_gep(str_struct, 0, "ptr_gep").unwrap();
-            let _ = self.builder.build_store(ptr_gep, ptr_val);
-            let len_gep = self.builder.build_struct_gep(str_struct, 1, "len_gep").unwrap();
-            let _ = self.builder.build_store(len_gep, len);
-            let loaded = self.builder.build_load(str_struct, "str_val").unwrap();
-            self.builder.build_return(Some(&loaded)).unwrap();
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
             self.functions.insert("json_get".to_string(), func);
         }
     }
