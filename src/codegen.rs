@@ -4830,8 +4830,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let json_str = func.get_nth_param(0).unwrap().into_int_value();
-            // String is {i8*, i64}. Extract the ptr field (index 0).
-            let str_gep = self.builder.build_struct_gep(string_type, json_str.into_pointer_value(), 0, "str_ptr_gep").unwrap();
+            let str_gep = self.builder.build_struct_gep(json_str.into_pointer_value(), 0, "str_ptr_gep").unwrap();
             let str_ptr = self.builder.build_load(str_gep, "str_ptr").unwrap().into_pointer_value();
             let ptr_as_i64 = self.builder.build_ptr_to_int(str_ptr, i64_t, "ptr_i64").unwrap();
             let handle = call_c_i64!("aha_json_parse", vec![ptr_as_i64.into()]);
@@ -4849,9 +4848,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
             let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
-            let ptr_gep = self.builder.build_struct_gep(string_type, str_struct, 0, "ptr_gep").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(str_struct, 0, "ptr_gep").unwrap();
             let _ = self.builder.build_store(ptr_gep, ptr_val);
-            let len_gep = self.builder.build_struct_gep(string_type, str_struct, 1, "len_gep").unwrap();
+            let len_gep = self.builder.build_struct_gep(str_struct, 1, "len_gep").unwrap();
             let _ = self.builder.build_store(len_gep, len);
             let loaded = self.builder.build_load(str_struct, "str_val").unwrap();
             self.builder.build_return(Some(&loaded)).unwrap();
@@ -4865,16 +4864,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
             let path_struct = func.get_nth_param(1).unwrap().into_int_value();
-            let path_gep = self.builder.build_struct_gep(string_type, path_struct.into_pointer_value(), 0, "path_ptr_gep").unwrap();
+            let path_gep = self.builder.build_struct_gep(path_struct.into_pointer_value(), 0, "path_ptr_gep").unwrap();
             let path_ptr = self.builder.build_load(path_gep, "path_ptr").unwrap().into_pointer_value();
             let path_i64 = self.builder.build_ptr_to_int(path_ptr, i64_t, "path_i64").unwrap();
             let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
             let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
-            let ptr_gep = self.builder.build_struct_gep(string_type, str_struct, 0, "ptr_gep").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(str_struct, 0, "ptr_gep").unwrap();
             let _ = self.builder.build_store(ptr_gep, ptr_val);
-            let len_gep = self.builder.build_struct_gep(string_type, str_struct, 1, "len_gep").unwrap();
+            let len_gep = self.builder.build_struct_gep(str_struct, 1, "len_gep").unwrap();
             let _ = self.builder.build_store(len_gep, len);
             let loaded = self.builder.build_load(str_struct, "str_val").unwrap();
             self.builder.build_return(Some(&loaded)).unwrap();
