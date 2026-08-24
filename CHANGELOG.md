@@ -2,6 +2,25 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.5] — 2026-08-24
+
+### Added
+
+- **HTTP Server — Web server builtins (Roadmap Phase 11):**
+  - 9 HTTP builtins: `http_listen`, `http_accept`, `http_recv`, `http_send`, `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`.
+  - `http_listen(port)` — creates TCP server socket, returns fd.
+  - `http_accept(server)` — accepts incoming connection, returns client fd.
+  - `http_recv(fd)` — reads raw HTTP request into String.
+  - `http_send(fd, data)` — sends raw bytes to client.
+  - `http_request_method(req)` — parses HTTP method ("GET", "POST", etc.).
+  - `http_request_path(req)` — parses request path ("/api/data").
+  - `http_request_body(req)` — extracts body after `\r\n\r\n`.
+  - `http_request_header(req, name)` — case-insensitive header lookup.
+  - `http_response(status, body)` — builds complete HTTP/1.1 response with Content-Type, Content-Length, Connection: close.
+  - Rust runtime: 5 parser/builder functions in `src/runtime.rs`.
+  - Codegen: `declare_http_runtime()` + `create_http_builtins()` + `compile_http_call()` dispatch.
+  - 10 compile-only tests in `tests/http_server.rs` covering all builtins + full server pattern.
+
 ## [1.6.4] — 2026-08-22
 
 ### Added

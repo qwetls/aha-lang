@@ -139,7 +139,7 @@ kompromi.
 | **F8** | FFI — `extern fn` + `RawPtr` | ✅ Selesai (v1.6.1) — `extern fn`, `*void`, string→ptr coercion, JIT calls |
 | **F9** | Error Handling — `Result<T,E>` | ✅ Selesai (v1.6.3) — `Result<T,E>`, `ok()`/`err()`, `?` operator |
 | **F10** | TCP/UDP Sockets — network builtins | ✅ Selesai (v1.6.4) — 12 socket builtins, C runtime, 9 tests |
-| **F11** | HTTP Server — builtins | ⏳ Setelah F10 |
+| **F11** | HTTP Server — builtins | ✅ Selesai (v1.6.5) — 9 HTTP builtins, 5 runtime functions, 10 tests |
 | **F12** | JSON Parser/Serializer | ⏳ Setelah F11 |
 | **F13** | Async I/O | ⏳ Setelah F12 |
 | **F14** | Game Engine foundations | ⏳ Setelah web backend stabil |
@@ -338,13 +338,16 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] LLVM IR type matching — `i64_ptr`/`i8_ptr` in declarations
 - [x] 9 compile-only tests (`tests/tcp_udp.rs`)
 
-### ⏳ F11. HTTP Server — builtins
-- [ ] HTTP request parser builtins
-- [ ] HTTP response builder builtins
-- [ ] `http_listen(port)` — bind + listen via TCP socket
-- [ ] `http_accept(server_fd)` — accept connection
-- [ ] `http_recv_request(fd)` — parse HTTP request
-- [ ] `http_send_response(fd, status, headers, body)` — send HTTP response
+### ✅ F11. HTTP Server — builtins (v1.6.5)
+- [x] HTTP request parser builtins — `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`
+- [x] HTTP response builder — `http_response(status, body)` generates HTTP/1.1 response with headers
+- [x] `http_listen(port)` — bind + listen via TCP socket
+- [x] `http_accept(server_fd)` — accept connection
+- [x] `http_recv(fd)` — read raw HTTP request into String
+- [x] `http_send(fd, data)` — send raw bytes to client
+- [x] Rust runtime: 5 parser/builder functions (`src/runtime.rs`)
+- [x] Codegen: `declare_http_runtime()` + `create_http_builtins()` + `compile_http_call()` dispatch
+- [x] 10 compile-only tests (`tests/http_server.rs`)
 
 ### ⏳ F7. Self-hosting
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa) — long-term
