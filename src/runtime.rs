@@ -138,7 +138,7 @@ pub extern "C" fn aha_http_request_method(req: i64) -> i64 {
     };
     // Leak a Rust String so the pointer stays valid until next call
     let boxed = method.to_string().into_boxed_str();
-    let ptr = Box::into_raw(boxed) as i64;
+    let ptr = Box::into_raw(boxed) as *mut u8 as i64;
     ptr
 }
 
@@ -161,7 +161,7 @@ pub extern "C" fn aha_http_request_path(req: i64) -> i64 {
         None => return 0,
     };
     let boxed = path.to_string().into_boxed_str();
-    Box::into_raw(boxed) as i64
+    Box::into_raw(boxed) as *mut u8 as i64
 }
 
 /// Parse HTTP body from request string (everything after \r\n\r\n).
@@ -180,7 +180,7 @@ pub extern "C" fn aha_http_request_body(req: i64) -> i64 {
         None => "",
     };
     let boxed = body.to_string().into_boxed_str();
-    Box::into_raw(boxed) as i64
+    Box::into_raw(boxed) as *mut u8 as i64
 }
 
 /// Find header value by name (case-insensitive).
@@ -206,12 +206,12 @@ pub extern "C" fn aha_http_request_header(req: i64, name: i64) -> i64 {
             if k.trim().to_lowercase() == name_lower {
                 let val = v.trim();
                 let boxed = val.to_string().into_boxed_str();
-                return Box::into_raw(boxed) as i64;
+                return Box::into_raw(boxed) as *mut u8 as i64;
             }
         }
     }
     let empty = "".to_string().into_boxed_str();
-    Box::into_raw(empty) as i64
+    Box::into_raw(empty) as *mut u8 as i64
 }
 
 /// Build HTTP response string from status code and body.
@@ -238,5 +238,5 @@ pub extern "C" fn aha_http_response(status: i64, body: i64) -> i64 {
         status, status_text, body_str.len(), body_str
     );
     let boxed = resp.into_boxed_str();
-    Box::into_raw(boxed) as i64
+    Box::into_raw(boxed) as *mut u8 as i64
 }

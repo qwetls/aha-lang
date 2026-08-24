@@ -3588,7 +3588,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Allocate 64KB buffer
             let buf_size = i64_t.const_int(65536, false);
             let buf = self.builder.build_alloca(i8_type.array_type(65536), "recv_buf").unwrap();
-            let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap();
+            let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap().into_pointer_value();
             let buf_as_i64 = self.builder.build_ptr_to_int(buf_i8, i64_t, "buf_as_i64").unwrap();
             // recv(fd, buf, 65536) — recv declared with 3 args, no flags
             let n = call_c_i64!("recv", vec![fd.into(), buf_as_i64.into(), buf_size.into()]);
