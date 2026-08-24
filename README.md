@@ -13,7 +13,7 @@ A modern programming language with an LLVM backend — designed to be understood
 [![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-591%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
+[![Tests](https://img.shields.io/badge/tests-598%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -34,6 +34,7 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **⚠️ Error Handling:** `Result<T, E>` built-in type with `ok()`/`err()` constructors and `?` postfix operator for early return on error — no exception overhead, deterministic control flow.
 - **🌐 TCP/UDP Sockets:** 12 built-in network primitives (`tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`) — networking without external libraries.
 - **🌍 HTTP Server:** 9 built-in HTTP primitives (`http_listen`, `http_accept`, `http_recv`, `http_send`, `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`) — build web servers in pure AHA! code, no frameworks needed.
+- **📋 JSON Parser/Serializer:** 3 built-in JSON primitives (`json_parse`, `json_stringify`, `json_get`) — parse JSON strings, serialize data, navigate by dot-path (`"user.name"`, `"items.0"`). Full support for objects, arrays, strings, numbers, booleans, null.
 - **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 600+ tests on every commit.
 
 ---

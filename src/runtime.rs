@@ -455,7 +455,7 @@ fn json_value_to_string(val: &JsonValue) -> String {
         JsonValue::Null => "null".to_string(),
         JsonValue::Bool(b) => b.to_string(),
         JsonValue::Number(n) => {
-            if *n == (*n as i64) as f64 && n.is_finite() {
+            if n.is_finite() && n.fract() == 0.0 && *n >= i64::MIN as f64 && *n <= i64::MAX as f64 {
                 format!("{}", *n as i64)
             } else {
                 format!("{}", n)
@@ -467,8 +467,10 @@ fn json_value_to_string(val: &JsonValue) -> String {
             format!("[{}]", items.join(","))
         }
         JsonValue::Object(map) => {
-            let pairs: Vec<String> = map.iter()
-                .map(|(k, v)| format!("{}:{}", json_escape_str(k), json_value_to_string(v)))
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let pairs: Vec<String> = keys.iter()
+                .map(|k| format!("{}:{}", json_escape_str(k), json_value_to_string(map.get(*k).unwrap())))
                 .collect();
             format!("{{{}}}", pairs.join(","))
         }
@@ -492,15 +494,14 @@ fn navigate_json<'a>(val: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
     Some(current)
 }
 
-/// json_parse(json_string) -> handle (pointer to JsonValue tree)
+/// json_parse(json_ptr, json_len) -> handle (pointer to JsonValue tree)
 /// # Safety
-/// json_string must be a valid null-terminated UTF-8 string from AHA! String.
+/// json_ptr must point to valid UTF-8 bytes, json_len must be correct.
 #[no_mangle]
-pub extern "C" fn aha_json_parse(json_string: i64) -> i64 {
+pub extern "C" fn aha_json_parse(json_ptr: i64, json_len: i64) -> i64 {
     let input = unsafe {
-        let ptr = json_string as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
+        let ptr = json_ptr as *const u8;
+        let len = json_len as usize;
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
     };
     let mut tok = JsonTokenizer::new(input);
@@ -525,21 +526,20 @@ pub extern "C" fn aha_json_stringify(handle: i64) -> i64 {
     Box::into_raw(boxed) as *mut u8 as i64
 }
 
-/// json_get(handle, path) -> String representation of value at path.
+/// json_get(handle, path_ptr, path_len) -> String representation of value at path.
 /// Path is dot-separated: "user.name", "items.0".
 /// # Safety
-/// handle must be a valid pointer from json_parse.
+/// handle must be a valid pointer from json_parse. path_ptr must point to valid UTF-8.
 #[no_mangle]
-pub extern "C" fn aha_json_get(handle: i64, path: i64) -> i64 {
+pub extern "C" fn aha_json_get(handle: i64, path_ptr: i64, path_len: i64) -> i64 {
     if handle == 0 {
         let empty = "".to_string().into_boxed_str();
         return Box::into_raw(empty) as *mut u8 as i64;
     }
     let val = unsafe { &*(handle as *const JsonValue) };
     let path_str = unsafe {
-        let ptr = path as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
+        let ptr = path_ptr as *const u8;
+        let len = path_len as usize;
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
     };
     match navigate_json(val, path_str) {
@@ -556,4 +556,15 @@ pub extern "C" fn aha_json_get(handle: i64, path: i64) -> i64 {
             Box::into_raw(empty) as *mut u8 as i64
         }
     }
+}
+
+/// Recursively free a JsonValue tree.
+/// # Safety
+/// handle must be a valid pointer from json_parse, or 0 (no-op).
+#[no_mangle]
+pub extern "C" fn aha_json_free(handle: i64) -> i64 {
+    if handle != 0 {
+        unsafe { drop(Box::from_raw(handle as *mut JsonValue)); }
+    }
+    0
 }

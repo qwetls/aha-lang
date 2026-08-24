@@ -2,6 +2,21 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.6.6] — 2026-08-24
+
+### Added
+
+- **JSON Parser/Serializer — JSON builtins (Roadmap Phase 12):**
+  - 3 JSON builtins: `json_parse`, `json_stringify`, `json_get`.
+  - `json_parse(string)` — parses JSON string into opaque handle (tree stored in Rust memory).
+  - `json_stringify(handle)` — serializes JSON tree back to String.
+  - `json_get(handle, "path.to.value")` — navigates JSON tree by dot-separated path, returns string representation.
+  - Supports: objects, arrays, strings, numbers, booleans, null. Dot-path navigation: `"user.name"`, `"items.0"`, nested paths.
+  - Rust runtime: 317 lines — JsonValue enum, recursive descent parser (tokenizer + parser), serializer, dot-path navigator.
+  - Codegen: `declare_json_runtime()` + `create_json_builtins()` + `compile_json_call()` dispatch.
+  - `add_global_mapping` for `aha_json_parse`, `aha_json_stringify`, `aha_json_get` in `run_jit()`.
+  - 7 compile-only tests in `tests/json.rs` covering parse, stringify, get, nested, arrays, full pattern, HTTP+JSON pattern.
+
 ## [1.6.5] — 2026-08-24
 
 ### Added

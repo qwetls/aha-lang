@@ -4656,7 +4656,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.compile_http_call(func_name.as_str(), call);
         }
         // F12 JSON builtins
-        if matches!(func_name.as_str(), "json_parse" | "json_stringify" | "json_get") {
+        if matches!(func_name.as_str(), "json_parse" | "json_stringify" | "json_get" | "json_free") {
             return self.compile_json_call(func_name.as_str(), call);
         }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
@@ -4788,15 +4788,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i64_t = self.i64_type;
         let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
         let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
-        // aha_json_parse(json_string: i64) -> i64
-        let fn_parse = self.module.add_function("aha_json_parse", fn_type_i64_1, None);
+        let fn_type_i64_3 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // aha_json_parse(json_ptr: i64, json_len: i64) -> i64
+        let fn_parse = self.module.add_function("aha_json_parse", fn_type_i64_2, None);
         self.functions.insert("aha_json_parse".to_string(), fn_parse);
         // aha_json_stringify(handle: i64) -> i64
         let fn_stringify = self.module.add_function("aha_json_stringify", fn_type_i64_1, None);
         self.functions.insert("aha_json_stringify".to_string(), fn_stringify);
-        // aha_json_get(handle: i64, path: i64) -> i64
-        let fn_get = self.module.add_function("aha_json_get", fn_type_i64_2, None);
+        // aha_json_get(handle: i64, path_ptr: i64, path_len: i64) -> i64
+        let fn_get = self.module.add_function("aha_json_get", fn_type_i64_3, None);
         self.functions.insert("aha_json_get".to_string(), fn_get);
+        // aha_json_free(handle: i64) -> i64
+        let fn_free = self.module.add_function("aha_json_free", fn_type_i64_1, None);
+        self.functions.insert("aha_json_free".to_string(), fn_free);
 
         // AHA! builtin return types for type inference
         self.fn_types.insert("json_parse".to_string(), AhaType::Int); // handle
@@ -4824,14 +4828,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }};
         }
 
-        // --- json_parse(json_string: i64) -> i64 (handle) ---
+        // --- json_parse(json_ptr: i64, json_len: i64) -> i64 (handle) ---
         {
-            let func = self.module.add_function("json_parse", i64_t.fn_type(&[i64_t.into()], false), None);
+            let func = self.module.add_function("json_parse", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
-            let json_str = func.get_nth_param(0).unwrap().into_int_value();
-            // compile_json_call already extracts the i8* ptr and converts to i64
-            let handle = call_c_i64!("aha_json_parse", vec![json_str.into()]);
+            let json_ptr = func.get_nth_param(0).unwrap().into_int_value();
+            let json_len = func.get_nth_param(1).unwrap().into_int_value();
+            let handle = call_c_i64!("aha_json_parse", vec![json_ptr.into(), json_len.into()]);
             self.builder.build_return(Some(&handle)).unwrap();
             self.functions.insert("json_parse".to_string(), func);
         }
@@ -4851,21 +4855,32 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.functions.insert("json_stringify".to_string(), func);
         }
 
-        // --- json_get(handle: i64, path: i64) -> string ---
+        // --- json_get(handle: i64, path_ptr: i64, path_len: i64) -> string ---
         {
-            let func = self.module.add_function("json_get", string_type.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let func = self.module.add_function("json_get", string_type.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
-            let path_i64 = func.get_nth_param(1).unwrap().into_int_value();
-            // compile_json_call already extracts the path i8* and converts to i64
-            let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
+            let path_ptr = func.get_nth_param(1).unwrap().into_int_value();
+            let path_len = func.get_nth_param(2).unwrap().into_int_value();
+            let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_ptr.into(), path_len.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
             self.builder.build_return(Some(&str_struct)).unwrap();
             self.functions.insert("json_get".to_string(), func);
+        }
+
+        // --- json_free(handle: int) -> int ---
+        {
+            let func = self.module.add_function("json_free", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let result = call_c_i64!("aha_json_free", vec![handle.into()]);
+            self.builder.build_return(Some(&result)).unwrap();
+            self.functions.insert("json_free".to_string(), func);
         }
     }
 
@@ -4878,20 +4893,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         let i8_ptr = i8_type.ptr_type(AddressSpace::default());
         let string_type = self.string_type;
 
+        // json_free is a simple single-arg call
+        if func_name == "json_free" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let function = *self.functions.get("json_free").unwrap();
+            let call_result = self.builder.build_call(function, &[tv.value.into()], "json_free_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::int(val));
+        }
+
         let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
         for arg in &call.arguments {
             let tv = self.compile_expression(arg)?;
-            // json_parse's first arg is a string — extract the i8* pointer field
+            // json_parse's first arg is a string — extract ptr AND len
             if func_name == "json_parse" && tv.aha_type.is_string() {
                 let ptr_val = self.extract_str_ptr(&tv)?;
+                let len_val = self.extract_str_len(&tv)?;
                 let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
                 args.push(ptr_as_i64.into());
+                args.push(len_val.into());
             }
-            // json_get's second arg is a string path — extract pointer
+            // json_get's second arg is a string path — extract ptr AND len
             else if func_name == "json_get" && args.len() == 1 && tv.aha_type.is_string() {
                 let ptr_val = self.extract_str_ptr(&tv)?;
-                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "path_i64").unwrap();
+                let len_val = self.extract_str_len(&tv)?;
+                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "path_ptr_i64").unwrap();
                 args.push(ptr_as_i64.into());
+                args.push(len_val.into());
             }
             else {
                 args.push(tv.value.into());
@@ -6299,6 +6328,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         if let Some(f) = self.module.get_function("aha_json_get") {
             execution_engine.add_global_mapping(&f, crate::runtime::aha_json_get as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_free as usize);
         }
 
         let function_name = "main";

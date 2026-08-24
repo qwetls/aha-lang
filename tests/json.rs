@@ -68,6 +68,17 @@ fn json_get_array_compiles() {
     "#);
 }
 
+// --- json_free ---
+
+#[test]
+fn json_free_compiles() {
+    compile(r#"
+        let json = json_parse("{\"key\": \"value\"}")
+        let val = json_get(json, "key")
+        json_free(json)
+    "#);
+}
+
 // --- Full pattern ---
 
 #[test]
@@ -77,6 +88,7 @@ fn json_full_pattern_compiles() {
         let status = json_get(json, "status")
         let count = json_get(json, "data.count")
         let output = json_stringify(json)
+        json_free(json)
         output
     "#);
 }
@@ -91,6 +103,7 @@ fn json_http_pattern_compiles() {
         let json = json_parse(body)
         let name = json_get(json, "name")
         let response = http_response(200, name)
+        json_free(json)
         http_send(client, response)
     "#);
 }

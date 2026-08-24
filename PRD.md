@@ -140,7 +140,7 @@ kompromi.
 | **F9** | Error Handling — `Result<T,E>` | ✅ Selesai (v1.6.3) — `Result<T,E>`, `ok()`/`err()`, `?` operator |
 | **F10** | TCP/UDP Sockets — network builtins | ✅ Selesai (v1.6.4) — 12 socket builtins, C runtime, 9 tests |
 | **F11** | HTTP Server — builtins | ✅ Selesai (v1.6.5) — 9 HTTP builtins, 5 runtime functions, 10 tests |
-| **F12** | JSON Parser/Serializer | ⏳ Setelah F11 |
+| **F12** | JSON Parser/Serializer | ✅ Selesai (v1.6.6) — 3 JSON builtins, 3 runtime functions, 7 tests |
 | **F13** | Async I/O | ⏳ Setelah F12 |
 | **F14** | Game Engine foundations | ⏳ Setelah web backend stabil |
 | **F15** | Package manager (`aha install`) | ⏳ Setelah komunitas |
@@ -348,6 +348,16 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] Rust runtime: 5 parser/builder functions (`src/runtime.rs`)
 - [x] Codegen: `declare_http_runtime()` + `create_http_builtins()` + `compile_http_call()` dispatch
 - [x] 10 compile-only tests (`tests/http_server.rs`)
+
+### ✅ F12. JSON Parser/Serializer (v1.6.6)
+- [x] `json_parse(string)` — parse JSON string into opaque handle (tree in Rust memory)
+- [x] `json_stringify(handle)` — serialize JSON tree back to String
+- [x] `json_get(handle, "path.to.value")` — navigate by dot-path, return string representation
+- [x] Dot-path navigation: `"user.name"`, `"items.0"`, nested paths
+- [x] Rust runtime: tokenizer + recursive descent parser + serializer + navigator (`src/runtime.rs`)
+- [x] Codegen: `declare_json_runtime()` + `create_json_builtins()` + `compile_json_call()` dispatch
+- [x] `add_global_mapping` for `aha_json_parse`, `aha_json_stringify`, `aha_json_get`
+- [x] 7 compile-only tests (`tests/json.rs`) — covers parse, nested, stringify, get, array, full pattern, HTTP+JSON pattern
 
 ### ⏳ F7. Self-hosting
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa) — long-term
