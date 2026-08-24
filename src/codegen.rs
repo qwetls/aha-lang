@@ -4838,7 +4838,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- json_stringify(handle: int) -> string ---
         {
-            let func = self.module.add_function("json_stringify", i64_t.fn_type(&[i64_t.into()], false), None);
+            let func = self.module.add_function("json_stringify", string_type.fn_type(&[i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
@@ -4857,7 +4857,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // --- json_get(handle: i64, path: i64) -> string ---
         {
-            let func = self.module.add_function("json_get", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let func = self.module.add_function("json_get", string_type.fn_type(&[i64_t.into(), i64_t.into()], false), None);
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
