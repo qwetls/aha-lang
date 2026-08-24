@@ -4830,7 +4830,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let json_str = func.get_nth_param(0).unwrap().into_int_value();
-            let str_gep = self.builder.build_struct_gep(json_str.into_pointer_value(), 0, "str_ptr_gep").unwrap();
+            // json_str is i64 representing a pointer to {i8*, i64} struct
+            let json_ptr = self.builder.build_int_to_ptr(json_str, i8_ptr, "json_ptr").unwrap();
+            let str_gep = self.builder.build_struct_gep(json_ptr, 0, "str_ptr_gep").unwrap();
             let str_ptr = self.builder.build_load(str_gep, "str_ptr").unwrap().into_pointer_value();
             let ptr_as_i64 = self.builder.build_ptr_to_int(str_ptr, i64_t, "ptr_i64").unwrap();
             let handle = call_c_i64!("aha_json_parse", vec![ptr_as_i64.into()]);
@@ -4864,7 +4866,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.position_at_end(bb);
             let handle = func.get_nth_param(0).unwrap().into_int_value();
             let path_struct = func.get_nth_param(1).unwrap().into_int_value();
-            let path_gep = self.builder.build_struct_gep(path_struct.into_pointer_value(), 0, "path_ptr_gep").unwrap();
+            // path_struct is i64 representing a pointer to {i8*, i64} struct
+            let path_ptr_raw = self.builder.build_int_to_ptr(path_struct, i8_ptr, "path_raw").unwrap();
+            let path_gep = self.builder.build_struct_gep(path_ptr_raw, 0, "path_ptr_gep").unwrap();
             let path_ptr = self.builder.build_load(path_gep, "path_ptr").unwrap().into_pointer_value();
             let path_i64 = self.builder.build_ptr_to_int(path_ptr, i64_t, "path_i64").unwrap();
             let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
@@ -4883,11 +4887,31 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Compile a json_* builtin call.
     fn compile_json_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
         let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
         for arg in &call.arguments {
             let tv = self.compile_expression(arg)?;
-            // json_parse takes a string (needs ptr extraction), json_stringify/json_get take int/string
-            args.push(tv.value.into());
+            // json_parse's first arg is a string — extract the i8* pointer field
+            if func_name == "json_parse" && tv.aha_type.is_string() {
+                let ptr_val = self.extract_str_ptr(&tv)?;
+                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
+                args.push(ptr_as_i64.into());
+            }
+            // json_get's second arg is a string path — extract pointer
+            else if func_name == "json_get" && args.len() == 1 && tv.aha_type.is_string() {
+                let ptr_val = self.extract_str_ptr(&tv)?;
+                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "path_i64").unwrap();
+                args.push(ptr_as_i64.into());
+            }
+            else {
+                args.push(tv.value.into());
+            }
         }
         let function = *self.functions.get(func_name)
             .ok_or_else(|| format!("JSON builtin '{}' not declared", func_name))?;
