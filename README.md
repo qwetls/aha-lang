@@ -30,7 +30,10 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **🔁 Modern Control Flow:** `if`/`else`, `while`, and `for` loops with `break`/`continue`, functions with parameters, `return`, forward references, and mutual recursion.
 - **🔗 Module System:** `use "file"` imports functions and structs from another `.aha` file — recursive resolution, cycle detection, zero config.
 - **🧩 Enums & Pattern Matching:** `enum` keyword with unit and tuple variants, `match` expressions with destructuring, wildcard arms, and nested patterns — compiled to efficient LLVM switch + phi.
-- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 581+ tests on every commit.
+- **🔌 FFI — Foreign Function Interface:** `extern fn` declarations call C/OS functions directly from AHA! code. Raw pointers (`*void`, `*int`, `*string`), automatic string→pointer coercion, JIT native function registration.
+- **⚠️ Error Handling:** `Result<T, E>` built-in type with `ok()`/`err()` constructors and `?` postfix operator for early return on error — no exception overhead, deterministic control flow.
+- **🌐 TCP/UDP Sockets:** 12 built-in network primitives (`tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`) — networking without external libraries.
+- **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 600+ tests on every commit.
 
 ---
 

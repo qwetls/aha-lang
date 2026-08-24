@@ -126,7 +126,7 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F4 stabil di `main`. F5 selesai.**
+**F1-F6 stabil. F8-F10 selesai.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
@@ -136,8 +136,15 @@ kompromi.
 | **F4** | Module system — namespace & visibilitas | ✅ Selesai (v1.5.6) — `use "file"` + `pub` + `module::name` + visibility filter |
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
-| **F7** | Self-hosting | ⏳ Setelah F6 |
-| **F8** | Package manager (`aha install`) | ⏳ Setelah AOT binary + komunitas |
+| **F8** | FFI — `extern fn` + `RawPtr` | ✅ Selesai (v1.6.1) — `extern fn`, `*void`, string→ptr coercion, JIT calls |
+| **F9** | Error Handling — `Result<T,E>` | ✅ Selesai (v1.6.3) — `Result<T,E>`, `ok()`/`err()`, `?` operator |
+| **F10** | TCP/UDP Sockets — network builtins | ✅ Selesai (v1.6.4) — 12 socket builtins, C runtime, 9 tests |
+| **F11** | HTTP Server — builtins | ⏳ Setelah F10 |
+| **F12** | JSON Parser/Serializer | ⏳ Setelah F11 |
+| **F13** | Async I/O | ⏳ Setelah F12 |
+| **F14** | Game Engine foundations | ⏳ Setelah web backend stabil |
+| **F15** | Package manager (`aha install`) | ⏳ Setelah komunitas |
+| **F7** | Self-hosting | ⏳ Long-term |
 
 Setiap langkah: development → test → CI hijau → review → (jika mantap) merge
 ke main. Tidak ada loncatan.
@@ -235,8 +242,11 @@ Detail Fase 1, 2 & 3 (di `development`):
 - Link with `cc` — `cc -o <output> <temp>.o`
 
 ### ❌ Belum ada
-- Self-hosting (compiler AHA! ditulis dalam AHA!)
-- Package manager `aha install` (F8 — setelah komunitas)
+- Self-hosting (compiler AHA! ditulis dalam AHA!) — long-term
+- Package manager `aha install` (F15 — setelah komunitas)
+- HTTP Server builtins (F11)
+- JSON parser/serializer (F12)
+- Async I/O (F13)
 
 ---
 
@@ -302,8 +312,42 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] `emit_object_file()` — inkwell `TargetMachine::write_to_file()` → `.o`
 - [x] Link with `cc` — produces native executable
 
+### ✅ F8. FFI — Foreign Function Interface — SELESAI (v1.6.1)
+- [x] `extern fn` declaration — parser, AST, codegen (declaration only, no body)
+- [x] `*void` raw pointer type — `RawPtr(AhaType::Void)` → LLVM `i8*`
+- [x] Typed raw pointers: `*int`, `*string`, `*bool`
+- [x] String→pointer coercion — automatic `build_extract_value` for string params
+- [x] JIT native function calls via `add_global_mapping`
+- [x] Struct pointer access — field access via `build_load`/`build_gep`
+- [x] String coercion tests (5 tests)
+
+### ✅ F9. Error Handling — SELESAI (v1.6.3)
+- [x] `Result<T, E>` built-in type — `{i64 tag, i64 payload}` (tag 0=Ok, 1=Err)
+- [x] `ok(value)` constructor — returns `Result<T, E>` with tag 0
+- [x] `err(message)` constructor — returns `Result<T, E>` with tag 1
+- [x] `?` postfix operator — unwrap or early return with error
+- [x] Parser distinguishes `Result` from `Map` via identifier name
+- [x] Type inference handles `ok()`/`err()` as `Result<T, E>`
+- [x] 6 error handling tests
+
+### ✅ F10. TCP/UDP Sockets — SELESAI (v1.6.4)
+- [x] 12 AHA builtins: `tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`
+- [x] C runtime: `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `close`, `htons`, `htonl`, `inet_addr`, `inet_ntoa`
+- [x] `pack_sockaddr!` macro — allocate `[i8;16]` for `sockaddr_in`
+- [x] `ip4_str` returns `String` type (not `Int`)
+- [x] LLVM IR type matching — `i64_ptr`/`i8_ptr` in declarations
+- [x] 9 compile-only tests (`tests/tcp_udp.rs`)
+
+### ⏳ F11. HTTP Server — builtins
+- [ ] HTTP request parser builtins
+- [ ] HTTP response builder builtins
+- [ ] `http_listen(port)` — bind + listen via TCP socket
+- [ ] `http_accept(server_fd)` — accept connection
+- [ ] `http_recv_request(fd)` — parse HTTP request
+- [ ] `http_send_response(fd, status, headers, body)` — send HTTP response
+
 ### ⏳ F7. Self-hosting
-- [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa)
+- [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa) — long-term
 
 ---
 
@@ -383,3 +427,6 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.5 | F4 SELESAI — Visibility filter: non-pub items dari imports di-drop saat AST merge. `is_pub_item()` cek FunctionLiteral & StructDefinition. 5 tests baru, 3 namespace tests di-update. F4 lengkap: use + pub + namespace + visibility. |
 | 2026-08-20 | 0.3.6 | F6 SELESAI + AOT Compilation. Actor-model: spawn/call/send threaded via mpsc+Condvar. AOT: `--emit-exe` → rename main + C wrapper + emit .o + link with cc. inkwell v0.4 API: `as_global_value().set_name()`, explicit `RelocMode::Default`/`CodeModel::Default`. |
 | 2026-08-21 | 0.4 | F9 Error Handling SELESAI — `Result<T, E>` built-in type (`{i64 tag, i64 payload}`), `ok()`/`err()` constructors, `?` postfix operator. Parser distinguishes Result from Map via identifier name. Type inference handles ok/err as Result. 6 tests. |
+| 2026-08-21 | 0.4.1 | F8 FFI SELESAI — `extern fn` declaration, `*void` raw pointer, typed pointers (`*int`, `*string`, `*bool`), string→pointer coercion, JIT native calls via `add_global_mapping`. 5 tests. v1.6.1. |
+| 2026-08-22 | 0.4.2 | F10 TCP/UDP Sockets SELESAI — 12 AHA builtins (tcp_socket, tcp_connect, tcp_bind_listen, tcp_accept, tcp_send, tcp_recv, udp_socket, udp_send, udp_recv, close_fd, ip4_addr, ip4_str) + 14 C runtime functions. `ip4_str` returns String. 9 compile-only tests. v1.6.4. |
+| 2026-08-24 | 0.5 | F8-F10 documentation update — PRD roadmap restructured (F8=FFI, F9=Error, F10=TCP/UDP, F11-F15 planned), README updated, CHANGELOG v1.6.4, docs site networking page (en+id). |
