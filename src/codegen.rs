@@ -4492,6 +4492,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         let val = call_result.try_as_basic_value()
             .left()
             .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
+        if func_name == "ip4_str" {
+            return Ok(TypedValue::string(val));
+        }
         Ok(TypedValue::int(val))
     }
 
