@@ -240,3 +240,320 @@ pub extern "C" fn aha_http_response(status: i64, body: i64) -> i64 {
     let boxed = resp.into_boxed_str();
     Box::into_raw(boxed) as *mut u8 as i64
 }
+
+// ===========================================================================
+// F12 JSON Parser/Serializer — native functions for JSON handling
+// ===========================================================================
+
+/// JSON value node in the parse tree.
+enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    Str(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
+}
+
+/// Tokenizer for JSON parsing.
+struct JsonTokenizer<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> JsonTokenizer<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { bytes: input.as_bytes(), pos: 0 }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.pos < self.bytes.len() {
+            match self.bytes[self.pos] {
+                b' ' | b'\t' | b'\n' | b'\r' => self.pos += 1,
+                _ => break,
+            }
+        }
+    }
+
+    fn peek(&mut self) -> Option<u8> {
+        self.skip_whitespace();
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn next(&mut self) -> Option<u8> {
+        self.skip_whitespace();
+        if self.pos < self.bytes.len() {
+            let ch = self.bytes[self.pos];
+            self.pos += 1;
+            Some(ch)
+        } else {
+            None
+        }
+    }
+
+    fn expect(&mut self, ch: u8) -> Result<(), &'static str> {
+        match self.next() {
+            Some(c) if c == ch => Ok(()),
+            _ => Err("unexpected character"),
+        }
+    }
+
+    fn parse_string_raw(&mut self) -> Result<String, &'static str> {
+        self.expect(b'"')?;
+        let mut result = String::new();
+        loop {
+            match self.next() {
+                None => return Err("unterminated string"),
+                Some(b'"') => break,
+                Some(b'\\') => match self.next() {
+                    Some(b'"') => result.push('"'),
+                    Some(b'\\') => result.push('\\'),
+                    Some(b'/') => result.push('/'),
+                    Some(b'n') => result.push('\n'),
+                    Some(b'r') => result.push('\r'),
+                    Some(b't') => result.push('\t'),
+                    Some(b'b') => result.push('\u{0008}'),
+                    Some(b'f') => result.push('\u{000C}'),
+                    Some(b'u') => {
+                        let mut hex = String::new();
+                        for _ in 0..4 {
+                            match self.next() {
+                                Some(c) if c.is_ascii_hexdigit() => hex.push(c as char),
+                                _ => return Err("invalid unicode escape"),
+                            }
+                        }
+                        let code = u32::from_str_radix(&hex, 16)
+                            .map_err(|_| "invalid unicode escape")?;
+                        match char::from_u32(code) {
+                            Some(ch) => result.push(ch),
+                            None => return Err("invalid unicode codepoint"),
+                        }
+                    }
+                    _ => return Err("invalid escape"),
+                },
+                Some(c) => result.push(c as char),
+            }
+        }
+        Ok(result)
+    }
+
+    fn parse_number(&mut self) -> Result<f64, &'static str> {
+        let start = self.pos;
+        if self.pos < self.bytes.len() && self.bytes[self.pos] == b'-' {
+            self.pos += 1;
+        }
+        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
+            self.pos += 1;
+        }
+        if self.pos < self.bytes.len() && self.bytes[self.pos] == b'.' {
+            self.pos += 1;
+            while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
+                self.pos += 1;
+            }
+        }
+        if self.pos < self.bytes.len()
+            && (self.bytes[self.pos] == b'e' || self.bytes[self.pos] == b'E')
+        {
+            self.pos += 1;
+            if self.pos < self.bytes.len()
+                && (self.bytes[self.pos] == b'+' || self.bytes[self.pos] == b'-')
+            {
+                self.pos += 1;
+            }
+            while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
+                self.pos += 1;
+            }
+        }
+        if self.pos == start {
+            return Err("expected number");
+        }
+        let s = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap();
+        s.parse::<f64>().map_err(|_| "invalid number")
+    }
+}
+
+use std::fmt::Write as FmtWrite;
+
+fn parse_json_value(tok: &mut JsonTokenizer) -> Result<JsonValue, &'static str> {
+    match tok.peek() {
+        None => Err("unexpected end of input"),
+        Some(b'{') => parse_json_object(tok),
+        Some(b'[') => parse_json_array(tok),
+        Some(b'"') => Ok(JsonValue::Str(tok.parse_string_raw()?)),
+        Some(b't') => {
+            for &ch in b"true" { if tok.next() != Some(ch) { return Err("expected 'true'"); } }
+            Ok(JsonValue::Bool(true))
+        }
+        Some(b'f') => {
+            for &ch in b"false" { if tok.next() != Some(ch) { return Err("expected 'false'"); } }
+            Ok(JsonValue::Bool(false))
+        }
+        Some(b'n') => {
+            for &ch in b"null" { if tok.next() != Some(ch) { return Err("expected 'null'"); } }
+            Ok(JsonValue::Null)
+        }
+        Some(c) if c.is_ascii_digit() || c == b'-' => Ok(JsonValue::Number(tok.parse_number()?)),
+        _ => Err("unexpected character"),
+    }
+}
+
+fn parse_json_object(tok: &mut JsonTokenizer) -> Result<JsonValue, &'static str> {
+    tok.expect(b'{')?;
+    let mut map = HashMap::new();
+    if tok.peek() == Some(b'}') { tok.next(); return Ok(JsonValue::Object(map)); }
+    loop {
+        let key = tok.parse_string_raw()?;
+        tok.expect(b':')?;
+        let val = parse_json_value(tok)?;
+        map.insert(key, val);
+        match tok.next() {
+            Some(b'}') => break,
+            Some(b',') => continue,
+            _ => return Err("expected ',' or '}'"),
+        }
+    }
+    Ok(JsonValue::Object(map))
+}
+
+fn parse_json_array(tok: &mut JsonTokenizer) -> Result<JsonValue, &'static str> {
+    tok.expect(b'[')?;
+    let mut arr = Vec::new();
+    if tok.peek() == Some(b']') { tok.next(); return Ok(JsonValue::Array(arr)); }
+    loop {
+        arr.push(parse_json_value(tok)?);
+        match tok.next() {
+            Some(b']') => break,
+            Some(b',') => continue,
+            _ => return Err("expected ',' or ']'"),
+        }
+    }
+    Ok(JsonValue::Array(arr))
+}
+
+fn json_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000C}' => out.push_str("\\f"),
+            c if c.is_control() => { let _ = write!(out, "\\u{:04x}", c as u32); }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_value_to_string(val: &JsonValue) -> String {
+    match val {
+        JsonValue::Null => "null".to_string(),
+        JsonValue::Bool(b) => b.to_string(),
+        JsonValue::Number(n) => {
+            if *n == (*n as i64) as f64 && n.is_finite() {
+                format!("{}", *n as i64)
+            } else {
+                format!("{}", n)
+            }
+        }
+        JsonValue::Str(s) => json_escape_str(s),
+        JsonValue::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_value_to_string).collect();
+            format!("[{}]", items.join(","))
+        }
+        JsonValue::Object(map) => {
+            let pairs: Vec<String> = map.iter()
+                .map(|(k, v)| format!("{}:{}", json_escape_str(k), json_value_to_string(v)))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+    }
+}
+
+/// Navigate a JsonValue by dot-separated path ("user.name" or "items.0").
+fn navigate_json<'a>(val: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
+    if path.is_empty() { return Some(val); }
+    let mut current = val;
+    for part in path.split('.') {
+        match current {
+            JsonValue::Object(map) => { current = map.get(part)?; }
+            JsonValue::Array(arr) => {
+                let idx: usize = part.parse().ok()?;
+                current = arr.get(idx)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
+/// json_parse(json_string) -> handle (pointer to JsonValue tree)
+/// # Safety
+/// json_string must be a valid null-terminated UTF-8 string from AHA! String.
+#[no_mangle]
+pub extern "C" fn aha_json_parse(json_string: i64) -> i64 {
+    let input = unsafe {
+        let ptr = json_string as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    let mut tok = JsonTokenizer::new(input);
+    match parse_json_value(&mut tok) {
+        Ok(val) => Box::into_raw(Box::new(val)) as i64,
+        Err(_) => 0,
+    }
+}
+
+/// json_stringify(handle) -> String
+/// # Safety
+/// handle must be a valid pointer from json_parse, or 0 for null.
+#[no_mangle]
+pub extern "C" fn aha_json_stringify(handle: i64) -> i64 {
+    if handle == 0 {
+        let s = "null".to_string().into_boxed_str();
+        return Box::into_raw(s) as *mut u8 as i64;
+    }
+    let val = unsafe { &*(handle as *const JsonValue) };
+    let result = json_value_to_string(val);
+    let boxed = result.into_boxed_str();
+    Box::into_raw(boxed) as *mut u8 as i64
+}
+
+/// json_get(handle, path) -> String representation of value at path.
+/// Path is dot-separated: "user.name", "items.0".
+/// # Safety
+/// handle must be a valid pointer from json_parse.
+#[no_mangle]
+pub extern "C" fn aha_json_get(handle: i64, path: i64) -> i64 {
+    if handle == 0 {
+        let empty = "".to_string().into_boxed_str();
+        return Box::into_raw(empty) as *mut u8 as i64;
+    }
+    let val = unsafe { &*(handle as *const JsonValue) };
+    let path_str = unsafe {
+        let ptr = path as *const u8;
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 { len += 1; }
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+    };
+    match navigate_json(val, path_str) {
+        Some(found) => {
+            let result = match found {
+                JsonValue::Str(s) => s.clone(),
+                other => json_value_to_string(other),
+            };
+            let boxed = result.into_boxed_str();
+            Box::into_raw(boxed) as *mut u8 as i64
+        }
+        None => {
+            let empty = "".to_string().into_boxed_str();
+            Box::into_raw(empty) as *mut u8 as i64
+        }
+    }
+}

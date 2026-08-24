@@ -1018,11 +1018,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_actor_runtime();
         self.declare_socket_runtime();
         self.declare_http_runtime();
+        self.declare_json_runtime();
         self.declare_string_and_file_builtins();
         self.create_list_builtins();
         self.create_map_builtins();
         self.create_socket_builtins();
         self.create_http_builtins();
+        self.create_json_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -4653,6 +4655,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if matches!(func_name.as_str(), "http_listen" | "http_accept" | "http_recv" | "http_send" | "http_request_method" | "http_request_path" | "http_request_body" | "http_request_header" | "http_response") {
             return self.compile_http_call(func_name.as_str(), call);
         }
+        // F12 JSON builtins
+        if matches!(func_name.as_str(), "json_parse" | "json_stringify" | "json_get") {
+            return self.compile_json_call(func_name.as_str(), call);
+        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4773,6 +4779,135 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         // http_listen, http_accept, http_send return int
         Ok(TypedValue::int(val))
+    }
+
+    // === F12 JSON Parser/Serializer ===
+
+    /// Declare Rust runtime functions for JSON.
+    fn declare_json_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        // aha_json_parse(json_string: i64) -> i64
+        let fn_parse = self.module.add_function("aha_json_parse", fn_type_i64_1, None);
+        self.functions.insert("aha_json_parse".to_string(), fn_parse);
+        // aha_json_stringify(handle: i64) -> i64
+        let fn_stringify = self.module.add_function("aha_json_stringify", fn_type_i64_1, None);
+        self.functions.insert("aha_json_stringify".to_string(), fn_stringify);
+        // aha_json_get(handle: i64, path: i64) -> i64
+        let fn_get = self.module.add_function("aha_json_get", fn_type_i64_2, None);
+        self.functions.insert("aha_json_get".to_string(), fn_get);
+
+        // AHA! builtin return types for type inference
+        self.fn_types.insert("json_parse".to_string(), AhaType::Int); // handle
+        self.fn_types.insert("json_stringify".to_string(), AhaType::String);
+        self.fn_types.insert("json_get".to_string(), AhaType::String);
+    }
+
+    /// Create AHA-level JSON builtins as LLVM IR wrappers.
+    /// json_parse(string) -> int    — returns opaque handle
+    /// json_stringify(handle) -> string
+    /// json_get(handle, path) -> string
+    fn create_json_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        // --- json_parse(json_string: string) -> int (handle) ---
+        {
+            let func = self.module.add_function("json_parse", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let json_str = func.get_nth_param(0).unwrap().into_int_value();
+            // The string comes as {i8*, i64}. Extract the ptr field for the runtime.
+            let str_gep = self.builder.build_struct_gep(string_type, json_str.into_pointer_value(), 0, "str_ptr_gep").unwrap();
+            let str_ptr = self.builder.build_load(i8_ptr, str_gep, "str_ptr").unwrap().into_int_value();
+            // ptr_to_int: the i8* loaded is actually a pointer, but struct field 0 is i8*
+            // We need ptr_to_int to pass as i64 to runtime
+            let ptr_as_i64 = self.builder.build_ptr_to_int(str_ptr, i64_t, "ptr_i64").unwrap();
+            let handle = call_c_i64!("aha_json_parse", vec![ptr_as_i64.into()]);
+            self.builder.build_return(Some(&handle)).unwrap();
+            self.functions.insert("json_parse".to_string(), func);
+        }
+
+        // --- json_stringify(handle: int) -> string ---
+        {
+            let func = self.module.add_function("json_stringify", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let result_ptr = call_c_i64!("aha_json_stringify", vec![handle.into()]);
+            // int_to_ptr: result_ptr is i64 representing *mut u8
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            // String is {i8*, i64} — need to compute length
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(string_type, str_struct, 0, "ptr_gep").unwrap();
+            let _ = self.builder.build_store(ptr_gep, ptr_val);
+            let len_gep = self.builder.build_struct_gep(string_type, str_struct, 1, "len_gep").unwrap();
+            let _ = self.builder.build_store(len_gep, len);
+            let loaded = self.builder.build_load(string_type, str_struct, "str_val").unwrap();
+            self.builder.build_return(Some(&loaded)).unwrap();
+            self.functions.insert("json_stringify".to_string(), func);
+        }
+
+        // --- json_get(handle: int, path: string) -> string ---
+        {
+            let func = self.module.add_function("json_get", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let path_struct = func.get_nth_param(1).unwrap().into_int_value();
+            // Extract path ptr from {i8*, i64} string struct
+            let path_gep = self.builder.build_struct_gep(string_type, path_struct.into_pointer_value(), 0, "path_ptr_gep").unwrap();
+            let path_ptr = self.builder.build_load(i8_ptr, path_gep, "path_ptr").unwrap().into_int_value();
+            let path_i64 = self.builder.build_ptr_to_int(path_ptr, i64_t, "path_i64").unwrap();
+            let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_i64.into()]);
+            // int_to_ptr → strlen → build string struct
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_alloca(string_type, "str_struct").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(string_type, str_struct, 0, "ptr_gep").unwrap();
+            let _ = self.builder.build_store(ptr_gep, ptr_val);
+            let len_gep = self.builder.build_struct_gep(string_type, str_struct, 1, "len_gep").unwrap();
+            let _ = self.builder.build_store(len_gep, len);
+            let loaded = self.builder.build_load(string_type, str_struct, "str_val").unwrap();
+            self.builder.build_return(Some(&loaded)).unwrap();
+            self.functions.insert("json_get".to_string(), func);
+        }
+    }
+
+    /// Compile a json_* builtin call.
+    fn compile_json_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            // json_parse takes a string (needs ptr extraction), json_stringify/json_get take int/string
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("JSON builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("JSON builtin '{}' did not return a value", func_name))?;
+        match func_name {
+            "json_parse" => Ok(TypedValue::int(val)),
+            "json_stringify" | "json_get" => Ok(TypedValue::string(val)),
+            _ => Ok(TypedValue::int(val)),
+        }
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
