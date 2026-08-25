@@ -5118,7 +5118,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
             let delim_ptr_i64 = self.builder.build_ptr_to_int(delim_ptr, i64_t, "d_ptr_i64").unwrap();
             let handle = call_c_i64!("aha_str_split", vec![s_ptr_i64.into(), s_len.into(), delim_ptr_i64.into(), delim_len.into()]);
-            return Ok(TypedValue::int(handle));
+            return Ok(TypedValue::int(handle.into()));
         }
 
         // str_split_count(handle) -> int
@@ -5147,7 +5147,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let tv = self.compile_expression(&call.arguments[0])?;
             let handle = tv.value.into_int_value();
             let result = call_c_i64!("aha_str_split_free", vec![handle.into()]);
-            return Ok(TypedValue::int(result));
+            return Ok(TypedValue::int(result.into()));
         }
 
         // str_to_int(string) -> int
