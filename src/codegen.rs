@@ -5121,25 +5121,36 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(TypedValue::int(handle.into()));
         }
 
+        // str_to_int(string) -> int
+        if func_name == "str_to_int" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let ptr_val = self.extract_str_ptr(&tv)?;
+            let len_val = self.extract_str_len(&tv)?;
+            let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_to_int", vec![ptr_as_i64.into(), len_val.into()]);
+            return Ok(TypedValue::int(result.into()));
+        }
+
         // str_split_count(handle) -> int
         if func_name == "str_split_count" {
-            let function = *self.functions.get("str_split_count").unwrap();
             let tv = self.compile_expression(&call.arguments[0])?;
-            let call_result = self.builder.build_call(function, &[tv.value.into()], "str_split_count_tmp")
-                .map_err(|e| e.to_string())?;
-            let val = call_result.try_as_basic_value().left().unwrap();
-            return Ok(TypedValue::int(val));
+            let handle = tv.value.into_int_value();
+            let count = call_c_i64!("aha_str_split_count", vec![handle.into()]);
+            return Ok(TypedValue::int(count.into()));
         }
 
         // str_split_get(handle, index) -> string
         if func_name == "str_split_get" {
-            let function = *self.functions.get("str_split_get").unwrap();
             let handle_tv = self.compile_expression(&call.arguments[0])?;
             let index_tv = self.compile_expression(&call.arguments[1])?;
-            let call_result = self.builder.build_call(function, &[handle_tv.value.into(), index_tv.value.into()], "str_split_get_tmp")
-                .map_err(|e| e.to_string())?;
-            let val = call_result.try_as_basic_value().left().unwrap();
-            return Ok(TypedValue::string(val));
+            let handle = handle_tv.value.into_int_value();
+            let index = index_tv.value.into_int_value();
+            let result_ptr = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            return Ok(TypedValue::string(str_struct));
         }
 
         // str_split_free(handle)
@@ -5150,39 +5161,36 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Ok(TypedValue::int(result.into()));
         }
 
-        // str_to_int(string) -> int
-        if func_name == "str_to_int" {
-            let function = *self.functions.get("str_to_int").unwrap();
-            let tv = self.compile_expression(&call.arguments[0])?;
-            let call_result = self.builder.build_call(function, &[tv.value.into()], "str_to_int_tmp")
-                .map_err(|e| e.to_string())?;
-            let val = call_result.try_as_basic_value().left().unwrap();
-            return Ok(TypedValue::int(val));
-        }
-
         // str_contains(string, substring) -> int
         if func_name == "str_contains" {
-            let function = *self.functions.get("str_contains").unwrap();
             let s_tv = self.compile_expression(&call.arguments[0])?;
             let sub_tv = self.compile_expression(&call.arguments[1])?;
-            let call_result = self.builder.build_call(function, &[s_tv.value.into(), sub_tv.value.into()], "str_contains_tmp")
-                .map_err(|e| e.to_string())?;
-            let val = call_result.try_as_basic_value().left().unwrap();
-            return Ok(TypedValue::int(val));
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
+            let sub_ptr = self.extract_str_ptr(&sub_tv)?;
+            let sub_len = self.extract_str_len(&sub_tv)?;
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let sub_ptr_i64 = self.builder.build_ptr_to_int(sub_ptr, i64_t, "sub_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_contains", vec![s_ptr_i64.into(), s_len.into(), sub_ptr_i64.into(), sub_len.into()]);
+            return Ok(TypedValue::int(result.into()));
         }
 
         // str_substring(string, start, end) -> string
         if func_name == "str_substring" {
-            let function = *self.functions.get("str_substring").unwrap();
             let s_tv = self.compile_expression(&call.arguments[0])?;
             let start_tv = self.compile_expression(&call.arguments[1])?;
             let end_tv = self.compile_expression(&call.arguments[2])?;
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
             let start_val = start_tv.value.into_int_value();
             let end_val = end_tv.value.into_int_value();
-            let call_result = self.builder.build_call(function, &[s_tv.value.into(), start_val.into(), end_val.into()], "str_substring_tmp")
-                .map_err(|e| e.to_string())?;
-            let val = call_result.try_as_basic_value().left().unwrap();
-            return Ok(TypedValue::string(val));
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let result_ptr = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len").unwrap();
+            return Ok(TypedValue::string(result_struct));
         }
 
         Err(format!("Unknown string builtin: {}", func_name))
