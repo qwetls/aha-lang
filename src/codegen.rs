@@ -1020,11 +1020,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_http_runtime();
         self.declare_json_runtime();
         self.declare_string_and_file_builtins();
+        self.declare_string_runtime();
         self.create_list_builtins();
         self.create_map_builtins();
         self.create_socket_builtins();
         self.create_http_builtins();
         self.create_json_builtins();
+        self.create_string_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -4659,6 +4661,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         if matches!(func_name.as_str(), "json_parse" | "json_stringify" | "json_get" | "json_free") {
             return self.compile_json_call(func_name.as_str(), call);
         }
+        // F13 String builtins
+        if matches!(func_name.as_str(), "str_split" | "str_split_count" | "str_split_get" | "str_split_free" | "str_to_int" | "str_contains" | "str_substring") {
+            return self.compile_string_call(func_name.as_str(), call);
+        }
         // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
         if func_name == "ok" || func_name == "err" {
             return self.compile_result_literal(&func_name, call);
@@ -4938,6 +4944,248 @@ impl<'ctx> CodeGenerator<'ctx> {
             "json_stringify" | "json_get" => Ok(TypedValue::string(val)),
             _ => Ok(TypedValue::int(val)),
         }
+    }
+
+    /// Declare Rust runtime functions for string builtins (F13).
+    fn declare_string_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let fn_type_i64_3 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let fn_type_i64_4 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+
+        // str_split(s_ptr, s_len, delim_ptr, delim_len) -> handle
+        let fn_split = self.module.add_function("aha_str_split", fn_type_i64_4, None);
+        self.functions.insert("aha_str_split".to_string(), fn_split);
+        // str_split_count(handle) -> i64
+        let fn_split_count = self.module.add_function("aha_str_split_count", fn_type_i64_1, None);
+        self.functions.insert("aha_str_split_count".to_string(), fn_split_count);
+        // str_split_get(handle, index) -> i64 (pointer to string)
+        let fn_split_get = self.module.add_function("aha_str_split_get", fn_type_i64_2, None);
+        self.functions.insert("aha_str_split_get".to_string(), fn_split_get);
+        // str_split_free(handle) -> i64
+        let fn_split_free = self.module.add_function("aha_str_split_free", fn_type_i64_1, None);
+        self.functions.insert("aha_str_split_free".to_string(), fn_split_free);
+        // str_to_int(s_ptr, s_len) -> i64
+        let fn_to_int = self.module.add_function("aha_str_to_int", fn_type_i64_2, None);
+        self.functions.insert("aha_str_to_int".to_string(), fn_to_int);
+        // str_contains(s_ptr, s_len, sub_ptr, sub_len) -> i64
+        let fn_contains = self.module.add_function("aha_str_contains", fn_type_i64_4, None);
+        self.functions.insert("aha_str_contains".to_string(), fn_contains);
+        // str_substring(s_ptr, s_len, start, end) -> i64 (pointer to string)
+        let fn_substring = self.module.add_function("aha_str_substring", fn_type_i64_4, None);
+        self.functions.insert("aha_str_substring".to_string(), fn_substring);
+
+        // Type inference
+        self.fn_types.insert("str_split_count".to_string(), AhaType::Int);
+        self.fn_types.insert("str_to_int".to_string(), AhaType::Int);
+        self.fn_types.insert("str_contains".to_string(), AhaType::Int);
+    }
+
+    /// Create AHA-level string builtins as LLVM IR wrappers.
+    fn create_string_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        // --- str_split_count(handle) -> int ---
+        {
+            let func = self.module.add_function("str_split_count", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let count = call_c_i64!("aha_str_split_count", vec![handle.into()]);
+            self.builder.build_return(Some(&count)).unwrap();
+            self.functions.insert("str_split_count".to_string(), func);
+        }
+
+        // --- str_split_get(handle, index) -> string ---
+        {
+            let func = self.module.add_function("str_split_get", string_type.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let index = func.get_nth_param(1).unwrap().into_int_value();
+            let result_ptr = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("str_split_get".to_string(), func);
+        }
+
+        // --- str_split_free(handle) -> int ---
+        {
+            let func = self.module.add_function("str_split_free", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let result = call_c_i64!("aha_str_split_free", vec![handle.into()]);
+            self.builder.build_return(Some(&result)).unwrap();
+            self.functions.insert("str_split_free".to_string(), func);
+        }
+
+        // --- str_to_int(string) -> int ---
+        {
+            let func = self.module.add_function("str_to_int", i64_t.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let str_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let ptr_val = self.builder.build_extract_value(str_struct, 0, "str_ptr").unwrap().into_pointer_value();
+            let len_val = self.builder.build_extract_value(str_struct, 1, "str_len").unwrap().into_int_value();
+            let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_to_int", vec![ptr_as_i64.into(), len_val.into()]);
+            self.builder.build_return(Some(&result)).unwrap();
+            self.functions.insert("str_to_int".to_string(), func);
+        }
+
+        // --- str_contains(string, substring) -> int ---
+        {
+            let func = self.module.add_function("str_contains", i64_t.fn_type(&[string_type.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let s_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let sub_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let s_ptr = self.builder.build_extract_value(s_struct, 0, "s_ptr").unwrap().into_pointer_value();
+            let s_len = self.builder.build_extract_value(s_struct, 1, "s_len").unwrap().into_int_value();
+            let sub_ptr = self.builder.build_extract_value(sub_struct, 0, "sub_ptr").unwrap().into_pointer_value();
+            let sub_len = self.builder.build_extract_value(sub_struct, 1, "sub_len").unwrap().into_int_value();
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let sub_ptr_i64 = self.builder.build_ptr_to_int(sub_ptr, i64_t, "sub_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_contains", vec![s_ptr_i64.into(), s_len.into(), sub_ptr_i64.into(), sub_len.into()]);
+            self.builder.build_return(Some(&result)).unwrap();
+            self.functions.insert("str_contains".to_string(), func);
+        }
+
+        // --- str_substring(string, start, end) -> string ---
+        {
+            let func = self.module.add_function("str_substring", string_type.fn_type(&[string_type.into(), i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let str_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let start = func.get_nth_param(1).unwrap().into_int_value();
+            let end = func.get_nth_param(2).unwrap().into_int_value();
+            let s_ptr = self.builder.build_extract_value(str_struct, 0, "s_ptr").unwrap().into_pointer_value();
+            let s_len = self.builder.build_extract_value(str_struct, 1, "s_len").unwrap().into_int_value();
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let result_ptr = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start.into(), end.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&result_struct)).unwrap();
+            self.functions.insert("str_substring".to_string(), func);
+        }
+    }
+
+    /// Compile a string builtin call (F13).
+    fn compile_string_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        // str_split(string, delimiter) -> handle (opaque int)
+        if func_name == "str_split" {
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let delim_tv = self.compile_expression(&call.arguments[1])?;
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
+            let delim_ptr = self.extract_str_ptr(&delim_tv)?;
+            let delim_len = self.extract_str_len(&delim_tv)?;
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let delim_ptr_i64 = self.builder.build_ptr_to_int(delim_ptr, i64_t, "d_ptr_i64").unwrap();
+            let handle = call_c_i64!("aha_str_split", vec![s_ptr_i64.into(), s_len.into(), delim_ptr_i64.into(), delim_len.into()]);
+            return Ok(TypedValue::int(handle));
+        }
+
+        // str_split_count(handle) -> int
+        if func_name == "str_split_count" {
+            let function = *self.functions.get("str_split_count").unwrap();
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let call_result = self.builder.build_call(function, &[tv.value.into()], "str_split_count_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::int(val));
+        }
+
+        // str_split_get(handle, index) -> string
+        if func_name == "str_split_get" {
+            let function = *self.functions.get("str_split_get").unwrap();
+            let handle_tv = self.compile_expression(&call.arguments[0])?;
+            let index_tv = self.compile_expression(&call.arguments[1])?;
+            let call_result = self.builder.build_call(function, &[handle_tv.value.into(), index_tv.value.into()], "str_split_get_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::string(val));
+        }
+
+        // str_split_free(handle)
+        if func_name == "str_split_free" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let handle = tv.value.into_int_value();
+            let result = call_c_i64!("aha_str_split_free", vec![handle.into()]);
+            return Ok(TypedValue::int(result));
+        }
+
+        // str_to_int(string) -> int
+        if func_name == "str_to_int" {
+            let function = *self.functions.get("str_to_int").unwrap();
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let call_result = self.builder.build_call(function, &[tv.value.into()], "str_to_int_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::int(val));
+        }
+
+        // str_contains(string, substring) -> int
+        if func_name == "str_contains" {
+            let function = *self.functions.get("str_contains").unwrap();
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let sub_tv = self.compile_expression(&call.arguments[1])?;
+            let call_result = self.builder.build_call(function, &[s_tv.value.into(), sub_tv.value.into()], "str_contains_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::int(val));
+        }
+
+        // str_substring(string, start, end) -> string
+        if func_name == "str_substring" {
+            let function = *self.functions.get("str_substring").unwrap();
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let start_tv = self.compile_expression(&call.arguments[1])?;
+            let end_tv = self.compile_expression(&call.arguments[2])?;
+            let start_val = start_tv.value.into_int_value();
+            let end_val = end_tv.value.into_int_value();
+            let call_result = self.builder.build_call(function, &[s_tv.value.into(), start_val.into(), end_val.into()], "str_substring_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::string(val));
+        }
+
+        Err(format!("Unknown string builtin: {}", func_name))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
@@ -6331,6 +6579,29 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         if let Some(f) = self.module.get_function("aha_json_free") {
             execution_engine.add_global_mapping(&f, crate::runtime::aha_json_free as usize);
+        }
+
+        // F13 String runtime functions
+        if let Some(f) = self.module.get_function("aha_str_split") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_count") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_count as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_get") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_get as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_free as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_to_int") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_to_int as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_contains") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_contains as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_substring") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_substring as usize);
         }
 
         let function_name = "main";

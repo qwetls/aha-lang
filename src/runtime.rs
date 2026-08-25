@@ -568,3 +568,119 @@ pub extern "C" fn aha_json_free(handle: i64) -> i64 {
     }
     0
 }
+
+// ===========================================================================
+// F13 — String Builtins
+// ===========================================================================
+
+struct SplitResult {
+    parts: Vec<String>,
+}
+
+/// str_split(s_ptr, s_len, delim_ptr, delim_len) -> handle
+/// Splits string by delimiter. Handle usable with str_split_count/str_split_get.
+/// # Safety
+/// All pointers must be valid UTF-8 of given lengths.
+#[no_mangle]
+pub extern "C" fn aha_str_split(s_ptr: i64, s_len: i64, delim_ptr: i64, delim_len: i64) -> i64 {
+    let s = unsafe {
+        let ptr = s_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, s_len as usize))
+    };
+    let delim = unsafe {
+        let ptr = delim_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, delim_len as usize))
+    };
+    let parts: Vec<String> = s.split(delim).map(|p| p.to_string()).collect();
+    let result = Box::new(SplitResult { parts });
+    Box::into_raw(result) as i64
+}
+
+/// str_split_count(handle) -> number of parts
+/// # Safety
+/// handle must be valid from str_split.
+#[no_mangle]
+pub extern "C" fn aha_str_split_count(handle: i64) -> i64 {
+    if handle == 0 { return 0; }
+    let result = unsafe { &*(handle as *const SplitResult) };
+    result.parts.len() as i64
+}
+
+/// str_split_get(handle, index) -> string pointer
+/// Returns empty string if index out of bounds.
+/// # Safety
+/// handle must be valid from str_split.
+#[no_mangle]
+pub extern "C" fn aha_str_split_get(handle: i64, index: i64) -> i64 {
+    if handle == 0 {
+        let empty = "".to_string().into_boxed_str();
+        return Box::into_raw(empty) as *mut u8 as i64;
+    }
+    let result = unsafe { &*(handle as *const SplitResult) };
+    let idx = index as usize;
+    let part = if idx < result.parts.len() { &result.parts[idx] } else { "" };
+    let boxed = part.to_string().into_boxed_str();
+    Box::into_raw(boxed) as *mut u8 as i64
+}
+
+/// str_split_free(handle) -> 0
+/// Frees the SplitResult.
+/// # Safety
+/// handle must be valid from str_split, or 0 (no-op).
+#[no_mangle]
+pub extern "C" fn aha_str_split_free(handle: i64) -> i64 {
+    if handle != 0 {
+        unsafe { drop(Box::from_raw(handle as *mut SplitResult)); }
+    }
+    0
+}
+
+/// str_to_int(s_ptr, s_len) -> integer value, 0 on parse failure.
+/// # Safety
+/// s_ptr must be valid UTF-8 of given length.
+#[no_mangle]
+pub extern "C" fn aha_str_to_int(s_ptr: i64, s_len: i64) -> i64 {
+    let s = unsafe {
+        let ptr = s_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, s_len as usize))
+    };
+    s.trim().parse::<i64>().unwrap_or(0)
+}
+
+/// str_contains(s_ptr, s_len, sub_ptr, sub_len) -> 1 if contains, 0 otherwise.
+/// # Safety
+/// All pointers must be valid UTF-8 of given lengths.
+#[no_mangle]
+pub extern "C" fn aha_str_contains(s_ptr: i64, s_len: i64, sub_ptr: i64, sub_len: i64) -> i64 {
+    let s = unsafe {
+        let ptr = s_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, s_len as usize))
+    };
+    let sub = unsafe {
+        let ptr = sub_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, sub_len as usize))
+    };
+    if s.contains(sub) { 1 } else { 0 }
+}
+
+/// str_substring(s_ptr, s_len, start, end) -> string pointer
+/// Returns substring from start to end (exclusive). Clamps to bounds.
+/// # Safety
+/// s_ptr must be valid UTF-8 of given length.
+#[no_mangle]
+pub extern "C" fn aha_str_substring(s_ptr: i64, s_len: i64, start: i64, end: i64) -> i64 {
+    let s = unsafe {
+        let ptr = s_ptr as *const u8;
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, s_len as usize))
+    };
+    let len = s.chars().count();
+    let start_idx = start.max(0) as usize;
+    let end_idx = (end.max(0) as usize).min(len);
+    if start_idx >= end_idx {
+        let empty = "".to_string().into_boxed_str();
+        return Box::into_raw(empty) as *mut u8 as i64;
+    }
+    let sub: String = s.chars().skip(start_idx).take(end_idx - start_idx).collect();
+    let boxed = sub.into_boxed_str();
+    Box::into_raw(boxed) as *mut u8 as i64
+}
