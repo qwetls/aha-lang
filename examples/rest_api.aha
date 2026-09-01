@@ -1,5 +1,5 @@
-// rest_api.aha — Simple REST API
-// Demo: HTTP (F11) + JSON (F12)
+// rest_api.aha — REST API with dynamic routing
+// Demo: HTTP (F11) + JSON (F12) + String Builtins (F13)
 
 let server = http_listen(8080)
 print("Server running on port 8080")
@@ -10,15 +10,40 @@ while 1 {
     let method = http_request_method(request)
     let path = http_request_path(request)
 
+    // Static route: home
     if method == "GET" && path == "/" {
         let resp = http_response(200, "Hello from AHA! Lang")
         http_send(client, resp)
     }
 
+    // Static route: health check
     if method == "GET" && path == "/api/health" {
-        let health = json_parse("{\"status\": \"ok\", \"version\": \"1.6.6\"}")
+        let health = json_parse("{\"status\": \"ok\", \"version\": \"1.7.0\"}")
         let body = json_stringify(health)
         let resp = http_response(200, body)
+        http_send(client, resp)
+    }
+
+    // Dynamic route: /api/users/:id
+    if method == "GET" && str_contains(path, "/api/users/") {
+        let parts = str_split(path, "/")
+        let count = str_split_count(parts)
+        let id_str = str_split_get(parts, 3)
+        let id = str_to_int(id_str)
+        str_split_free(parts)
+
+        let resp = http_response(200, "User ID: ")
+        http_send(client, resp)
+    }
+
+    // Dynamic route: /api/items/:id
+    if method == "GET" && str_contains(path, "/api/items/") {
+        let parts = str_split(path, "/")
+        let item_id_str = str_split_get(parts, 3)
+        let item_id = str_to_int(item_id_str)
+        str_split_free(parts)
+
+        let resp = http_response(200, "Item ID: ")
         http_send(client, resp)
     }
 
