@@ -35,6 +35,7 @@ AHA! is built on a simple belief: a language should feel **obvious** when you re
 - **🌐 TCP/UDP Sockets:** 12 built-in network primitives (`tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`) — networking without external libraries.
 - **🌍 HTTP Server:** 9 built-in HTTP primitives (`http_listen`, `http_accept`, `http_recv`, `http_send`, `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`) — build web servers in pure AHA! code, no frameworks needed.
 - **📋 JSON Parser/Serializer:** 3 built-in JSON primitives (`json_parse`, `json_stringify`, `json_get`) — parse JSON strings, serialize data, navigate by dot-path (`"user.name"`, `"items.0"`). Full support for objects, arrays, strings, numbers, booleans, null.
+- **✂️ String Builtins:** 7 string manipulation primitives (`str_split`, `str_split_count`, `str_split_get`, `str_split_free`, `str_to_int`, `str_contains`, `str_substring`) — split strings by delimiter, parse integers, check containment, extract substrings. Enables dynamic routing, query parsing, and input validation for web backends.
 - **🛠️ Honest Tooling:** A clean CLI (`--file`, `--emit-ir`, `--version`), a VS Code syntax-highlighting extension, and a CI pipeline that runs 600+ tests on every commit.
 
 ---

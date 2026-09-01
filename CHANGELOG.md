@@ -2,6 +2,24 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.7.0] — 2026-08-25
+
+### Added
+
+- **String Builtins — String manipulation (Roadmap Phase 13):**
+  - 7 string builtins: `str_split`, `str_split_count`, `str_split_get`, `str_split_free`, `str_to_int`, `str_contains`, `str_substring`.
+  - `str_split(s, delim)` — splits string by delimiter, returns handle to split result.
+  - `str_split_count(handle)` — returns number of parts from a split result.
+  - `str_split_get(handle, index)` — returns string at given index from split result.
+  - `str_split_free(handle)` — frees split result memory.
+  - `str_to_int(s)` — parses string to integer, returns 0 on failure.
+  - `str_contains(s, sub)` — returns 1 if `s` contains `sub`, 0 otherwise.
+  - `str_substring(s, start, end)` — returns substring from start to end index.
+  - Rust runtime: `SplitResult` struct + 7 extern functions in `src/runtime.rs`.
+  - Codegen: `declare_string_runtime()` + `compile_string_call()` dispatch with direct `aha_str_*` calls.
+  - 11 integration tests in `tests/f13_string_builtins.rs` covering split, to_int, contains, substring, and routing pattern.
+  - REST API example updated with dynamic routing using string builtins.
+
 ## [1.6.6] — 2026-08-24
 
 ### Added
