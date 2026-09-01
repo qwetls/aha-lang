@@ -4971,9 +4971,12 @@ impl<'ctx> CodeGenerator<'ctx> {
         // str_contains(s_ptr, s_len, sub_ptr, sub_len) -> i64
         let fn_contains = self.module.add_function("aha_str_contains", fn_type_i64_4, None);
         self.functions.insert("aha_str_contains".to_string(), fn_contains);
-        // str_substring(s_ptr, s_len, start, end) -> i64 (pointer to string)
+        // str_substring(s_ptr, s_len, start, end) -> i64 (StringResult handle)
         let fn_substring = self.module.add_function("aha_str_substring", fn_type_i64_4, None);
         self.functions.insert("aha_str_substring".to_string(), fn_substring);
+        // str_result_free(handle) -> i64 — frees StringResult wrapper
+        let fn_result_free = self.module.add_function("aha_str_result_free", fn_type_i64_1, None);
+        self.functions.insert("aha_str_result_free".to_string(), fn_result_free);
 
         // Type inference
         self.fn_types.insert("str_split_count".to_string(), AhaType::Int);
@@ -5036,9 +5039,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             let index_tv = self.compile_expression(&call.arguments[1])?;
             let handle = handle_tv.value.into_int_value();
             let index = index_tv.value.into_int_value();
-            let result_ptr = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
-            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
-            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            // Returns StringResult { ptr: *mut u8, len: i64 } handle
+            let sr_handle = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
+            let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
+            // StringResult struct: { i8*, i64 }
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let ptr_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
+            let len_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 1, "len_gep").unwrap();
+            let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
+            // Free the StringResult wrapper (string data lives in split handle)
+            call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
                 .map_err(|e| e.to_string())?.into_struct_value();
             let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len")
@@ -5078,9 +5089,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             let start_val = start_tv.value.into_int_value();
             let end_val = end_tv.value.into_int_value();
             let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
-            let result_ptr = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
-            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
-            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            // Returns StringResult { ptr: *mut u8, len: i64 } handle
+            let sr_handle = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
+            let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let ptr_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
+            let len_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 1, "len_gep").unwrap();
+            let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
+            // Free StringResult wrapper (substring data is separate allocation)
+            call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
             let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
                 .map_err(|e| e.to_string())?.into_struct_value();
             let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len")
@@ -6505,6 +6523,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         if let Some(f) = self.module.get_function("aha_str_substring") {
             execution_engine.add_global_mapping(&f, crate::runtime::aha_str_substring as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_result_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_result_free as usize);
         }
 
         let function_name = "main";
