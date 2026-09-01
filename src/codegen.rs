@@ -5041,7 +5041,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let index = index_tv.value.into_int_value();
             // Returns StringResult { ptr: *mut u8, len: i64 } handle
             let sr_handle = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
-            let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
+            let sr_raw = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_raw").unwrap();
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let sr_ptr = self.builder.build_bitcast(sr_raw, sr_type.ptr_type(AddressSpace::default()), "sr_typed")
+                .expect("bitcast failed").into_pointer_value();
             let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
             let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
             let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
@@ -5089,7 +5092,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
             // Returns StringResult { ptr: *mut u8, len: i64 } handle
             let sr_handle = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
-            let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
+            let sr_raw = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_raw").unwrap();
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let sr_ptr = self.builder.build_bitcast(sr_raw, sr_type.ptr_type(AddressSpace::default()), "sr_typed")
+                .expect("bitcast failed").into_pointer_value();
             let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
             let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
             let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
