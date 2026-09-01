@@ -5041,7 +5041,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
-            return Ok(TypedValue::string(str_struct));
+            return Ok(TypedValue::string(str_struct.into()));
         }
 
         // str_split_free(handle)
@@ -5081,7 +5081,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
             let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
             let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len").unwrap();
-            return Ok(TypedValue::string(result_struct));
+            return Ok(TypedValue::string(result_struct.into()));
         }
 
         Err(format!("Unknown string builtin: {}", func_name))
