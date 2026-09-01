@@ -577,6 +577,12 @@ struct SplitResult {
     parts: Vec<String>,
 }
 
+#[repr(C)]
+pub struct StringResult {
+    pub ptr: *mut u8,
+    pub len: i64,
+}
+
 /// str_split(s_ptr, s_len, delim_ptr, delim_len) -> handle
 /// Splits string by delimiter. Handle usable with str_split_count/str_split_get.
 /// # Safety
@@ -613,14 +619,17 @@ pub extern "C" fn aha_str_split_count(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn aha_str_split_get(handle: i64, index: i64) -> i64 {
     if handle == 0 {
-        let empty = "".to_string().into_boxed_str();
-        return Box::into_raw(empty) as *mut u8 as i64;
+        let result = Box::new(StringResult { ptr: std::ptr::null_mut(), len: 0 });
+        return Box::into_raw(result) as i64;
     }
     let result = unsafe { &*(handle as *const SplitResult) };
     let idx = index as usize;
     let part = if idx < result.parts.len() { &result.parts[idx] } else { "" };
     let boxed = part.to_string().into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    let ptr = Box::into_raw(boxed) as *mut u8;
+    let len = part.len() as i64;
+    let str_result = Box::new(StringResult { ptr, len });
+    Box::into_raw(str_result) as i64
 }
 
 /// str_split_free(handle) -> 0
@@ -677,10 +686,28 @@ pub extern "C" fn aha_str_substring(s_ptr: i64, s_len: i64, start: i64, end: i64
     let start_idx = start.max(0) as usize;
     let end_idx = (end.max(0) as usize).min(len);
     if start_idx >= end_idx {
-        let empty = "".to_string().into_boxed_str();
-        return Box::into_raw(empty) as *mut u8 as i64;
+        let result = Box::new(StringResult { ptr: std::ptr::null_mut(), len: 0 });
+        return Box::into_raw(result) as i64;
     }
     let sub: String = s.chars().skip(start_idx).take(end_idx - start_idx).collect();
+    let actual_len = sub.len() as i64;
     let boxed = sub.into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    let ptr = Box::into_raw(boxed) as *mut u8;
+    let str_result = Box::new(StringResult { ptr, len: actual_len });
+    Box::into_raw(str_result) as i64
+}
+
+/// Frees only the StringResult wrapper. The underlying string data
+/// is owned by the AHA string variable and freed by the compiler.
+/// # Safety
+/// handle must be valid from str_split_get or str_substring.
+#[no_mangle]
+pub extern "C" fn aha_str_result_free(handle: i64) -> i64 {
+    if handle != 0 {
+        unsafe {
+            let _ = Box::from_raw(handle as *mut StringResult);
+            // Do NOT free sr.ptr — it's now owned by the AHA string struct
+        }
+    }
+    0
 }
