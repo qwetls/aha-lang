@@ -5039,9 +5039,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result_ptr = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
-            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
-            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
-            return Ok(TypedValue::string(str_struct.into_struct_value()));
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            return Ok(TypedValue::string(str_struct.into()));
         }
 
         // str_split_free(handle)
@@ -5079,9 +5081,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             let result_ptr = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
             let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
             let len = call_c_i64!("strlen", vec![ptr_val.into()]);
-            let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
-            let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len").unwrap();
-            return Ok(TypedValue::string(result_struct.into_struct_value()));
+            let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            return Ok(TypedValue::string(result_struct.into()));
         }
 
         Err(format!("Unknown string builtin: {}", func_name))
