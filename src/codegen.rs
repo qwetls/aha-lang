@@ -5042,11 +5042,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Returns StringResult { ptr: *mut u8, len: i64 } handle
             let sr_handle = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
             let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
-            // StringResult struct: { i8*, i64 }
-            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
-            let ptr_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
             let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
-            let len_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 1, "len_gep").unwrap();
+            let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
             let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
             // Free the StringResult wrapper (string data lives in split handle)
             call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
@@ -5092,10 +5090,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Returns StringResult { ptr: *mut u8, len: i64 } handle
             let sr_handle = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
             let sr_ptr = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_ptr").unwrap();
-            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
-            let ptr_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
             let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
-            let len_gep = self.builder.build_struct_gep(sr_type, sr_ptr, 1, "len_gep").unwrap();
+            let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
             let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
             // Free StringResult wrapper (substring data is separate allocation)
             call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
