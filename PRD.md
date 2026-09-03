@@ -141,7 +141,7 @@ kompromi.
 | **F10** | TCP/UDP Sockets — network builtins | ✅ Selesai (v1.6.4) — 12 socket builtins, C runtime, 9 tests |
 | **F11** | HTTP Server — builtins | ✅ Selesai (v1.6.5) — 9 HTTP builtins, 5 runtime functions, 10 tests |
 | **F12** | JSON Parser/Serializer | ✅ Selesai (v1.6.6) — 3 JSON builtins, 3 runtime functions, 7 tests |
-| **F13** | Async I/O | ⏳ Setelah F12 |
+| **F13** | String Builtins — string manipulation | ✅ Selesai (v1.7.0) — 7 string builtins, StringResult struct, 11 tests |
 | **F14** | Game Engine foundations | ⏳ Setelah web backend stabil |
 | **F15** | Package manager (`aha install`) | ⏳ Setelah komunitas |
 | **F7** | Self-hosting | ⏳ Long-term |
@@ -164,6 +164,7 @@ ke main. Tidak ada loncatan.
 - Array literal & indexing
 - Builtin: `print`, `print_str`, `abs`, `min`, `max`, `len`
 - String builtins: `int_to_string`, `string_to_int`, `string_sub`, `char_at`
+- String manipulation builtins (F13): `str_split`, `str_split_count`, `str_split_get`, `str_split_free`, `str_to_int`, `str_contains`, `str_substring`
 - File I/O: `file_read`, `file_write`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
@@ -244,9 +245,9 @@ Detail Fase 1, 2 & 3 (di `development`):
 ### ❌ Belum ada
 - Self-hosting (compiler AHA! ditulis dalam AHA!) — long-term
 - Package manager `aha install` (F15 — setelah komunitas)
-- HTTP Server builtins (F11)
-- JSON parser/serializer (F12)
-- Async I/O (F13)
+- HTTP Server builtins (F11) ✅
+- JSON parser/serializer (F12) ✅
+- String manipulation builtins (F13) ✅
 
 ---
 
