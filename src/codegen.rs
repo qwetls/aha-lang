@@ -3588,13 +3588,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             let bb = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(bb);
             let fd = func.get_nth_param(0).unwrap().into_int_value();
-            // Allocate 64KB buffer
+            // Allocate 64KB+1 buffer — recv fills at most 64KB, +1 byte for the
+            // null terminator: the F11 parsers scan for \0 on this buffer.
             let buf_size = i64_t.const_int(65536, false);
-            let buf = self.builder.build_alloca(i8_type.array_type(65536), "recv_buf").unwrap();
+            let buf = self.builder.build_alloca(i8_type.array_type(65537), "recv_buf").unwrap();
             let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap().into_pointer_value();
             let buf_as_i64 = self.builder.build_ptr_to_int(buf_i8, i64_t, "buf_as_i64").unwrap();
             // recv(fd, buf, 65536) — recv declared with 3 args, no flags
             let n = call_c_i64!("recv", vec![fd.into(), buf_as_i64.into(), buf_size.into()]);
+            // Null-terminate at buf[n] so strlen and the runtime parsers are safe
+            let null_pos = unsafe { self.builder.build_gep(buf_i8, &[n], "null_pos").unwrap() };
+            let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
             let str_struct = self.builder.build_insert_value(string_type.const_zero(), buf_i8, 0, "str_ptr").unwrap();
             let str_struct = self.builder.build_insert_value(str_struct, n, 1, "str_len").unwrap();
             self.builder.build_return(Some(&str_struct)).unwrap();

@@ -1,0 +1,13 @@
+// hello.aha — Simplest possible HTTP server
+// Tutorial: https://aha-lang.dev/en/rest-api
+
+let server = http_listen(3000)
+print_str("Listening on http://localhost:3000")
+
+while 1 {
+    let client = http_accept(server)
+    let request = http_recv(client)
+    let resp = http_response(200, "Hello from AHA!")
+    http_send(client, resp)
+    close_fd(client)
+}

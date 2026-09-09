@@ -121,38 +121,52 @@ pub extern "C" fn actor_call(handle: i64, msg: i64) -> i64 {
 // F11 HTTP Parser — native functions for HTTP request/response handling
 // ===========================================================================
 
-/// Parse HTTP method from request string. Returns pointer to static buffer.
+/// Allocates a null-terminated copy of `s` and returns its pointer as i64.
+/// All runtime functions that hand strings back to codegen must use this —
+/// codegen measures returned strings with `strlen`, so a missing terminator
+/// makes it read past the allocation. Same shape as `file_read`'s malloc(size+1).
+fn new_aha_string(s: &str) -> i64 {
+    let bytes = s.as_bytes();
+    let layout = std::alloc::Layout::from_size_align(bytes.len() + 1, 1).unwrap();
+    unsafe {
+        let ptr = std::alloc::alloc(layout);
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        *ptr.add(bytes.len()) = 0;
+        ptr as i64
+    }
+}
+
+/// Parses a null-terminated C string at `ptr` into a &str.
+/// # Safety
+/// `ptr` must be a valid null-terminated buffer.
+unsafe fn c_str_at<'a>(ptr: *const u8) -> &'a str {
+    let mut len = 0usize;
+    while *ptr.add(len) != 0 { len += 1; }
+    std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+}
+
+/// Parse HTTP method from request string. Returns a null-terminated string.
 /// # Safety
 /// req must be a valid null-terminated UTF-8 string from AHA! String.
 #[no_mangle]
 pub extern "C" fn aha_http_request_method(req: i64) -> i64 {
-    let req_str = unsafe {
-        let ptr = req as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
+    let req_str = unsafe { c_str_at(req as *const u8) };
     let method = match req_str.split_once(' ') {
         Some((m, _)) => m,
         None => return 0,
     };
-    // Leak a Rust String so the pointer stays valid until next call
-    let boxed = method.to_string().into_boxed_str();
-    let ptr = Box::into_raw(boxed) as *mut u8 as i64;
-    ptr
+    new_aha_string(method)
 }
 
-/// Parse HTTP path from request string. Returns pointer to static buffer.
+/// Parse HTTP path from request string. Returns a null-terminated string.
 /// # Safety
 /// req must be a valid null-terminated UTF-8 string from AHA! String.
 #[no_mangle]
 pub extern "C" fn aha_http_request_path(req: i64) -> i64 {
-    let req_str = unsafe {
-        let ptr = req as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
+    let req_str = unsafe { c_str_at(req as *const u8) };
     let path = match req_str.split_once(' ') {
         Some((_, rest)) => match rest.split_once(' ') {
             Some((p, _)) => p,
@@ -160,71 +174,49 @@ pub extern "C" fn aha_http_request_path(req: i64) -> i64 {
         },
         None => return 0,
     };
-    let boxed = path.to_string().into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    new_aha_string(path)
 }
 
 /// Parse HTTP body from request string (everything after \r\n\r\n).
+/// Returns a null-terminated string (empty string when there is no body).
 /// # Safety
 /// req must be a valid null-terminated UTF-8 string.
 #[no_mangle]
 pub extern "C" fn aha_http_request_body(req: i64) -> i64 {
-    let req_str = unsafe {
-        let ptr = req as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
+    let req_str = unsafe { c_str_at(req as *const u8) };
     let body = match req_str.split_once("\r\n\r\n") {
         Some((_, b)) => b,
         None => "",
     };
-    let boxed = body.to_string().into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    new_aha_string(body)
 }
 
-/// Find header value by name (case-insensitive).
+/// Find header value by name (case-insensitive). Returns a null-terminated
+/// string (empty when the header is absent).
 /// # Safety
 /// req and name must be valid null-terminated UTF-8 strings.
 #[no_mangle]
 pub extern "C" fn aha_http_request_header(req: i64, name: i64) -> i64 {
-    let req_str = unsafe {
-        let ptr = req as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
-    let name_str = unsafe {
-        let ptr = name as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
+    let req_str = unsafe { c_str_at(req as *const u8) };
+    let name_str = unsafe { c_str_at(name as *const u8) };
     let name_lower = name_str.to_lowercase();
     for line in req_str.lines() {
         if let Some((k, v)) = line.split_once(':') {
             if k.trim().to_lowercase() == name_lower {
-                let val = v.trim();
-                let boxed = val.to_string().into_boxed_str();
-                return Box::into_raw(boxed) as *mut u8 as i64;
+                return new_aha_string(v.trim());
             }
         }
     }
-    let empty = "".to_string().into_boxed_str();
-    Box::into_raw(empty) as *mut u8 as i64
+    new_aha_string("")
 }
 
 /// Build HTTP response string from status code and body.
+/// Returns a null-terminated string.
 /// # Safety
 /// body must be a valid null-terminated UTF-8 string.
 #[no_mangle]
 pub extern "C" fn aha_http_response(status: i64, body: i64) -> i64 {
-    let body_str = unsafe {
-        let ptr = body as *const u8;
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 { len += 1; }
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-    };
+    let body_str = unsafe { c_str_at(body as *const u8) };
     let status_text = match status {
         200 => "OK",
         201 => "Created",
@@ -237,8 +229,7 @@ pub extern "C" fn aha_http_response(status: i64, body: i64) -> i64 {
         "HTTP/1.1 {} {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         status, status_text, body_str.len(), body_str
     );
-    let boxed = resp.into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    new_aha_string(&resp)
 }
 
 // ===========================================================================
@@ -517,13 +508,11 @@ pub extern "C" fn aha_json_parse(json_ptr: i64, json_len: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn aha_json_stringify(handle: i64) -> i64 {
     if handle == 0 {
-        let s = "null".to_string().into_boxed_str();
-        return Box::into_raw(s) as *mut u8 as i64;
+        return new_aha_string("null");
     }
     let val = unsafe { &*(handle as *const JsonValue) };
     let result = json_value_to_string(val);
-    let boxed = result.into_boxed_str();
-    Box::into_raw(boxed) as *mut u8 as i64
+    new_aha_string(&result)
 }
 
 /// json_get(handle, path_ptr, path_len) -> String representation of value at path.
@@ -533,8 +522,7 @@ pub extern "C" fn aha_json_stringify(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn aha_json_get(handle: i64, path_ptr: i64, path_len: i64) -> i64 {
     if handle == 0 {
-        let empty = "".to_string().into_boxed_str();
-        return Box::into_raw(empty) as *mut u8 as i64;
+        return new_aha_string("");
     }
     let val = unsafe { &*(handle as *const JsonValue) };
     let path_str = unsafe {
@@ -548,13 +536,9 @@ pub extern "C" fn aha_json_get(handle: i64, path_ptr: i64, path_len: i64) -> i64
                 JsonValue::Str(s) => s.clone(),
                 other => json_value_to_string(other),
             };
-            let boxed = result.into_boxed_str();
-            Box::into_raw(boxed) as *mut u8 as i64
+            new_aha_string(&result)
         }
-        None => {
-            let empty = "".to_string().into_boxed_str();
-            Box::into_raw(empty) as *mut u8 as i64
-        }
+        None => new_aha_string(""),
     }
 }
 

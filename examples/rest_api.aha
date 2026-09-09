@@ -2,7 +2,7 @@
 // Demo: HTTP (F11) + JSON (F12) + String Builtins (F13)
 
 let server = http_listen(8080)
-print("Server running on port 8080")
+print_str("Server running on http://localhost:8080")
 
 while 1 {
     let client = http_accept(server)
@@ -27,12 +27,11 @@ while 1 {
     // Dynamic route: /api/users/:id
     if method == "GET" && str_contains(path, "/api/users/") {
         let parts = str_split(path, "/")
-        let count = str_split_count(parts)
         let id_str = str_split_get(parts, 3)
         let id = str_to_int(id_str)
         str_split_free(parts)
 
-        let resp = http_response(200, "User ID: ")
+        let resp = http_response(200, "User ID: " + id_str)
         http_send(client, resp)
     }
 
@@ -43,7 +42,7 @@ while 1 {
         let item_id = str_to_int(item_id_str)
         str_split_free(parts)
 
-        let resp = http_response(200, "Item ID: ")
+        let resp = http_response(200, "Item ID: " + item_id_str)
         http_send(client, resp)
     }
 
