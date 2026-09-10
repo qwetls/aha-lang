@@ -1,0 +1,66 @@
+name: "✨ Feature Request"
+description: "Suggest a new feature or improvement"
+title: "[feat] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your request related to a problem?
+      description: A clear description of what the problem is.
+      placeholder: "I'm always frustrated when the compiler silently ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: What would you like to happen? Include a sample `.aha` snippet if the request concerns new syntax or builtins.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: roadmap
+    attributes:
+      label: Roadmap alignment
+      description: Does this fit into an existing phase in PRD.md?
+      options:
+        - "Yes — fits an existing roadmap phase"
+        - "No — new direction"
+        - "Unsure"
+    validations:
+      required: true
+
+  - type: input
+    id: roadmap-phase
+    attributes:
+      label: Roadmap phase (if applicable)
+      description: "Which phase? (F1–F14, see PRD.md)"
+      placeholder: "e.g. F14 — package manager"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: Any alternative solutions or workarounds you've evaluated.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Impact scope
+      description: Check all layers that would be affected.
+      options:
+        - label: Lexer / Parser
+        - label: Type system / inference
+        - label: Codegen (LLVM IR)
+        - label: "Runtime (src/runtime.rs)"
+        - label: New / changed builtin
+        - label: "Documentation (aha-lang-docs)"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, prior art from other languages, etc.

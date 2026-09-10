@@ -1,0 +1,98 @@
+name: "🐛 Bug Report"
+description: "Report something that doesn't work as expected"
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: What went wrong?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest `.aha` source that triggers the bug.
+      render: text
+      placeholder: |
+        let x = some_buggy_call(42)
+        print(x)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened — include full error / CI output.
+      render: text
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "## Environment"
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Ubuntu 22.04, macOS 14, Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      description: "Output of `rustc --version`"
+      placeholder: "rustc 1.78.0"
+    validations:
+      required: true
+
+  - type: input
+    id: llvm
+    attributes:
+      label: LLVM version
+      description: "Output of `llvm-config --version`"
+      placeholder: "14.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: aha-version
+    attributes:
+      label: AHA! Lang version
+      description: "Release tag or commit SHA"
+      placeholder: "v1.7.1 or 6596399"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Execution mode
+      options:
+        - JIT
+        - AOT (--emit-exe)
+        - Compile-only
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Related issues, proposed fixes, or anything else.
