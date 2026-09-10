@@ -122,6 +122,20 @@ fn parsed_method_matches_route_string() {
 }
 
 #[test]
+fn string_compare_composes_with_int_builtins() {
+    // Regression: string == was tagged Bool, so `method == "GET" &&
+    // str_contains(...)` (Bool && Int) was rejected by codegen. Comparisons
+    // must return Int (0/1) so they compose with && / || / arithmetic.
+    let result = run(r#"
+        let request = "GET /api/users/7 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        let method = http_request_method(request)
+        let path = http_request_path(request)
+        (method == "GET") + str_contains(path, "/api/users/")
+    "#);
+    assert_eq!(result, 2);
+}
+
+#[test]
 fn http_response_len_accurate() {
     // http_response builds "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n
     // Content-Length: 5\r\nConnection: close\r\n\r\nHello" — Content-Length must

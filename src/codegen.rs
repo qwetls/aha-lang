@@ -4324,7 +4324,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let pred = if op == "==" { inkwell::IntPredicate::EQ } else { inkwell::IntPredicate::NE };
         let cmp = self.builder.build_int_compare(pred, cmp_result, zero_i32, "streq").map_err(|e| e.to_string())?;
         let ext = self.builder.build_int_z_extend(cmp, self.i64_type, "streqext").map_err(|e| e.to_string())?;
-        Ok(TypedValue::new(ext.into(), AhaType::Bool))
+        Ok(TypedValue::new(ext.into(), AhaType::Int))
     }
 
     /// Logical AND: both operands are already evaluated by compile_infix.

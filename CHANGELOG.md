@@ -10,6 +10,7 @@ All notable changes to AHA! Lang are documented in this file.
   - Runtime functions returned `Box::into_raw(Box<str>)` — **not null-terminated** — while codegen measures returned strings with `strlen`, so `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`, `json_stringify`, `json_get` read past the allocation and produced garbage lengths in the GET/POST pipeline.
   - New `new_aha_string` helper (allocates `len+1`, explicit `\0`, same pattern as `file_read`); all string-returning runtime functions now use it.
   - `http_recv` codegen stores a null terminator at the byte after `recv`'s return length so raw request buffers are safely scannable by the parsers.
+  - String `==`/`!=` results are now tagged `Int` (0/1) instead of `Bool`, matching the language spec that all comparison operators return `Int`. Previously `method == "GET" && str_contains(path, ...)` failed codegen with "Cannot apply operator '&&' to types Bool and Int".
 
 ### Added
 
