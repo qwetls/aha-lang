@@ -59,6 +59,20 @@ fn example_todo_api_compiles() {
     compile(include_str!("../examples/todo_api.aha"));
 }
 
+#[test]
+fn if_without_else_string_body_compiles() {
+    // Regression: `if` with no else whose body evaluates to a String produced
+    // a merge phi mixing {i8*, i64} (consequence) with i64 0 (implicit else) —
+    // LLVM verifier: "PHI node operands are not the same type as the result".
+    compile(r#"
+        let out = "x"
+        if 1 {
+            out = out + "y"
+        }
+        out
+    "#);
+}
+
 // --- 2. Parsing pipeline returns correctly-sized (null-terminated) strings ---
 
 #[test]
@@ -130,7 +144,8 @@ fn string_compare_composes_with_int_builtins() {
         let request = "GET /api/users/7 HTTP/1.1\r\nHost: localhost\r\n\r\n"
         let method = http_request_method(request)
         let path = http_request_path(request)
-        (method == "GET") + str_contains(path, "/api/users/")
+        let is_get = method == "GET"
+        is_get + str_contains(path, "/api/users/")
     "#);
     assert_eq!(result, 2);
 }

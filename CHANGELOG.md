@@ -11,6 +11,7 @@ All notable changes to AHA! Lang are documented in this file.
   - New `new_aha_string` helper (allocates `len+1`, explicit `\0`, same pattern as `file_read`); all string-returning runtime functions now use it.
   - `http_recv` codegen stores a null terminator at the byte after `recv`'s return length so raw request buffers are safely scannable by the parsers.
   - String `==`/`!=` results are now tagged `Int` (0/1) instead of `Bool`, matching the language spec that all comparison operators return `Int`. Previously `method == "GET" && str_contains(path, ...)` failed codegen with "Cannot apply operator '&&' to types Bool and Int".
+  - `if` without `else` whose body evaluates to a String/Struct/Enum now emits a type-correct implicit-else zero value (`const_zero` of the consequence's LLVM type). Previously the merge phi mixed the struct value with `i64 0` and failed verification ("PHI node operands are not the same type as the result"), breaking patterns like `if i > 0 { out = out + ", " }`.
 
 ### Added
 

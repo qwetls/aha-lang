@@ -5641,7 +5641,26 @@ impl<'ctx> CodeGenerator<'ctx> {
         let alternative_tv = if let Some(alt_block) = &if_expr.alternative {
             self.compile_block_statement(alt_block)?
         } else {
-            TypedValue::int(self.i64_type.const_int(0, false).into())
+            // No else branch: the implicit "else" value must have the same LLVM
+            // type as the consequence, or the merge phi below would mix a struct
+            // operand with an i64 zero (PHI verifier error).
+            match &consequence_tv.aha_type {
+                AhaType::String => {
+                    let z = self.string_type.const_zero();
+                    TypedValue::new(z.into(), AhaType::String)
+                }
+                AhaType::Struct(name) => {
+                    let name = name.clone();
+                    let z = self.struct_llvm_type(&name)?.const_zero();
+                    TypedValue::new(z.into(), AhaType::Struct(name))
+                }
+                AhaType::Enum(name) => {
+                    let name = name.clone();
+                    let z = self.enum_llvm_type(&name)?.const_zero();
+                    TypedValue::new(z.into(), AhaType::Enum(name))
+                }
+                _ => TypedValue::int(self.i64_type.const_int(0, false).into()),
+            }
         };
         let alternative_end_block = self.builder.get_insert_block().unwrap();
         let alternative_terminated = alternative_end_block.get_terminator().is_some();
