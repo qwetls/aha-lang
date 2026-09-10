@@ -2,6 +2,20 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.7.1] — 2026-09-09
+
+### Fixed
+
+- **Systemic null-termination bug in runtime string returns (F11/F12/F13):**
+  - Runtime functions returned `Box::into_raw(Box<str>)` — **not null-terminated** — while codegen measures returned strings with `strlen`, so `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`, `json_stringify`, `json_get` read past the allocation and produced garbage lengths in the GET/POST pipeline.
+  - New `new_aha_string` helper (allocates `len+1`, explicit `\0`, same pattern as `file_read`); all string-returning runtime functions now use it.
+  - `http_recv` codegen stores a null terminator at the byte after `recv`'s return length so raw request buffers are safely scannable by the parsers.
+
+### Added
+
+- REST API tutorial examples in `examples/`: `hello.aha` (smallest server), `todo_api.aha` (GET list, GET `/:id`, POST create); `rest_api.aha` fixed to use `print_str` (`print` only accepts i64).
+- Behavioral regression tests in `tests/rest_api_tutorial.rs`: compile-checks every `examples/*.aha` and JIT-executes the full GET/POST parsing pipeline asserting exact `len()` of parser outputs.
+
 ## [1.7.0] — 2026-08-25
 
 ### Added
