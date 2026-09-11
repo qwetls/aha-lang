@@ -18,7 +18,7 @@ while 1 {
 
     // Static route: health check
     if method == "GET" && path == "/api/health" {
-        let health = json_parse("{\"status\": \"ok\", \"version\": \"1.7.0\"}")
+        let health = json_parse("{\"status\": \"ok\", \"version\": \"1.7.1\"}")
         let body = json_stringify(health)
         let resp = http_response(200, body)
         http_send(client, resp)
