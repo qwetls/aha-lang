@@ -42,7 +42,30 @@ jobs:
 
       # Step 3: Periksa kode (cepat) untuk cari error sintaks
       - name: Run cargo check
-        run: cargo check --verbose
+        run: cargo check --verbose 2>&1 | tee cargo_check_output.txt || true
+
+      - name: Write cargo check output to summary
+        if: always()
+        run: |
+          echo "## Cargo Check Output" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat cargo_check_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Extract errors to summary
+        if: always()
+        run: |
+          echo "## Errors Only" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^error" cargo_check_output.txt >> $GITHUB_STEP_SUMMARY || echo "(no error lines found)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload cargo check output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-output
+          path: cargo_check_output.txt
 
       # Step 4: Jalankan semua test yang ada
       # LLVM JIT tidak thread-safe — multiple Context::create() + JIT

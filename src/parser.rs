@@ -10,6 +10,7 @@ use crate::ast::{
     AssignmentExpression, FunctionLiteral, ImportStatement, ModuleAccess,
     ActorDefinition, SpawnExpression,
     EnumDefinition, EnumVariant, MatchExpression, MatchArm, Pattern,
+    ExternFnDecl, PostfixExpression,
 };
 use crate::ast::Token;
 use crate::ast::TokenType;
@@ -38,6 +39,7 @@ pub enum Precedence {
     Prefix,      // -X or !X
     Call,        // myFunction(X)
     Index,       // arr[i]
+    Postfix,     // expr?
 }
 
 impl Parser {
@@ -100,6 +102,12 @@ impl Parser {
     /// the first identifier of the hint). Consumes the full hint and returns
     /// the canonical hint string ("List<int>", "Map<string,int>", ...).
     fn parse_type_hint(&mut self) -> Option<String> {
+        // *T — raw pointer prefix
+        if self.current_token_is(TokenType::Asterisk) {
+            self.next_token(); // skip '*'
+            let inner = self.parse_type_hint()?;
+            return Some(format!("*{}", inner));
+        }
         if !self.current_token_is(TokenType::Identifier) {
             return None;
         }
@@ -110,15 +118,15 @@ impl Parser {
             self.next_token(); // current = inner hint start, peek = '>' or '<'
             let first_hint = self.parse_type_hint()?;
             if self.peek_token_is(TokenType::Comma) {
-                // Map<K, V>: after the key hint comes a comma, then the value hint.
+                // Map<K, V> or Result<T, E>: after the first hint comes a comma, then the second hint.
                 self.next_token(); // current = ','
                 self.next_token(); // current = value hint start
                 let second_hint = self.parse_type_hint()?;
                 if !self.expect_peek(TokenType::GT) {
-                    self.errors.push("Expected '>' to close Map<K,V> type hint".to_string());
+                    self.errors.push("Expected '>' to close generic type hint".to_string());
                     return None;
                 }
-                return Some(format!("Map<{}, {}>", first_hint, second_hint));
+                return Some(format!("{hint}<{first_hint}, {second_hint}>"));
             }
             if !self.expect_peek(TokenType::GT) {
                 self.errors.push("Expected '>' to close List<T> type hint".to_string());
@@ -158,6 +166,7 @@ impl Parser {
             TokenType::Enum => self.parse_enum_definition(false),
             TokenType::Use => self.parse_use_statement(),
             TokenType::Pub => self.parse_pub_statement(),
+            TokenType::Extern => self.parse_extern_function(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -179,6 +188,55 @@ impl Parser {
     fn parse_function_statement(&mut self, is_pub: bool) -> Option<Statement> {
         let expr = self.parse_function_literal_with_pub(is_pub);
         Some(Statement::Expression(ExpressionStatement { expression: expr }))
+    }
+
+    /// Parse `extern fn name(param: Type, ...) -> RetType;`
+    /// Called when current_token is Extern. peek_token is the next token (fn).
+    fn parse_extern_function(&mut self) -> Option<Statement> {
+        // peek_token should be 'fn' — advance to verify
+        if !self.expect_peek(TokenType::Fn) {
+            self.errors.push("Expected 'fn' after 'extern'".to_string());
+            return None;
+        }
+
+        // Now current_token = Fn, peek_token = Identifier(name)
+        if !self.expect_peek(TokenType::Identifier) {
+            self.errors.push("Expected function name after 'extern fn'".to_string());
+            return None;
+        }
+
+        let name = Identifier { value: self.current_token.literal.clone() };
+
+        if !self.expect_peek(TokenType::LeftParen) {
+            self.errors.push("Expected '(' after extern function name".to_string());
+            return None;
+        }
+
+        let (parameters, param_type_hints) = self.parse_function_parameters();
+
+        // Optional return type: -> T
+        let return_type_hint = if self.peek_token_is(TokenType::Arrow) {
+            self.next_token(); // skip '->'
+            if !self.expect_peek(TokenType::Identifier) {
+                self.errors.push("Expected type after '->' in extern fn".to_string());
+            }
+            self.parse_type_hint()
+        } else {
+            None
+        };
+
+        // Expect semicolon to close the declaration
+        if !self.expect_peek(TokenType::Semicolon) {
+            self.errors.push("Expected ';' after extern fn declaration".to_string());
+            return None;
+        }
+
+        Some(Statement::ExternFn(ExternFnDecl {
+            name,
+            parameters,
+            param_type_hints,
+            return_type_hint,
+        }))
     }
 
     fn parse_struct_definition(&mut self, is_pub: bool) -> Option<Statement> {
@@ -599,6 +657,16 @@ impl Parser {
                 continue;
             }
 
+            // Handle postfix ? operator: expr?
+            if self.peek_token_is(TokenType::QuestionMark) {
+                self.next_token(); // consume '?'
+                left = Expression::Postfix(PostfixExpression {
+                    operator: "?".to_string(),
+                    operand: Box::new(left),
+                });
+                continue;
+            }
+
             // Generic infix operator
             self.next_token(); // consume operator
             let operator = self.current_token.literal.clone();
@@ -761,9 +829,7 @@ impl Parser {
         // Optional per-param type hint: name: Type
         let hint = if self.peek_token_is(TokenType::Colon) {
             self.next_token(); // skip ':'
-            if !self.expect_peek(TokenType::Identifier) {
-                self.errors.push("Expected type after ':' in parameter".to_string());
-            }
+            self.next_token(); // advance to type token
             self.parse_type_hint()
         } else {
             None
@@ -776,9 +842,7 @@ impl Parser {
             params.push(Identifier { value: self.current_token.literal.clone() });
             let hint = if self.peek_token_is(TokenType::Colon) {
                 self.next_token(); // skip ':'
-                if !self.expect_peek(TokenType::Identifier) {
-                    self.errors.push("Expected type after ':' in parameter".to_string());
-                }
+                self.next_token(); // advance to type token
                 self.parse_type_hint()
             } else {
                 None
@@ -1067,6 +1131,7 @@ impl Parser {
             TokenType::LeftParen => Precedence::Call,
             TokenType::LeftBracket => Precedence::Index,
             TokenType::Dot => Precedence::Index,
+            TokenType::QuestionMark => Precedence::Postfix,
             _ => Precedence::Lowest,
         }
     }

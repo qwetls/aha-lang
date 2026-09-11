@@ -34,6 +34,8 @@ pub struct CodeGenerator<'ctx> {
     list_header_type: StructType<'ctx>,
     /// Map header struct type: {i8*, i64, i64, i64, i64} (data, len, cap, key_size, val_size)
     map_header_type: StructType<'ctx>,
+    /// Result struct type: {i64 tag, i64 payload} — tag 0=Ok, tag 1=Err
+    result_type: StructType<'ctx>,
     current_function: Option<FunctionValue<'ctx>>,
     /// Stack of (continue_block, break_block) for nested loops
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
@@ -78,6 +80,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             &[i8_ptr_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
             false,
         );
+        // Result = {i64 tag, i64 payload} — tag 0=Ok, tag 1=Err
+        let result_type = context.struct_type(&[i64_type.into(), i64_type.into()], false);
 
         CodeGenerator {
             context,
@@ -90,6 +94,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             string_type,
             list_header_type,
             map_header_type,
+            result_type,
             current_function: None,
             loop_stack: Vec::new(),
             param_type_map: HashMap::new(),
@@ -270,6 +275,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Self::collect_var_names(&m.value, vars);
                 for arm in &m.arms { Self::collect_var_names(&arm.body, vars); }
             }
+            ast::Expression::Postfix(pf) => { Self::collect_var_names(&pf.operand, vars); }
             _ => {}
         }
     }
@@ -359,6 +365,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Self::scan_expr_uses(&arm.body, last_uses, idx);
                 }
             }
+            ast::Expression::Postfix(pf) => { Self::scan_expr_uses(&pf.operand, last_uses, idx); }
             _ => {} // literals, module access — no heap var uses
         }
     }
@@ -442,6 +449,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ast::Statement::Actor(_) => {}
                 ast::Statement::Enum(_) => {}
                 ast::Statement::Import(_) => {}
+                ast::Statement::ExternFn(_) => {}
             }
         }
     }
@@ -546,6 +554,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.scan_expr_for_calls(&arm.body);
                 }
             }
+            ast::Expression::Postfix(pf) => { self.scan_expr_for_calls(&pf.operand); }
             _ => {}
         }
     }
@@ -562,6 +571,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             AhaType::String => Ok(self.string_type.into()),
             AhaType::Struct(name) => Ok(self.struct_llvm_type(name)?.into()),
             AhaType::Enum(name) => Ok(self.enum_llvm_type(name)?.into()),
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type().into()),
+            AhaType::Result(_, _) => Ok(self.result_type.into()),
             _ => Ok(self.i64_type.into()),
         }
     }
@@ -617,6 +628,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let et = self.enum_llvm_type(name)?;
                 Ok(et.fn_type(&meta, false))
             }
+            AhaType::RawPtr(_) => Ok(self.i8_ptr_type().fn_type(&meta, false)),
+            AhaType::Result(_, _) => Ok(self.result_type.fn_type(&meta, false)),
             _ => Ok(self.i64_type.fn_type(&meta, false)),
         }
     }
@@ -657,6 +670,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.functions.insert(func_name.clone(), function);
                     self.fn_types.insert(func_name, return_type);
                 }
+            } else if let ast::Statement::ExternFn(decl) = stmt {
+                // Extern functions are compiled on-demand via compile_extern
+                // during the body compilation pass. No pre-declaration needed —
+                // compile_extern creates the LLVM declaration directly.
+                let _ = decl;
             }
         }
     }
@@ -726,6 +744,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                         return AhaType::Int;
                     }
+                    // Result constructors: ok(val) → Result<T, string>, err(msg) → Result<int, string>
+                    if id.value == "ok" {
+                        if let Some(first) = call.arguments.first() {
+                            let inner = self.infer_expr_type(first);
+                            return AhaType::Result(Box::new(inner), Box::new(AhaType::String));
+                        }
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
+                    if id.value == "err" {
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
                     // Prefer a known return type (fn_types), then fall back
                     // to the builtin len() = Int.
                     if let Some(rt) = self.fn_types.get(&id.value) {
@@ -761,6 +790,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.infer_expr_type(&arm.body)
                 } else {
                     AhaType::Int
+                }
+            }
+            ast::Expression::Postfix(pf) => {
+                // ? on Result → unwrap ok type
+                let inner = self.infer_expr_type(&pf.operand);
+                match &inner {
+                    AhaType::Result(ok, _) => (**ok).clone(),
+                    _ => AhaType::Int,
                 }
             }
             _ => AhaType::Int,
@@ -892,6 +929,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if name == "len" {
                         return AhaType::Int;
                     }
+                    // Result constructors
+                    if name == "ok" {
+                        if let Some(first) = call.arguments.first() {
+                            let inner = self.infer_expr_type_with_scope(first, scope);
+                            return AhaType::Result(Box::new(inner), Box::new(AhaType::String));
+                        }
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
+                    if name == "err" {
+                        return AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String));
+                    }
                     if let Some(rt) = self.fn_types.get(name) {
                         return rt.clone();
                     }
@@ -934,6 +982,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     AhaType::Int
                 }
             }
+            ast::Expression::Postfix(pf) => {
+                let inner = self.infer_expr_type_with_scope(&pf.operand, scope);
+                match &inner {
+                    AhaType::Result(ok, _) => (**ok).clone(),
+                    _ => AhaType::Int,
+                }
+            }
             _ => AhaType::Int,
         }
     }
@@ -961,9 +1016,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.declare_printf();
         self.declare_c_runtime();
         self.declare_actor_runtime();
+        self.declare_socket_runtime();
+        self.declare_http_runtime();
+        self.declare_json_runtime();
         self.declare_string_and_file_builtins();
+        self.declare_string_runtime();
         self.create_list_builtins();
         self.create_map_builtins();
+        self.create_socket_builtins();
+        self.create_http_builtins();
+        self.create_json_builtins();
 
         // Verify the module is valid before proceeding.
         if let Err(e) = self.module.verify() {
@@ -1007,6 +1069,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             if self.param_type_map == before_params && self.fn_types == before_fns {
                 break;
+            }
+        }
+
+        // Register extern function declarations FIRST — user functions may
+        // call them, so they must be in self.functions before predeclare.
+        for stmt in &program.statements {
+            if let ast::Statement::ExternFn(decl) = stmt {
+                self.compile_extern(decl)?;
             }
         }
 
@@ -3155,6 +3225,498 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     }
 
+    // F10: Generate LLVM IR for TCP/UDP socket builtins.
+    // Macros avoid borrow-checker issues with &self.functions + &self.builder.
+    fn create_socket_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i32_t = self.context.i32_type();
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        // --- macros for calling C runtime functions ---
+        macro_rules! call_c_i32 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        macro_rules! pack_sockaddr {
+            ($port_i32:expr, $ip_i32:expr) => {{
+                // sockaddr_in = 16 bytes (family u16 + port u16 + addr u32 + padding u32x2)
+                let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+                let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+                let zero = i64_t.const_int(0, false);
+                let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
+                let _ = self.builder.build_store(sa_ptr, zero);
+
+                let family = i64_t.const_int(2, false); // AF_INET
+                let port_nbo = call_c_i64!("htons", vec![($port_i32).into()]);
+                let ip_i64 = self.builder.build_int_z_extend($ip_i32, i64_t, "ip_i64").unwrap();
+
+                let fam_shl = self.builder.build_left_shift(family, i64_t.const_int(0, false), "fam_shl").unwrap();
+                let port_shl = self.builder.build_left_shift(port_nbo, i64_t.const_int(16, false), "port_shl").unwrap();
+                let ip_shl = self.builder.build_left_shift(ip_i64, i64_t.const_int(32, false), "ip_shl").unwrap();
+                let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
+                let packed = self.builder.build_or(or1, ip_shl, "packed").unwrap();
+                let _ = self.builder.build_store(sa_ptr, packed);
+                (sa_ptr, sa_i8)
+            }};
+        }
+
+        macro_rules! build_sockaddr {
+            ($port_i32:expr, $ip_i32:expr) => {{
+                let (sa_ptr, sa_i8) = pack_sockaddr!($port_i32, $ip_i32);
+                (sa_ptr, sa_i8)
+            }};
+        }
+
+        let fn_type_i64_0 = i64_t.fn_type(&[], false);
+
+        // --- tcp_socket() -> int ---
+        {
+            let func = self.module.add_function("tcp_socket", fn_type_i64_0, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let domain = i64_t.const_int(2, false);   // AF_INET
+            let socktype = i64_t.const_int(1, false);  // SOCK_STREAM
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_socket".to_string(), func);
+        }
+
+        // --- tcp_connect(host: String, port: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_connect", i64_t.fn_type(&[string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let host_ptr = self.builder.build_extract_value(func.get_nth_param(0).unwrap().into_struct_value(), 0, "host_ptr").unwrap().into_pointer_value();
+
+            let ip_i64 = call_c_i64!("inet_addr", vec![host_ptr.into()]);
+            let ip_i32 = self.builder.build_int_truncate(ip_i64, self.context.i32_type(), "ip_i32").unwrap();
+
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+
+            let port = func.get_nth_param(1).unwrap().into_int_value();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_i32);
+
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            let _ = call_c_i64!("connect", vec![fd_i64.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_connect".to_string(), func);
+        }
+
+        // --- tcp_bind_listen(port: int, backlog: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_bind_listen", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+
+            let port = func.get_nth_param(0).unwrap().into_int_value();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let ip_any = i32_t.const_int(0, false);
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_any);
+
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            let _ = call_c_i64!("bind", vec![fd_i64.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
+            let backlog = func.get_nth_param(1).unwrap().into_int_value();
+            let _ = call_c_i64!("listen", vec![fd_i64.into(), backlog.into(), i64_t.const_int(0, false).into()]);
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("tcp_bind_listen".to_string(), func);
+        }
+
+        // --- tcp_accept(server_fd: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_accept", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let server_fd = func.get_nth_param(0).unwrap().into_int_value();
+            let sa = self.builder.build_alloca(i64_t, "sa").unwrap();
+            let _sa_i8 = self.builder.build_bitcast(sa, i8_ptr, "sa_i8").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
+            let len = self.builder.build_alloca(i64_t, "len").unwrap();
+            let _ = self.builder.build_store(len, i64_t.const_int(16, false));
+            let len_i8 = self.builder.build_bitcast(len, i8_ptr, "len_i8").unwrap();
+            let new_fd = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
+            self.builder.build_return(Some(&new_fd)).unwrap();
+            self.functions.insert("tcp_accept".to_string(), func);
+        }
+
+        // --- tcp_send(fd: int, msg: String) -> int ---
+        {
+            let func = self.module.add_function("tcp_send", i64_t.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let msg_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let msg_ptr = self.builder.build_extract_value(msg_struct, 0, "msg_ptr").unwrap().into_pointer_value();
+            let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
+            let _ = call_c_i64!("send", vec![fd.into(), msg_ptr.into(), msg_len.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("tcp_send".to_string(), func);
+        }
+
+        // --- tcp_recv(fd: int, buf: int) -> int ---
+        {
+            let func = self.module.add_function("tcp_recv", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let buf = func.get_nth_param(1).unwrap().into_int_value();
+            let n = call_c_i64!("recv", vec![fd.into(), buf.into(), i64_t.const_int(1024, false).into()]);
+            self.builder.build_return(Some(&n)).unwrap();
+            self.functions.insert("tcp_recv".to_string(), func);
+        }
+
+        // --- udp_socket() -> int ---
+        {
+            let func = self.module.add_function("udp_socket", fn_type_i64_0, None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(2, false); // SOCK_DGRAM
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i32!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            let fd_i64 = self.builder.build_int_z_extend(fd, i64_t, "fd_i64").unwrap();
+            self.builder.build_return(Some(&fd_i64)).unwrap();
+            self.functions.insert("udp_socket".to_string(), func);
+        }
+
+        // --- udp_send(fd: int, msg: String, addr: int) -> int ---
+        {
+            let func = self.module.add_function("udp_send", i64_t.fn_type(&[i64_t.into(), string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let msg_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let msg_ptr = self.builder.build_extract_value(msg_struct, 0, "msg_ptr").unwrap().into_pointer_value();
+            let msg_len = self.builder.build_extract_value(msg_struct, 1, "msg_len").unwrap().into_int_value();
+            let addr = func.get_nth_param(2).unwrap().into_int_value();
+            let addr_tmp = self.builder.build_alloca(i64_t, "addr_tmp").unwrap();
+            let addr_ptr = self.builder.build_bitcast(addr_tmp, i64_t.ptr_type(AddressSpace::default()), "addr_ptr").unwrap().into_pointer_value();
+            let _ = self.builder.build_store(addr_ptr, addr);
+            let _ = call_c_i64!("sendto", vec![fd.into(), msg_ptr.into(), msg_len.into(), i64_t.const_int(0, false).into(), addr_ptr.into(), i64_t.const_int(16, false).into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("udp_send".to_string(), func);
+        }
+
+        // --- udp_recv(fd: int, buf: int) -> int ---
+        {
+            let func = self.module.add_function("udp_recv", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let buf = func.get_nth_param(1).unwrap().into_int_value();
+            let n = call_c_i64!("recvfrom", vec![fd.into(), buf.into(), i64_t.const_int(1024, false).into(), i64_t.const_int(0, false).into(), i64_t.const_int(0, false).into(), i64_t.const_int(0, false).into()]);
+            self.builder.build_return(Some(&n)).unwrap();
+            self.functions.insert("udp_recv".to_string(), func);
+        }
+
+        // --- close_fd(fd: int) -> int ---
+        {
+            let func = self.module.add_function("close_fd", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let _ = call_c_i64!("close", vec![fd.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("close_fd".to_string(), func);
+        }
+
+        // --- ip4_addr(host: String, port: int) -> int ---
+        {
+            let func = self.module.add_function("ip4_addr", i64_t.fn_type(&[string_type.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let host_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let host_ptr = self.builder.build_extract_value(host_struct, 0, "host_ptr").unwrap().into_pointer_value();
+            let port = func.get_nth_param(1).unwrap().into_int_value();
+
+            let ip_i64 = call_c_i64!("inet_addr", vec![host_ptr.into()]);
+            let ip_i32 = self.builder.build_int_truncate(ip_i64, self.context.i32_type(), "ip_i32").unwrap();
+            let port_i32 = self.builder.build_int_truncate(port, self.context.i32_type(), "port_i32").unwrap();
+            let (sa_ptr, _) = build_sockaddr!(port_i32, ip_i32);
+
+            let sa_val = self.builder.build_load(sa_ptr, "sa_val").unwrap().into_int_value();
+            self.builder.build_return(Some(&sa_val)).unwrap();
+            self.functions.insert("ip4_addr".to_string(), func);
+        }
+
+        // --- ip4_str(addr: int) -> String ---
+        {
+            let func = self.module.add_function("ip4_str", string_type.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+
+            let addr = func.get_nth_param(0).unwrap().into_int_value();
+            let ip_i32 = self.builder.build_right_shift(addr, i64_t.const_int(32, false), true, "ip_i32").unwrap();
+            let ip_trunc = self.builder.build_int_truncate(ip_i32, self.context.i32_type(), "ip_trunc").unwrap();
+            let ip_i64_ext = self.builder.build_int_z_extend(ip_trunc, i64_t, "ip_i64_ext").unwrap();
+
+            // inet_ntoa declared as (i8*) -> i64 — returns pointer as i64
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_t.ptr_type(AddressSpace::default()), "sa_ptr").unwrap().into_pointer_value();
+            let _ = self.builder.build_store(sa_ptr, ip_i64_ext);
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let c_str_i64 = call_c_i64!("inet_ntoa", vec![sa_i8.into()]);
+            let c_str_ptr = self.builder.build_int_to_ptr(c_str_i64, i8_ptr, "c_str_ptr").unwrap();
+            let str_len_i64 = call_c_i64!("strlen", vec![c_str_ptr.into()]);
+
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), c_str_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len_i64, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("ip4_str".to_string(), func);
+        }
+    }
+
+    // --- F11 HTTP Server builtins ---
+    // http_listen(port) -> int
+    // http_accept(server_fd) -> int
+    // http_recv(fd) -> String
+    // http_send(fd, data) -> int
+    // http_request_method(req: String) -> String
+    // http_request_path(req: String) -> String
+    // http_request_body(req: String) -> String
+    // http_request_header(req: String, name: String) -> String
+    // http_response(status: int, body: String) -> String
+    fn create_http_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+        let i64_ptr = i64_t.ptr_type(AddressSpace::default());
+
+        // Macros for calling C runtime functions
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        let fn_type_i64_0 = i64_t.fn_type(&[], false);
+
+        // --- http_listen(port: int) -> int ---
+        {
+            let func = self.module.add_function("http_listen", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let port = func.get_nth_param(0).unwrap().into_int_value();
+            // socket(AF_INET=2, SOCK_STREAM=1, 0)
+            let domain = i64_t.const_int(2, false);
+            let socktype = i64_t.const_int(1, false);
+            let protocol = i64_t.const_int(0, false);
+            let fd = call_c_i64!("socket", vec![domain.into(), socktype.into(), protocol.into()]);
+            // sockaddr_in: family=AF_INET(2), port=htons(port), addr=INADDR_ANY(0)
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let zero = i64_t.const_int(0, false);
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_ptr, "sa_ptr").unwrap().into_pointer_value();
+            let _ = self.builder.build_store(sa_ptr, zero);
+            let family = i64_t.const_int(2, false); // AF_INET
+            let i32_t = self.context.i32_type();
+            let port_i32 = self.builder.build_int_truncate(port, i32_t, "port_i32").unwrap();
+            let port_nbo = call_c_i64!("htons", vec![port_i32.into()]);
+            let fam_shl = self.builder.build_left_shift(family, i64_t.const_int(0, false), "fam_shl").unwrap();
+            let port_shl = self.builder.build_left_shift(port_nbo, i64_t.const_int(16, false), "port_shl").unwrap();
+            let or1 = self.builder.build_or(fam_shl, port_shl, "or1").unwrap();
+            let _ = self.builder.build_store(sa_ptr, or1);
+            // bind(fd, &sa, 16)
+            let _ = call_c_i64!("bind", vec![fd.into(), sa_ptr.into(), i64_t.const_int(16, false).into()]);
+            // listen(fd, 128)
+            let _ = call_c_i64!("listen", vec![fd.into(), i64_t.const_int(128, false).into(), zero.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("http_listen".to_string(), func);
+        }
+
+        // --- http_accept(server_fd: int) -> int ---
+        {
+            let func = self.module.add_function("http_accept", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let server_fd = func.get_nth_param(0).unwrap().into_int_value();
+            // Allocate sockaddr for accept
+            let sa_buf = self.builder.build_alloca(i8_type.array_type(16), "sa_buf").unwrap();
+            let sa_i8 = self.builder.build_bitcast(sa_buf, i8_ptr, "sa_i8").unwrap();
+            let sa_ptr = self.builder.build_bitcast(sa_buf, i64_ptr, "sa_ptr").unwrap().into_pointer_value();
+            let zero = i64_t.const_int(0, false);
+            let _ = self.builder.build_store(sa_ptr, zero);
+            let len_buf = self.builder.build_alloca(i64_t, "len_buf").unwrap();
+            let _ = self.builder.build_store(len_buf, i64_t.const_int(16, false));
+            let len_i8 = self.builder.build_bitcast(len_buf, i8_ptr, "len_i8").unwrap();
+            let fd = call_c_i64!("accept", vec![server_fd.into(), sa_ptr.into(), len_i8.into()]);
+            self.builder.build_return(Some(&fd)).unwrap();
+            self.functions.insert("http_accept".to_string(), func);
+        }
+
+        // --- http_recv(fd: int) -> String ---
+        {
+            let func = self.module.add_function("http_recv", string_type.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            // Allocate 64KB+1 buffer — recv fills at most 64KB, +1 byte for the
+            // null terminator: the F11 parsers scan for \0 on this buffer.
+            let buf_size = i64_t.const_int(65536, false);
+            let buf = self.builder.build_alloca(i8_type.array_type(65537), "recv_buf").unwrap();
+            let buf_i8 = self.builder.build_bitcast(buf, i8_ptr, "buf_i8").unwrap().into_pointer_value();
+            let buf_as_i64 = self.builder.build_ptr_to_int(buf_i8, i64_t, "buf_as_i64").unwrap();
+            // recv(fd, buf, 65536) — recv declared with 3 args, no flags
+            let n = call_c_i64!("recv", vec![fd.into(), buf_as_i64.into(), buf_size.into()]);
+            // Null-terminate at buf[n] so strlen and the runtime parsers are safe
+            let null_pos = unsafe { self.builder.build_gep(buf_i8, &[n], "null_pos").unwrap() };
+            let _ = self.builder.build_store(null_pos, i8_type.const_int(0, false));
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), buf_i8, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, n, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_recv".to_string(), func);
+        }
+
+        // --- http_send(fd: int, data: String) -> int ---
+        {
+            let func = self.module.add_function("http_send", i64_t.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let fd = func.get_nth_param(0).unwrap().into_int_value();
+            let data_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let data_ptr = self.builder.build_extract_value(data_struct, 0, "data_ptr").unwrap().into_pointer_value();
+            let data_len = self.builder.build_extract_value(data_struct, 1, "data_len").unwrap().into_int_value();
+            // send(fd, data_ptr, data_len) — send declared with 3 args
+            let sent = call_c_i64!("send", vec![fd.into(), data_ptr.into(), data_len.into()]);
+            self.builder.build_return(Some(&sent)).unwrap();
+            self.functions.insert("http_send".to_string(), func);
+        }
+
+        // --- http_request_method(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_method", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
+            // Call runtime: aha_http_request_method(req_i64) -> i64
+            let c_fn = *self.functions.get("aha_http_request_method").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "method_ptr").unwrap();
+            let method_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "method_ptr_ptr").unwrap();
+            // Build string: {ptr, len} — need strlen
+            let str_len = call_c_i64!("strlen", vec![method_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), method_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_method".to_string(), func);
+        }
+
+        // --- http_request_path(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_path", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
+            let c_fn = *self.functions.get("aha_http_request_path").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "path_ptr").unwrap();
+            let path_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "path_ptr_ptr").unwrap();
+            let str_len = call_c_i64!("strlen", vec![path_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), path_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_path".to_string(), func);
+        }
+
+        // --- http_request_body(req: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_body", string_type.fn_type(&[string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
+            let c_fn = *self.functions.get("aha_http_request_body").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_i64.into()], "body_ptr").unwrap();
+            let body_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "body_ptr_ptr").unwrap();
+            let str_len = call_c_i64!("strlen", vec![body_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), body_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_body".to_string(), func);
+        }
+
+        // --- http_request_header(req: String, name: String) -> String ---
+        {
+            let func = self.module.add_function("http_request_header", string_type.fn_type(&[string_type.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let req_struct = func.get_nth_param(0).unwrap().into_struct_value();
+            let req_ptr = self.builder.build_extract_value(req_struct, 0, "req_ptr").unwrap().into_pointer_value();
+            let req_i64 = self.builder.build_ptr_to_int(req_ptr, i64_t, "req_i64").unwrap();
+            let name_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let name_ptr = self.builder.build_extract_value(name_struct, 0, "name_ptr").unwrap().into_pointer_value();
+            let name_i64 = self.builder.build_ptr_to_int(name_ptr, i64_t, "name_i64").unwrap();
+            let c_fn = *self.functions.get("aha_http_request_header").unwrap();
+            let result = self.builder.build_call(c_fn, &[req_i64.into(), name_i64.into()], "header_ptr").unwrap();
+            let header_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "header_ptr_ptr").unwrap();
+            let str_len = call_c_i64!("strlen", vec![header_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), header_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_request_header".to_string(), func);
+        }
+
+        // --- http_response(status: int, body: String) -> String ---
+        {
+            let func = self.module.add_function("http_response", string_type.fn_type(&[i64_t.into(), string_type.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let status = func.get_nth_param(0).unwrap().into_int_value();
+            let body_struct = func.get_nth_param(1).unwrap().into_struct_value();
+            let body_ptr = self.builder.build_extract_value(body_struct, 0, "body_ptr").unwrap().into_pointer_value();
+            let body_i64 = self.builder.build_ptr_to_int(body_ptr, i64_t, "body_i64").unwrap();
+            let c_fn = *self.functions.get("aha_http_response").unwrap();
+            let result = self.builder.build_call(c_fn, &[status.into(), body_i64.into()], "resp_ptr").unwrap();
+            let resp_ptr = self.builder.build_int_to_ptr(result.try_as_basic_value().left().unwrap().into_int_value(), i8_ptr, "resp_ptr_ptr").unwrap();
+            let str_len = call_c_i64!("strlen", vec![resp_ptr.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), resp_ptr, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, str_len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("http_response".to_string(), func);
+        }
+    }
+
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), String> {
         match statement {
             ast::Statement::Let(let_stmt) => {
@@ -3218,6 +3780,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             ast::Statement::Enum(_) => {
                 // Enum definitions are compile-time metadata
+            }
+            ast::Statement::ExternFn(_) => {
+                // Already compiled in the extern pre-pass before main loop
             }
         }
         Ok(())
@@ -3349,6 +3914,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(TypedValue::new(handle.into(), AhaType::Int))
             },
             ast::Expression::Match(m) => self.compile_match_expression(m),
+            ast::Expression::Postfix(pf) => self.compile_postfix(pf),
             _ => Err(format!("Expression type not yet implemented: {:?}", expression)),
         }
     }
@@ -3518,6 +4084,100 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.functions.insert("actor_call".to_string(), call_fn);
     }
 
+    // F10: Declare C socket runtime functions (linked at JIT time).
+    fn declare_socket_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let i32_t = self.context.i32_type();
+        let i8_ptr = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let i64_ptr = i64_t.ptr_type(inkwell::AddressSpace::default());
+        // socket(domain, type, protocol) -> fd — all i64
+        let fn_type_socket = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let sock_fn = self.module.add_function("socket", fn_type_socket, None);
+        self.functions.insert("socket".to_string(), sock_fn);
+        // bind(fd, addr: i64*, addrlen) -> ret
+        let fn_type_bind = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let bind_fn = self.module.add_function("bind", fn_type_bind, None);
+        self.functions.insert("bind".to_string(), bind_fn);
+        // listen(fd, backlog, unused) -> ret — backlog is i64 from .into()
+        let fn_type_listen = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let listen_fn = self.module.add_function("listen", fn_type_listen, None);
+        self.functions.insert("listen".to_string(), listen_fn);
+        // accept(server_fd, addr: i64*, addrlen: i8*) -> new_fd
+        let fn_type_accept = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i8_ptr.into()], false);
+        let accept_fn = self.module.add_function("accept", fn_type_accept, None);
+        self.functions.insert("accept".to_string(), accept_fn);
+        // connect(fd, addr: i64*, addrlen) -> ret
+        let fn_type_connect = i64_t.fn_type(&[i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let connect_fn = self.module.add_function("connect", fn_type_connect, None);
+        self.functions.insert("connect".to_string(), connect_fn);
+        // send(fd, buf: i8*, len) -> ret
+        let fn_type_send = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into()], false);
+        let send_fn = self.module.add_function("send", fn_type_send, None);
+        self.functions.insert("send".to_string(), send_fn);
+        // recv(fd, buf, len) -> ret — buf passed as i64
+        let fn_type_recv = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let recv_fn = self.module.add_function("recv", fn_type_recv, None);
+        self.functions.insert("recv".to_string(), recv_fn);
+        // sendto(fd, buf: i8*, len, flags, addr: i64*, addrlen) -> ret
+        let fn_type_sendto = i64_t.fn_type(&[i64_t.into(), i8_ptr.into(), i64_t.into(), i64_t.into(), i64_ptr.into(), i64_t.into()], false);
+        let sendto_fn = self.module.add_function("sendto", fn_type_sendto, None);
+        self.functions.insert("sendto".to_string(), sendto_fn);
+        // recvfrom(fd, buf, len, flags, addr, addrlen) -> ret — all i64
+        let fn_type_recvfrom = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let recvfrom_fn = self.module.add_function("recvfrom", fn_type_recvfrom, None);
+        self.functions.insert("recvfrom".to_string(), recvfrom_fn);
+        // close(fd) -> ret
+        let close_fn = self.module.add_function("close", i64_t.fn_type(&[i64_t.into()], false), None);
+        self.functions.insert("close".to_string(), close_fn);
+        // htons(port_i32) -> i64
+        let htons_fn = self.module.add_function("htons", i64_t.fn_type(&[i32_t.into()], false), None);
+        self.functions.insert("htons".to_string(), htons_fn);
+        // htonl(port_i32) -> i64
+        let htonl_fn = self.module.add_function("htonl", i64_t.fn_type(&[i32_t.into()], false), None);
+        self.functions.insert("htonl".to_string(), htonl_fn);
+        // inet_addr(str_ptr: i8*) -> i64
+        let inet_addr_fn = self.module.add_function("inet_addr", i64_t.fn_type(&[i8_ptr.into()], false), None);
+        self.functions.insert("inet_addr".to_string(), inet_addr_fn);
+        // inet_ntoa(addr_ptr: i8*) -> i64
+        let inet_ntoa_fn = self.module.add_function("inet_ntoa", i64_t.fn_type(&[i8_ptr.into()], false), None);
+        self.functions.insert("inet_ntoa".to_string(), inet_ntoa_fn);
+    }
+
+    // Declare HTTP parser runtime functions (Rust #[no_mangle] in runtime.rs)
+    fn declare_http_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        // Rust extern "C" functions take i64 (raw pointer as integer) and return i64.
+        // All params/return are i64 to match the actual ABI.
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        // aha_http_request_method(req: i64) -> i64
+        let fn_req_method = self.module.add_function("aha_http_request_method", fn_type_i64_1, None);
+        self.functions.insert("aha_http_request_method".to_string(), fn_req_method);
+        // aha_http_request_path(req: i64) -> i64
+        let fn_req_path = self.module.add_function("aha_http_request_path", fn_type_i64_1, None);
+        self.functions.insert("aha_http_request_path".to_string(), fn_req_path);
+        // aha_http_request_body(req: i64) -> i64
+        let fn_req_body = self.module.add_function("aha_http_request_body", fn_type_i64_1, None);
+        self.functions.insert("aha_http_request_body".to_string(), fn_req_body);
+        // aha_http_request_header(req: i64, name: i64) -> i64
+        let fn_req_header = self.module.add_function("aha_http_request_header", fn_type_i64_2, None);
+        self.functions.insert("aha_http_request_header".to_string(), fn_req_header);
+        // aha_http_response(status: i64, body: i64) -> i64
+        let fn_response = self.module.add_function("aha_http_response", fn_type_i64_2, None);
+        self.functions.insert("aha_http_response".to_string(), fn_response);
+
+        // AHA! builtin return types for type inference
+        self.fn_types.insert("http_listen".to_string(), AhaType::Int);
+        self.fn_types.insert("http_accept".to_string(), AhaType::Int);
+        self.fn_types.insert("http_recv".to_string(), AhaType::String);
+        self.fn_types.insert("http_send".to_string(), AhaType::Int);
+        self.fn_types.insert("http_request_method".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_path".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_body".to_string(), AhaType::String);
+        self.fn_types.insert("http_request_header".to_string(), AhaType::String);
+        self.fn_types.insert("http_response".to_string(), AhaType::String);
+    }
+
     /// Type-checked infix operator compilation
     fn compile_infix(&mut self, infix: &ast::InfixExpression) -> Result<TypedValue<'ctx>, String> {
         let left = self.compile_expression(&infix.left)?;
@@ -3664,7 +4324,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let pred = if op == "==" { inkwell::IntPredicate::EQ } else { inkwell::IntPredicate::NE };
         let cmp = self.builder.build_int_compare(pred, cmp_result, zero_i32, "streq").map_err(|e| e.to_string())?;
         let ext = self.builder.build_int_z_extend(cmp, self.i64_type, "streqext").map_err(|e| e.to_string())?;
-        Ok(TypedValue::new(ext.into(), AhaType::Bool))
+        Ok(TypedValue::new(ext.into(), AhaType::Int))
     }
 
     /// Logical AND: both operands are already evaluated by compile_infix.
@@ -3731,6 +4391,41 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
         types
+    }
+
+    /// Compile an `extern fn` declaration — creates an LLVM external function
+    /// with no body. The linker (AOT) or runtime (JIT) resolves the symbol.
+    fn compile_extern(&mut self, decl: &ast::ExternFnDecl) -> Result<(), String> {
+        let func_name = decl.name.value.clone();
+
+        // Skip if already declared (e.g. C runtime builtins like strlen, malloc)
+        if self.functions.contains_key(&func_name) {
+            return Ok(());
+        }
+
+        // Resolve param types from hints
+        let mut param_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> = Vec::new();
+        for hint in &decl.param_type_hints {
+            let aha_type = hint.as_deref()
+                .and_then(AhaType::from_hint)
+                .unwrap_or(AhaType::Int);
+            param_types.push(self.aha_type_to_llvm_type(&aha_type)?);
+        }
+
+        // Resolve return type
+        let ret_type = decl.return_type_hint.as_deref()
+            .and_then(AhaType::from_hint)
+            .unwrap_or(AhaType::Int);
+
+        let fn_type = self.build_fn_type(&ret_type, &param_types)?;
+
+        let fn_value = self.module.add_function(&func_name, fn_type, Some(inkwell::module::Linkage::External));
+
+        // Register so compile_call can find it
+        self.functions.insert(func_name.clone(), fn_value);
+        self.fn_types.insert(func_name, ret_type);
+
+        Ok(())
     }
 
     // Compile function definition — FIX C-05 (double return) and C-06 (variable restore safety)
@@ -3957,16 +4652,30 @@ impl<'ctx> CodeGenerator<'ctx> {
         if func_name == "send" || func_name == "call" {
             return self.compile_actor_call(&func_name, call);
         }
+        // F10 TCP/UDP socket builtins
+        if matches!(func_name.as_str(), "tcp_socket" | "tcp_connect" | "tcp_bind_listen" | "tcp_accept" | "tcp_send" | "tcp_recv" | "udp_socket" | "udp_send" | "udp_recv" | "close_fd" | "ip4_addr" | "ip4_str") {
+            return self.compile_socket_call(func_name.as_str(), call);
+        }
+        // F11 HTTP Server builtins
+        if matches!(func_name.as_str(), "http_listen" | "http_accept" | "http_recv" | "http_send" | "http_request_method" | "http_request_path" | "http_request_body" | "http_request_header" | "http_response") {
+            return self.compile_http_call(func_name.as_str(), call);
+        }
+        // F12 JSON builtins
+        if matches!(func_name.as_str(), "json_parse" | "json_stringify" | "json_get" | "json_free") {
+            return self.compile_json_call(func_name.as_str(), call);
+        }
+        // F13 String builtins
+        if matches!(func_name.as_str(), "str_split" | "str_split_count" | "str_split_get" | "str_split_free" | "str_to_int" | "str_contains" | "str_substring") {
+            return self.compile_string_call(func_name.as_str(), call);
+        }
+        // Result builtins: ok(val) → Ok(val), err(msg) → Err(msg)
+        if func_name == "ok" || func_name == "err" {
+            return self.compile_result_literal(&func_name, call);
+        }
         // Enum variant constructor: Variant(args...) or Variant
         if let Some(enum_name) = self.find_enum_for_variant(&func_name) {
             return self.compile_enum_constructor(&enum_name, &func_name, call);
         }
-        let mut args: Vec<BasicValueEnum> = Vec::new();
-        for arg in &call.arguments {
-            args.push(self.compile_expression(arg)?.value);
-        }
-        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
-
         let function = if let Some(f) = self.functions.get(&func_name) {
             *f
         } else if let Some(f) = self.module.get_function(&func_name) {
@@ -3974,6 +4683,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             return Err(format!("Unknown function: {}", func_name));
         };
+        let mut args: Vec<BasicValueEnum> = Vec::new();
+        for (i, arg) in call.arguments.iter().enumerate() {
+            let typed_val = self.compile_expression(arg)?;
+            let val = typed_val.value;
+            // Auto-coerce for pointer parameters (FFI)
+            if let Some(param) = function.get_nth_param(i as u32) {
+                if let inkwell::types::BasicTypeEnum::PointerType(ptr_ty) = param.get_type() {
+                    if val.is_int_value() {
+                        // i64 → pointer (inttoptr)
+                        let ptr = self.builder.build_int_to_ptr(
+                            val.into_int_value(),
+                            ptr_ty,
+                            "arg_cast",
+                        ).map_err(|e| e.to_string())?;
+                        args.push(ptr.into());
+                        continue;
+                    }
+                    if val.is_struct_value() && typed_val.aha_type == AhaType::String {
+                        // string struct {i8*, i64} → i8* (extract pointer)
+                        let str_ptr = self.extract_str_ptr(&typed_val)?;
+                        args.push(str_ptr.into());
+                        continue;
+                    }
+                }
+            }
+            args.push(val);
+        }
+        let args_meta: Vec<_> = args.iter().map(|a| (*a).into()).collect();
         let call_result = self.builder.build_call(function, &args_meta, "calltmp")
             .map_err(|e| e.to_string())?;
         let ret_type = self.fn_types.get(&func_name).cloned().unwrap_or(AhaType::Int);
@@ -4009,6 +4746,374 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             Ok(TypedValue::void(self.i64_type.const_int(0, false).into()))
         }
+    }
+
+    // F10: Dispatch socket builtin calls.
+    fn compile_socket_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("Socket builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("Socket builtin '{}' did not return a value", func_name))?;
+        if func_name == "ip4_str" {
+            return Ok(TypedValue::string(val));
+        }
+        Ok(TypedValue::int(val))
+    }
+
+    // F11: Dispatch HTTP builtin calls.
+    fn compile_http_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            args.push(tv.value.into());
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("HTTP builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("HTTP builtin '{}' did not return a value", func_name))?;
+        // HTTP builtins that return String: http_recv, http_request_method/path/body/header, http_response
+        if matches!(func_name, "http_recv" | "http_request_method" | "http_request_path" | "http_request_body" | "http_request_header" | "http_response") {
+            return Ok(TypedValue::string(val));
+        }
+        // http_listen, http_accept, http_send return int
+        Ok(TypedValue::int(val))
+    }
+
+    // === F12 JSON Parser/Serializer ===
+
+    /// Declare Rust runtime functions for JSON.
+    fn declare_json_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let fn_type_i64_3 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        // aha_json_parse(json_ptr: i64, json_len: i64) -> i64
+        let fn_parse = self.module.add_function("aha_json_parse", fn_type_i64_2, None);
+        self.functions.insert("aha_json_parse".to_string(), fn_parse);
+        // aha_json_stringify(handle: i64) -> i64
+        let fn_stringify = self.module.add_function("aha_json_stringify", fn_type_i64_1, None);
+        self.functions.insert("aha_json_stringify".to_string(), fn_stringify);
+        // aha_json_get(handle: i64, path_ptr: i64, path_len: i64) -> i64
+        let fn_get = self.module.add_function("aha_json_get", fn_type_i64_3, None);
+        self.functions.insert("aha_json_get".to_string(), fn_get);
+        // aha_json_free(handle: i64) -> i64
+        let fn_free = self.module.add_function("aha_json_free", fn_type_i64_1, None);
+        self.functions.insert("aha_json_free".to_string(), fn_free);
+
+        // AHA! builtin return types for type inference
+        self.fn_types.insert("json_parse".to_string(), AhaType::Int); // handle
+        self.fn_types.insert("json_stringify".to_string(), AhaType::String);
+        self.fn_types.insert("json_get".to_string(), AhaType::String);
+    }
+
+    /// Create AHA-level JSON builtins as LLVM IR wrappers.
+    /// json_parse(string) -> int    — returns opaque handle
+    /// json_stringify(handle) -> string
+    /// json_get(handle, path) -> string
+    fn create_json_builtins(&mut self) {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        // --- json_parse(json_ptr: i64, json_len: i64) -> i64 (handle) ---
+        {
+            let func = self.module.add_function("json_parse", i64_t.fn_type(&[i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let json_ptr = func.get_nth_param(0).unwrap().into_int_value();
+            let json_len = func.get_nth_param(1).unwrap().into_int_value();
+            let handle = call_c_i64!("aha_json_parse", vec![json_ptr.into(), json_len.into()]);
+            self.builder.build_return(Some(&handle)).unwrap();
+            self.functions.insert("json_parse".to_string(), func);
+        }
+
+        // --- json_stringify(handle: int) -> string ---
+        {
+            let func = self.module.add_function("json_stringify", string_type.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let result_ptr = call_c_i64!("aha_json_stringify", vec![handle.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("json_stringify".to_string(), func);
+        }
+
+        // --- json_get(handle: i64, path_ptr: i64, path_len: i64) -> string ---
+        {
+            let func = self.module.add_function("json_get", string_type.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let path_ptr = func.get_nth_param(1).unwrap().into_int_value();
+            let path_len = func.get_nth_param(2).unwrap().into_int_value();
+            let result_ptr = call_c_i64!("aha_json_get", vec![handle.into(), path_ptr.into(), path_len.into()]);
+            let ptr_val = self.builder.build_int_to_ptr(result_ptr, i8_ptr, "str_ptr").unwrap();
+            let len = call_c_i64!("strlen", vec![ptr_val.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr").unwrap();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len").unwrap();
+            self.builder.build_return(Some(&str_struct)).unwrap();
+            self.functions.insert("json_get".to_string(), func);
+        }
+
+        // --- json_free(handle: int) -> int ---
+        {
+            let func = self.module.add_function("json_free", i64_t.fn_type(&[i64_t.into()], false), None);
+            let bb = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(bb);
+            let handle = func.get_nth_param(0).unwrap().into_int_value();
+            let result = call_c_i64!("aha_json_free", vec![handle.into()]);
+            self.builder.build_return(Some(&result)).unwrap();
+            self.functions.insert("json_free".to_string(), func);
+        }
+    }
+
+    /// Compile a json_* builtin call.
+    fn compile_json_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        // json_free is a simple single-arg call
+        if func_name == "json_free" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let function = *self.functions.get("json_free").unwrap();
+            let call_result = self.builder.build_call(function, &[tv.value.into()], "json_free_tmp")
+                .map_err(|e| e.to_string())?;
+            let val = call_result.try_as_basic_value().left().unwrap();
+            return Ok(TypedValue::int(val));
+        }
+
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for arg in &call.arguments {
+            let tv = self.compile_expression(arg)?;
+            // json_parse's first arg is a string — extract ptr AND len
+            if func_name == "json_parse" && tv.aha_type.is_string() {
+                let ptr_val = self.extract_str_ptr(&tv)?;
+                let len_val = self.extract_str_len(&tv)?;
+                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
+                args.push(ptr_as_i64.into());
+                args.push(len_val.into());
+            }
+            // json_get's second arg is a string path — extract ptr AND len
+            else if func_name == "json_get" && args.len() == 1 && tv.aha_type.is_string() {
+                let ptr_val = self.extract_str_ptr(&tv)?;
+                let len_val = self.extract_str_len(&tv)?;
+                let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "path_ptr_i64").unwrap();
+                args.push(ptr_as_i64.into());
+                args.push(len_val.into());
+            }
+            else {
+                args.push(tv.value.into());
+            }
+        }
+        let function = *self.functions.get(func_name)
+            .ok_or_else(|| format!("JSON builtin '{}' not declared", func_name))?;
+        let call_result = self.builder.build_call(function, &args, &format!("{}_tmp", func_name))
+            .map_err(|e| e.to_string())?;
+        let val = call_result.try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("JSON builtin '{}' did not return a value", func_name))?;
+        match func_name {
+            "json_parse" => Ok(TypedValue::int(val)),
+            "json_stringify" | "json_get" => Ok(TypedValue::string(val)),
+            _ => Ok(TypedValue::int(val)),
+        }
+    }
+
+    /// Declare Rust runtime functions for string builtins (F13).
+    fn declare_string_runtime(&mut self) {
+        let i64_t = self.i64_type;
+        let fn_type_i64_1 = i64_t.fn_type(&[i64_t.into()], false);
+        let fn_type_i64_2 = i64_t.fn_type(&[i64_t.into(), i64_t.into()], false);
+        let fn_type_i64_3 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into()], false);
+        let fn_type_i64_4 = i64_t.fn_type(&[i64_t.into(), i64_t.into(), i64_t.into(), i64_t.into()], false);
+
+        // str_split(s_ptr, s_len, delim_ptr, delim_len) -> handle
+        let fn_split = self.module.add_function("aha_str_split", fn_type_i64_4, None);
+        self.functions.insert("aha_str_split".to_string(), fn_split);
+        // str_split_count(handle) -> i64
+        let fn_split_count = self.module.add_function("aha_str_split_count", fn_type_i64_1, None);
+        self.functions.insert("aha_str_split_count".to_string(), fn_split_count);
+        // str_split_get(handle, index) -> i64 (pointer to string)
+        let fn_split_get = self.module.add_function("aha_str_split_get", fn_type_i64_2, None);
+        self.functions.insert("aha_str_split_get".to_string(), fn_split_get);
+        // str_split_free(handle) -> i64
+        let fn_split_free = self.module.add_function("aha_str_split_free", fn_type_i64_1, None);
+        self.functions.insert("aha_str_split_free".to_string(), fn_split_free);
+        // str_to_int(s_ptr, s_len) -> i64
+        let fn_to_int = self.module.add_function("aha_str_to_int", fn_type_i64_2, None);
+        self.functions.insert("aha_str_to_int".to_string(), fn_to_int);
+        // str_contains(s_ptr, s_len, sub_ptr, sub_len) -> i64
+        let fn_contains = self.module.add_function("aha_str_contains", fn_type_i64_4, None);
+        self.functions.insert("aha_str_contains".to_string(), fn_contains);
+        // str_substring(s_ptr, s_len, start, end) -> i64 (StringResult handle)
+        let fn_substring = self.module.add_function("aha_str_substring", fn_type_i64_4, None);
+        self.functions.insert("aha_str_substring".to_string(), fn_substring);
+        // str_result_free(handle) -> i64 — frees StringResult wrapper
+        let fn_result_free = self.module.add_function("aha_str_result_free", fn_type_i64_1, None);
+        self.functions.insert("aha_str_result_free".to_string(), fn_result_free);
+
+        // Type inference
+        self.fn_types.insert("str_split_count".to_string(), AhaType::Int);
+        self.fn_types.insert("str_to_int".to_string(), AhaType::Int);
+        self.fn_types.insert("str_contains".to_string(), AhaType::Int);
+    }
+
+    /// Compile a string builtin call (F13).
+    fn compile_string_call(&mut self, func_name: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        use inkwell::AddressSpace;
+
+        let i64_t = self.i64_type;
+        let i8_type = self.context.i8_type();
+        let i8_ptr = i8_type.ptr_type(AddressSpace::default());
+        let string_type = self.string_type;
+
+        macro_rules! call_c_i64 {
+            ($name:expr, $args:expr) => {{
+                let f = *self.functions.get($name).unwrap();
+                let r = self.builder.build_call(f, &$args, &format!("{}_ret", $name)).unwrap();
+                r.try_as_basic_value().left().unwrap().into_int_value()
+            }};
+        }
+
+        // str_split(string, delimiter) -> handle (opaque int)
+        if func_name == "str_split" {
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let delim_tv = self.compile_expression(&call.arguments[1])?;
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
+            let delim_ptr = self.extract_str_ptr(&delim_tv)?;
+            let delim_len = self.extract_str_len(&delim_tv)?;
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let delim_ptr_i64 = self.builder.build_ptr_to_int(delim_ptr, i64_t, "d_ptr_i64").unwrap();
+            let handle = call_c_i64!("aha_str_split", vec![s_ptr_i64.into(), s_len.into(), delim_ptr_i64.into(), delim_len.into()]);
+            return Ok(TypedValue::int(handle.into()));
+        }
+
+        // str_to_int(string) -> int
+        if func_name == "str_to_int" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let ptr_val = self.extract_str_ptr(&tv)?;
+            let len_val = self.extract_str_len(&tv)?;
+            let ptr_as_i64 = self.builder.build_ptr_to_int(ptr_val, i64_t, "str_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_to_int", vec![ptr_as_i64.into(), len_val.into()]);
+            return Ok(TypedValue::int(result.into()));
+        }
+
+        // str_split_count(handle) -> int
+        if func_name == "str_split_count" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let handle = tv.value.into_int_value();
+            let count = call_c_i64!("aha_str_split_count", vec![handle.into()]);
+            return Ok(TypedValue::int(count.into()));
+        }
+
+        // str_split_get(handle, index) -> string
+        if func_name == "str_split_get" {
+            let handle_tv = self.compile_expression(&call.arguments[0])?;
+            let index_tv = self.compile_expression(&call.arguments[1])?;
+            let handle = handle_tv.value.into_int_value();
+            let index = index_tv.value.into_int_value();
+            // Returns StringResult { ptr: *mut u8, len: i64 } handle
+            let sr_handle = call_c_i64!("aha_str_split_get", vec![handle.into(), index.into()]);
+            let sr_raw = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_raw").unwrap();
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let sr_ptr = self.builder.build_bitcast(sr_raw, sr_type.ptr_type(AddressSpace::default()), "sr_typed")
+                .expect("bitcast failed").into_pointer_value();
+            let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
+            let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
+            let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
+            // Free the StringResult wrapper (string data lives in split handle)
+            call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
+            let str_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let str_struct = self.builder.build_insert_value(str_struct, len, 1, "str_len")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            return Ok(TypedValue::string(str_struct.into()));
+        }
+
+        // str_split_free(handle)
+        if func_name == "str_split_free" {
+            let tv = self.compile_expression(&call.arguments[0])?;
+            let handle = tv.value.into_int_value();
+            let result = call_c_i64!("aha_str_split_free", vec![handle.into()]);
+            return Ok(TypedValue::int(result.into()));
+        }
+
+        // str_contains(string, substring) -> int
+        if func_name == "str_contains" {
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let sub_tv = self.compile_expression(&call.arguments[1])?;
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
+            let sub_ptr = self.extract_str_ptr(&sub_tv)?;
+            let sub_len = self.extract_str_len(&sub_tv)?;
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            let sub_ptr_i64 = self.builder.build_ptr_to_int(sub_ptr, i64_t, "sub_ptr_i64").unwrap();
+            let result = call_c_i64!("aha_str_contains", vec![s_ptr_i64.into(), s_len.into(), sub_ptr_i64.into(), sub_len.into()]);
+            return Ok(TypedValue::int(result.into()));
+        }
+
+        // str_substring(string, start, end) -> string
+        if func_name == "str_substring" {
+            let s_tv = self.compile_expression(&call.arguments[0])?;
+            let start_tv = self.compile_expression(&call.arguments[1])?;
+            let end_tv = self.compile_expression(&call.arguments[2])?;
+            let s_ptr = self.extract_str_ptr(&s_tv)?;
+            let s_len = self.extract_str_len(&s_tv)?;
+            let start_val = start_tv.value.into_int_value();
+            let end_val = end_tv.value.into_int_value();
+            let s_ptr_i64 = self.builder.build_ptr_to_int(s_ptr, i64_t, "s_ptr_i64").unwrap();
+            // Returns StringResult { ptr: *mut u8, len: i64 } handle
+            let sr_handle = call_c_i64!("aha_str_substring", vec![s_ptr_i64.into(), s_len.into(), start_val.into(), end_val.into()]);
+            let sr_raw = self.builder.build_int_to_ptr(sr_handle, i8_ptr, "sr_raw").unwrap();
+            let sr_type = self.context.struct_type(&[i8_ptr.into(), i64_t.into()], false);
+            let sr_ptr = self.builder.build_bitcast(sr_raw, sr_type.ptr_type(AddressSpace::default()), "sr_typed")
+                .expect("bitcast failed").into_pointer_value();
+            let ptr_gep = self.builder.build_struct_gep(sr_ptr, 0, "ptr_gep").unwrap();
+            let ptr_val = self.builder.build_load(ptr_gep, "ptr_val").unwrap().into_pointer_value();
+            let len_gep = self.builder.build_struct_gep(sr_ptr, 1, "len_gep").unwrap();
+            let len = self.builder.build_load(len_gep, "len_val").unwrap().into_int_value();
+            // Free StringResult wrapper (substring data is separate allocation)
+            call_c_i64!("aha_str_result_free", vec![sr_handle.into()]);
+            let result_struct = self.builder.build_insert_value(string_type.const_zero(), ptr_val, 0, "str_ptr")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let result_struct = self.builder.build_insert_value(result_struct, len, 1, "str_len")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            return Ok(TypedValue::string(result_struct.into()));
+        }
+
+        Err(format!("Unknown string builtin: {}", func_name))
     }
 
     /// Compile a list_* builtin call. The LLVM-level dispatch depends on
@@ -4536,7 +5641,26 @@ impl<'ctx> CodeGenerator<'ctx> {
         let alternative_tv = if let Some(alt_block) = &if_expr.alternative {
             self.compile_block_statement(alt_block)?
         } else {
-            TypedValue::int(self.i64_type.const_int(0, false).into())
+            // No else branch: the implicit "else" value must have the same LLVM
+            // type as the consequence, or the merge phi below would mix a struct
+            // operand with an i64 zero (PHI verifier error).
+            match &consequence_tv.aha_type {
+                AhaType::String => {
+                    let z = self.string_type.const_zero();
+                    TypedValue::new(z.into(), AhaType::String)
+                }
+                AhaType::Struct(name) => {
+                    let name = name.clone();
+                    let z = self.struct_llvm_type(&name)?.const_zero();
+                    TypedValue::new(z.into(), AhaType::Struct(name))
+                }
+                AhaType::Enum(name) => {
+                    let name = name.clone();
+                    let z = self.enum_llvm_type(&name)?.const_zero();
+                    TypedValue::new(z.into(), AhaType::Enum(name))
+                }
+                _ => TypedValue::int(self.i64_type.const_int(0, false).into()),
+            }
         };
         let alternative_end_block = self.builder.get_insert_block().unwrap();
         let alternative_terminated = alternative_end_block.get_terminator().is_some();
@@ -5028,6 +6152,121 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Compile postfix expression: expr?
+    fn compile_postfix(&mut self, pf: &ast::PostfixExpression) -> Result<TypedValue<'ctx>, String> {
+        match pf.operator.as_str() {
+            "?" => self.compile_question_mark(&pf.operand),
+            op => Err(format!("Unknown postfix operator: {}", op)),
+        }
+    }
+
+    /// Compile ok(val) or err(msg) — Result constructors.
+    fn compile_result_literal(&mut self, kind: &str, call: &ast::CallExpression) -> Result<TypedValue<'ctx>, String> {
+        if call.arguments.len() != 1 {
+            return Err(format!("{}() expects 1 argument", kind));
+        }
+        let arg = self.compile_expression(&call.arguments[0])?;
+
+        let result_struct = self.result_type.const_zero();
+
+        match kind {
+            "ok" => {
+                // Ok(val) → tag=0, payload=val (as i64)
+                let payload = match &arg.aha_type {
+                    AhaType::Int | AhaType::Bool => arg.value.into_int_value(),
+                    AhaType::String => {
+                        // String → extract i8* pointer, cast to i64
+                        let ptr = self.extract_str_ptr(&arg)?;
+                        self.builder.build_ptr_to_int(ptr, self.i64_type, "str_as_i64")
+                            .map_err(|e| e.to_string())?
+                    }
+                    _ => arg.value.into_int_value(),
+                };
+                let s = self.builder.build_insert_value(result_struct, self.i64_type.const_int(0, false), 0, "ok_tag")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                let s = self.builder.build_insert_value(s, payload, 1, "ok_val")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                // Type: Result<T, string> where T = arg type
+                let ok_type = arg.aha_type.clone();
+                Ok(TypedValue::new(s.into(), AhaType::Result(Box::new(ok_type), Box::new(AhaType::String))))
+            }
+            "err" => {
+                // Err(msg) → tag=1, payload=string_ptr (i8* as i64)
+                let payload = match &arg.aha_type {
+                    AhaType::String => {
+                        let ptr = self.extract_str_ptr(&arg)?;
+                        self.builder.build_ptr_to_int(ptr, self.i64_type, "err_ptr")
+                            .map_err(|e| e.to_string())?
+                    }
+                    _ => arg.value.into_int_value(),
+                };
+                let s = self.builder.build_insert_value(result_struct, self.i64_type.const_int(1, false), 0, "err_tag")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                let s = self.builder.build_insert_value(s, payload, 1, "err_val")
+                    .map_err(|e| e.to_string())?.into_struct_value();
+                Ok(TypedValue::new(s.into(), AhaType::Result(Box::new(AhaType::Int), Box::new(AhaType::String))))
+            }
+            _ => Err(format!("Unknown result constructor: {}", kind)),
+        }
+    }
+
+    /// Compile the ? operator on a Result value.
+    /// Checks tag: if Err (tag=1) → early return from current function;
+    /// if Ok (tag=0) → unwrap payload and continue.
+    fn compile_question_mark(&mut self, operand: &ast::Expression) -> Result<TypedValue<'ctx>, String> {
+        let result_val = self.compile_expression(operand)?;
+
+        // Must be a Result type
+        let ok_type = match &result_val.aha_type {
+            AhaType::Result(ok, _) => (**ok).clone(),
+            other => return Err(format!("? operator requires Result type, got {}", other)),
+        };
+
+        let function = self.current_function
+            .ok_or("? operator used outside of a function".to_string())?;
+
+        // Extract tag and payload from Result struct {i64, i64}
+        let tag = self.builder.build_extract_value(result_val.value.into_struct_value(), 0, "r_tag")
+            .map_err(|e| e.to_string())?.into_int_value();
+        let payload = self.builder.build_extract_value(result_val.value.into_struct_value(), 1, "r_payload")
+            .map_err(|e| e.to_string())?.into_int_value();
+
+        let is_err = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ, tag,
+            self.i64_type.const_int(1, false), "is_err",
+        ).map_err(|e| e.to_string())?;
+
+        let ok_block = self.context.append_basic_block(function, "qmark_ok");
+        let err_block = self.context.append_basic_block(function, "qmark_err");
+        let continue_block = self.context.append_basic_block(function, "qmark_cont");
+
+        self.builder.build_conditional_branch(is_err, err_block, ok_block)
+            .map_err(|e| e.to_string())?;
+
+        // Err path: return error value matching the function's return type.
+        self.builder.position_at_end(err_block);
+        let fn_ret = function.get_type().get_return_type();
+        if let Some(inkwell::types::BasicTypeEnum::StructType(st)) = fn_ret {
+            // Function returns Result — build full Err struct.
+            let err_struct = st.const_zero();
+            let err_struct = self.builder.build_insert_value(err_struct, self.i64_type.const_int(1, false), 0, "err_tag")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let err_struct = self.builder.build_insert_value(err_struct, payload, 1, "err_val")
+                .map_err(|e| e.to_string())?.into_struct_value();
+            let _ = self.builder.build_return(Some(&err_struct));
+        } else {
+            // Function returns non-Result (e.g. Int) — return error tag (1).
+            let _ = self.builder.build_return(Some(&self.i64_type.const_int(1, false)));
+        }
+
+        // Ok path: continue with unwrapped payload
+        self.builder.position_at_end(ok_block);
+        let _ = self.builder.build_unconditional_branch(continue_block);
+
+        self.builder.position_at_end(continue_block);
+        Ok(TypedValue::new(payload.into(), ok_type))
+    }
+
     /// Compile: match expr { Pattern => body, ... }
     fn compile_match_expression(&mut self, m: &ast::MatchExpression) -> Result<TypedValue<'ctx>, String> {
         let scrutinee = self.compile_expression(&m.value)?;
@@ -5256,6 +6495,63 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         if let Some(f) = self.module.get_function("actor_call") {
             execution_engine.add_global_mapping(&f, crate::runtime::actor_call as usize);
+        }
+
+        // F11 HTTP runtime functions
+        if let Some(f) = self.module.get_function("aha_http_request_method") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_method as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_path") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_path as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_body") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_body as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_request_header") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_request_header as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_http_response") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_http_response as usize);
+        }
+
+        // F12 JSON runtime functions
+        if let Some(f) = self.module.get_function("aha_json_parse") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_parse as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_stringify") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_stringify as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_get") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_get as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_json_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_json_free as usize);
+        }
+
+        // F13 String runtime functions
+        if let Some(f) = self.module.get_function("aha_str_split") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_count") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_count as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_get") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_get as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_split_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_split_free as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_to_int") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_to_int as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_contains") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_contains as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_substring") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_substring as usize);
+        }
+        if let Some(f) = self.module.get_function("aha_str_result_free") {
+            execution_engine.add_global_mapping(&f, crate::runtime::aha_str_result_free as usize);
         }
 
         let function_name = "main";

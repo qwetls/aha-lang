@@ -2,6 +2,119 @@
 
 All notable changes to AHA! Lang are documented in this file.
 
+## [1.7.1] — 2026-09-09
+
+### Fixed
+
+- **Systemic null-termination bug in runtime string returns (F11/F12/F13):**
+  - Runtime functions returned `Box::into_raw(Box<str>)` — **not null-terminated** — while codegen measures returned strings with `strlen`, so `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`, `json_stringify`, `json_get` read past the allocation and produced garbage lengths in the GET/POST pipeline.
+  - New `new_aha_string` helper (allocates `len+1`, explicit `\0`, same pattern as `file_read`); all string-returning runtime functions now use it.
+  - `http_recv` codegen stores a null terminator at the byte after `recv`'s return length so raw request buffers are safely scannable by the parsers.
+  - String `==`/`!=` results are now tagged `Int` (0/1) instead of `Bool`, matching the language spec that all comparison operators return `Int`. Previously `method == "GET" && str_contains(path, ...)` failed codegen with "Cannot apply operator '&&' to types Bool and Int".
+  - `if` without `else` whose body evaluates to a String/Struct/Enum now emits a type-correct implicit-else zero value (`const_zero` of the consequence's LLVM type). Previously the merge phi mixed the struct value with `i64 0` and failed verification ("PHI node operands are not the same type as the result"), breaking patterns like `if i > 0 { out = out + ", " }`.
+
+### Added
+
+- REST API tutorial examples in `examples/`: `hello.aha` (smallest server), `todo_api.aha` (GET list, GET `/:id`, POST create); `rest_api.aha` fixed to use `print_str` (`print` only accepts i64).
+- Behavioral regression tests in `tests/rest_api_tutorial.rs`: compile-checks every `examples/*.aha` and JIT-executes the full GET/POST parsing pipeline asserting exact `len()` of parser outputs.
+
+## [1.7.0] — 2026-08-25
+
+### Added
+
+- **String Builtins — String manipulation (Roadmap Phase 13):**
+  - 7 string builtins: `str_split`, `str_split_count`, `str_split_get`, `str_split_free`, `str_to_int`, `str_contains`, `str_substring`.
+  - `str_split(s, delim)` — splits string by delimiter, returns handle to split result.
+  - `str_split_count(handle)` — returns number of parts from a split result.
+  - `str_split_get(handle, index)` — returns string at given index from split result.
+  - `str_split_free(handle)` — frees split result memory.
+  - `str_to_int(s)` — parses string to integer, returns 0 on failure.
+  - `str_contains(s, sub)` — returns 1 if `s` contains `sub`, 0 otherwise.
+  - `str_substring(s, start, end)` — returns substring from start to end index.
+  - Rust runtime: `SplitResult` struct + 7 extern functions in `src/runtime.rs`.
+  - Codegen: `declare_string_runtime()` + `compile_string_call()` dispatch with direct `aha_str_*` calls.
+  - 11 integration tests in `tests/f13_string_builtins.rs` covering split, to_int, contains, substring, and routing pattern.
+  - REST API example updated with dynamic routing using string builtins.
+
+## [1.6.6] — 2026-08-24
+
+### Added
+
+- **JSON Parser/Serializer — JSON builtins (Roadmap Phase 12):**
+  - 3 JSON builtins: `json_parse`, `json_stringify`, `json_get`.
+  - `json_parse(string)` — parses JSON string into opaque handle (tree stored in Rust memory).
+  - `json_stringify(handle)` — serializes JSON tree back to String.
+  - `json_get(handle, "path.to.value")` — navigates JSON tree by dot-separated path, returns string representation.
+  - Supports: objects, arrays, strings, numbers, booleans, null. Dot-path navigation: `"user.name"`, `"items.0"`, nested paths.
+  - Rust runtime: 317 lines — JsonValue enum, recursive descent parser (tokenizer + parser), serializer, dot-path navigator.
+  - Codegen: `declare_json_runtime()` + `create_json_builtins()` + `compile_json_call()` dispatch.
+  - `add_global_mapping` for `aha_json_parse`, `aha_json_stringify`, `aha_json_get` in `run_jit()`.
+  - 7 compile-only tests in `tests/json.rs` covering parse, stringify, get, nested, arrays, full pattern, HTTP+JSON pattern.
+
+## [1.6.5] — 2026-08-24
+
+### Added
+
+- **HTTP Server — Web server builtins (Roadmap Phase 11):**
+  - 9 HTTP builtins: `http_listen`, `http_accept`, `http_recv`, `http_send`, `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`, `http_response`.
+  - `http_listen(port)` — creates TCP server socket, returns fd.
+  - `http_accept(server)` — accepts incoming connection, returns client fd.
+  - `http_recv(fd)` — reads raw HTTP request into String.
+  - `http_send(fd, data)` — sends raw bytes to client.
+  - `http_request_method(req)` — parses HTTP method ("GET", "POST", etc.).
+  - `http_request_path(req)` — parses request path ("/api/data").
+  - `http_request_body(req)` — extracts body after `\r\n\r\n`.
+  - `http_request_header(req, name)` — case-insensitive header lookup.
+  - `http_response(status, body)` — builds complete HTTP/1.1 response with Content-Type, Content-Length, Connection: close.
+  - Rust runtime: 5 parser/builder functions in `src/runtime.rs`.
+  - Codegen: `declare_http_runtime()` + `create_http_builtins()` + `compile_http_call()` dispatch.
+  - 10 compile-only tests in `tests/http_server.rs` covering all builtins + full server pattern.
+
+## [1.6.4] — 2026-08-22
+
+### Added
+
+- **TCP/UDP Sockets — Networking builtins (Roadmap Phase 10):**
+  - 12 networking builtins: `tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`.
+  - All builtins return `int` (file descriptors / error codes), except `ip4_str` which returns `String`.
+  - C runtime support: `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `close`, `htons`, `htonl`, `inet_addr`, `inet_ntoa`.
+  - 9 compile-only tests: `tests/tcp_udp.rs`.
+
+## [1.6.3] — 2026-08-21
+
+### Added
+
+- **Error Handling — Result<T, E> type (Roadmap Phase 9):**
+  - `Result<T, E>` built-in type — tagged union `{i64 tag, i64 payload}`, tag 0=Ok, tag 1=Err.
+  - `ok(val)` and `err("msg")` constructors — create Result values without new keywords.
+  - `?` postfix operator — checks tag, unwraps payload on Ok, early-returns on Err.
+  - `parse_type_hint` distinguishes `Result<T, E>` from `Map<K, V>` using identifier name.
+  - `?` operator respects function return type — returns full Result struct if fn returns Result, else returns error tag (1) for non-Result functions.
+  - Type inference: `ok()`/`err()` infer as `Result<T, string>` in both `infer_expr_type` and `infer_expr_type_with_scope`.
+  - 6 tests: question_mark_unwraps_ok, chain_question_marks, result_type_as_return_type, result_with_question_mark_compiles, err_propagation_compiles, ok_and_err_constructors_compile.
+
+## [1.6.2] — 2026-08-21
+
+### Added
+
+- **FFI — string-to-pointer auto-coercion:**
+  - When calling an extern fn with a pointer param (`*void`), string literals `{i8*, i64}` are auto-coerced: the `i8*` pointer field is extracted and passed directly.
+  - Enables `atoi("42")`, `strlen("hello")`, `atol("12345")` via JIT — real C function calls with string arguments.
+  - 5 end-to-end JIT tests: atoi, atoi-negative, atol, atoi-combined, strlen.
+
+## [1.6.1] — 2026-08-21
+
+### Added
+
+- **FFI — extern fn declarations (Roadmap Phase 8):**
+  - `extern fn name(params) -> RetType;` — declares foreign functions callable from AHA! code.
+  - `RawPtr(Box<AhaType>)` type variant — `*void`, `*int`, `*string` pointer types for FFI parameters.
+  - LLVM external linkage — `module.add_function(name, type, External)` creates unresolved declarations.
+  - JIT symbol resolution via `dlsym` at runtime; AOT via linker.
+  - `--ldflags` CLI option for extra linker flags.
+  - `inttoptr` auto-coercion — when calling extern fn with pointer params, integer args are automatically converted via `inttoptr`.
+  - 12 tests: parse (basic, pointer param, multiple, no return type), compile (basic, pointer, redeclare builtin), JIT (declared-not-called, pointer compile-only), error cases (missing fn keyword, missing semicolon).
+
 ## [1.6.0] — 2026-08-21
 
 ### Added

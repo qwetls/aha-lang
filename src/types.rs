@@ -33,6 +33,12 @@ pub enum AhaType {
     /// Named enum — carries the enum's declared name so codegen can
     /// look up its variant layout and LLVM tagged union type.
     Enum(String),
+    /// Raw pointer — `*void` (opaque), `*int`, `*string`, etc.
+    /// Maps to LLVM `i8*` (opaque) or `T*` (typed). Used for FFI.
+    RawPtr(Box<AhaType>),
+    /// Result<T, E> — ok variant carries T, err variant carries string message.
+    /// LLVM: `{i64 tag, i64 payload}` — tag 0=Ok, tag 1=Err.
+    Result(Box<AhaType>, Box<AhaType>),
     /// Function type with parameter types and return type
     Function {
         params: Vec<AhaType>,
@@ -118,6 +124,11 @@ impl AhaType {
             "map" => Some(AhaType::Map(Box::new(AhaType::Int), Box::new(AhaType::Int))),
             "list" => Some(AhaType::List(Box::new(AhaType::Int))),
             _ => {
+                // *T — raw pointer
+                if let Some(inner) = hint.strip_prefix('*') {
+                    let inner_type = Self::from_hint(inner)?;
+                    return Some(AhaType::RawPtr(Box::new(inner_type)));
+                }
                 // List<T> — parse the inner type.
                 if let Some(inner) = hint.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
                     let inner_type = match inner {
@@ -146,6 +157,23 @@ impl AhaType {
                     };
                     return Some(AhaType::Map(Box::new(key_type), Box::new(value_type)));
                 }
+                // Result<T, E> — parse ok type and err type.
+                if let Some(inner) = hint.strip_prefix("Result<").and_then(|s| s.strip_suffix('>')) {
+                    let (ok_hint, err_hint) = inner.split_once(',')?;
+                    let ok_type = match ok_hint.trim() {
+                        "int" | "i64" => AhaType::Int,
+                        "bool" => AhaType::Bool,
+                        "string" | "str" => AhaType::String,
+                        _ => Self::from_hint(ok_hint.trim())?,
+                    };
+                    let err_type = match err_hint.trim() {
+                        "int" | "i64" => AhaType::Int,
+                        "bool" => AhaType::Bool,
+                        "string" | "str" => AhaType::String,
+                        _ => Self::from_hint(err_hint.trim())?,
+                    };
+                    return Some(AhaType::Result(Box::new(ok_type), Box::new(err_type)));
+                }
                 None
             }
         }
@@ -159,6 +187,9 @@ impl AhaType {
     pub fn unify_with(&self, other: &AhaType) -> AhaType {
         match (self, other) {
             (AhaType::Int, t) => t.clone(),
+            // RawPtr defaults to Int but observed RawPtr wins.
+            (AhaType::RawPtr(_), AhaType::Int) => self.clone(),
+            (AhaType::Int, AhaType::RawPtr(_)) => other.clone(),
             // Map<K,V> unifies key/value independently: Int defaults upgrade
             // to observed types (String, ...), matching List<T> semantics.
             (AhaType::Map(k1, v1), AhaType::Map(k2, v2)) => AhaType::Map(
@@ -182,6 +213,8 @@ impl fmt::Display for AhaType {
             AhaType::Map(key, value) => write!(f, "Map<{}, {}>", key, value),
             AhaType::Struct(name) => write!(f, "{}", name),
             AhaType::Enum(name) => write!(f, "{}", name),
+            AhaType::RawPtr(inner) => write!(f, "*{}", inner),
+            AhaType::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             AhaType::Function { params, ret } => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {

@@ -148,6 +148,7 @@ impl Lexer {
             "spawn" => TokenType::Spawn,
             "enum" => TokenType::Enum,
             "match" => TokenType::Match,
+            "extern" => TokenType::Extern,
             _ => TokenType::Identifier,
         }
     }
@@ -181,6 +182,7 @@ impl Lexer {
                     tok = Token::new(TokenType::Bang, self.ch.to_string(), line, column);
                 }
             }
+            '?' => tok = Token::new(TokenType::QuestionMark, self.ch.to_string(), line, column),
             '+' => tok = Token::new(TokenType::Plus, self.ch.to_string(), line, column),
             '-' => {
                 if self.peek_char() == '>' {

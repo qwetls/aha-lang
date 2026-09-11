@@ -1,7 +1,7 @@
 # AHA! Lang — Product Requirements Document (PRD)
 
-**Versi PRD:** 0.4
-**Tanggal:** 2026-08-21
+**Versi PRD:** 0.6.1
+**Tanggal:** 2026-09-12
 **Status:** Draf — living document, diperbarui seiring development
 **Repo:** [qwetls/aha-lang](https://github.com/qwetls/aha-lang) · Docs: [aha-lang.is-a.dev](https://aha-lang.is-a.dev)
 
@@ -126,7 +126,7 @@ kompromi.
 
 ## 7. Strategi: Stabilisasi Dulu, Baru Melangkah
 
-**F1-F4 stabil di `main`. F5 selesai.**
+**F1-F6 stabil. F8-F10 selesai.**
 
 | Fase | Fokus | Status |
 |------|-------|--------|
@@ -137,13 +137,13 @@ kompromi.
 | **F5** | Resource lifetimes (ownership) | ✅ Selesai — Phase 1 (scope-based) + Phase 2 (last-use) + Phase 3 (escape analysis) |
 | **F6** | Actor-model concurrency | ✅ Selesai — Phase 1 (synchronous JIT) + Phase 2 (threaded, mpsc + Condvar) |
 | **F7** | Enum keyword + pattern matching | ✅ Selesai (v1.6.0) — unit/tuple variants, match, destructuring, wildcards, nested enums |
-| **F8** | FFI support — panggil C library dari AHA! | ⏳ Prioritas |
-| **F9** | Error handling — `Result<T, E>` type | ⏳ Prioritas |
-| **F10** | TCP/UDP sockets — fondasi networking | ⏳ Setelah F8 |
-| **F11** | HTTP server — built-in HTTP/1.1 | ⏳ Setelah F10 |
-| **F12** | JSON ser/deser — data interchange | ⏳ Setelah F11 |
-| **F13** | Async I/O — event loop, non-blocking | ⏳ Setelah F10 |
-| **F14** | Game engine foundation — audio, input, rendering | ⏳ Setelah F8 |
+| **F8** | FFI — `extern fn` + `RawPtr` | ✅ Selesai (v1.6.1) — `extern fn`, `*void`, string→ptr coercion, JIT calls |
+| **F9** | Error Handling — `Result<T,E>` | ✅ Selesai (v1.6.3) — `Result<T,E>`, `ok()`/`err()`, `?` operator |
+| **F10** | TCP/UDP Sockets — network builtins | ✅ Selesai (v1.6.4) — 12 socket builtins, C runtime, 9 tests |
+| **F11** | HTTP Server — builtins | ✅ Selesai (v1.6.5) — 9 HTTP builtins, 5 runtime functions, 10 tests |
+| **F12** | JSON Parser/Serializer | ✅ Selesai (v1.6.6) — 3 JSON builtins, 3 runtime functions, 7 tests |
+| **F13** | String Builtins — string manipulation | ✅ Selesai (v1.7.0) — 7 string builtins, StringResult struct, 11 tests |
+| **F14** | Game Engine foundations | ⏳ Setelah web backend stabil |
 | **F15** | Package manager (`aha install`) | ⏳ Setelah komunitas |
 | **F?** | Self-hosting — compiler AHA! ditulis dalam AHA! | ⏳ Long-term (setelah semua stabil) |
 
@@ -181,6 +181,7 @@ ke main. Tidak ada loncatan.
 - Array literal & indexing
 - Builtin: `print`, `print_str`, `abs`, `min`, `max`, `len`
 - String builtins: `int_to_string`, `string_to_int`, `string_sub`, `char_at`
+- String manipulation builtins (F13): `str_split`, `str_split_count`, `str_split_get`, `str_split_free`, `str_to_int`, `str_contains`, `str_substring`
 - File I/O: `file_read`, `file_write`
 - JIT execution via LLVM (inkwell)
 - CLI (`--file`, `--emit-ir`, `--version`), VS Code extension
@@ -259,8 +260,11 @@ Detail Fase 1, 2 & 3 (di `development`):
 - Link with `cc` — `cc -o <output> <temp>.o`
 
 ### ❌ Belum ada
-- Self-hosting (compiler AHA! ditulis dalam AHA!)
-- Package manager `aha install` (F8 — setelah komunitas)
+- Self-hosting (compiler AHA! ditulis dalam AHA!) — long-term
+- Package manager `aha install` (F15 — setelah komunitas)
+- HTTP Server builtins (F11) ✅
+- JSON parser/serializer (F12) ✅
+- String manipulation builtins (F13) ✅
 
 ---
 
@@ -336,7 +340,54 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 - [x] Functions with enum params — `fn is_weekend(d: Day) -> int` with proper type inference
 - [x] 17 tests: unit basic, unit second/third variant, wildcard, tuple one/two fields, destructure math, mixed unit+tuple, match in function, match arithmetic, nested match, two tuple variants, single variant, parse diagnostics
 
-### ⏳ F8. Self-hosting — LONG-TERM
+### ✅ F8. FFI — Foreign Function Interface — SELESAI (v1.6.1)
+- [x] `extern fn` declaration — parser, AST, codegen (declaration only, no body)
+- [x] `*void` raw pointer type — `RawPtr(AhaType::Void)` → LLVM `i8*`
+- [x] Typed raw pointers: `*int`, `*string`, `*bool`
+- [x] String→pointer coercion — automatic `build_extract_value` for string params
+- [x] JIT native function calls via `add_global_mapping`
+- [x] Struct pointer access — field access via `build_load`/`build_gep`
+- [x] String coercion tests (5 tests)
+
+### ✅ F9. Error Handling — SELESAI (v1.6.3)
+- [x] `Result<T, E>` built-in type — `{i64 tag, i64 payload}` (tag 0=Ok, 1=Err)
+- [x] `ok(value)` constructor — returns `Result<T, E>` with tag 0
+- [x] `err(message)` constructor — returns `Result<T, E>` with tag 1
+- [x] `?` postfix operator — unwrap or early return with error
+- [x] Parser distinguishes `Result` from `Map` via identifier name
+- [x] Type inference handles `ok()`/`err()` as `Result<T, E>`
+- [x] 6 error handling tests
+
+### ✅ F10. TCP/UDP Sockets — SELESAI (v1.6.4)
+- [x] 12 AHA builtins: `tcp_socket`, `tcp_connect`, `tcp_bind_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `udp_socket`, `udp_send`, `udp_recv`, `close_fd`, `ip4_addr`, `ip4_str`
+- [x] C runtime: `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `close`, `htons`, `htonl`, `inet_addr`, `inet_ntoa`
+- [x] `pack_sockaddr!` macro — allocate `[i8;16]` for `sockaddr_in`
+- [x] `ip4_str` returns `String` type (not `Int`)
+- [x] LLVM IR type matching — `i64_ptr`/`i8_ptr` in declarations
+- [x] 9 compile-only tests (`tests/tcp_udp.rs`)
+
+### ✅ F11. HTTP Server — builtins (v1.6.5)
+- [x] HTTP request parser builtins — `http_request_method`, `http_request_path`, `http_request_body`, `http_request_header`
+- [x] HTTP response builder — `http_response(status, body)` generates HTTP/1.1 response with headers
+- [x] `http_listen(port)` — bind + listen via TCP socket
+- [x] `http_accept(server_fd)` — accept connection
+- [x] `http_recv(fd)` — read raw HTTP request into String
+- [x] `http_send(fd, data)` — send raw bytes to client
+- [x] Rust runtime: 5 parser/builder functions (`src/runtime.rs`)
+- [x] Codegen: `declare_http_runtime()` + `create_http_builtins()` + `compile_http_call()` dispatch
+- [x] 10 compile-only tests (`tests/http_server.rs`)
+
+### ✅ F12. JSON Parser/Serializer (v1.6.6)
+- [x] `json_parse(string)` — parse JSON string into opaque handle (tree in Rust memory)
+- [x] `json_stringify(handle)` — serialize JSON tree back to String
+- [x] `json_get(handle, "path.to.value")` — navigate by dot-path, return string representation
+- [x] Dot-path navigation: `"user.name"`, `"items.0"`, nested paths
+- [x] Rust runtime: tokenizer + recursive descent parser + serializer + navigator (`src/runtime.rs`)
+- [x] Codegen: `declare_json_runtime()` + `create_json_builtins()` + `compile_json_call()` dispatch
+- [x] `add_global_mapping` for `aha_json_parse`, `aha_json_stringify`, `aha_json_get`
+- [x] 7 compile-only tests (`tests/json.rs`) — covers parse, nested, stringify, get, array, full pattern, HTTP+JSON pattern
+
+### ⏳ F?. Self-hosting — LONG-TERM
 - [ ] Compiler AHA! ditulis ulang dalam AHA! (bukti kedewasaan bahasa)
 - [ ] Hanya dikejar setelah semua domain aplikasi (web, game) stabil
 
@@ -419,3 +470,10 @@ Tidak ada borrow checker, tidak ada GC, tidak ada reference counting.
 | 2026-08-20 | 0.3.6 | F6 SELESAI + AOT Compilation. Actor-model: spawn/call/send threaded via mpsc+Condvar. AOT: `--emit-exe` → rename main + C wrapper + emit .o + link with cc. inkwell v0.4 API: `as_global_value().set_name()`, explicit `RelocMode::Default`/`CodeModel::Default`. |
 | 2026-08-21 | 0.3.7 | F7 SELESAI — Enum keyword + pattern matching (v1.6.0). Unit/tuple variants, match expression, destructuring, wildcard arms, nested enums. 17 tests. Fixes: entry block terminator safety net, dead block builder position, arm block terminators, type hint preservation. |
 | 2026-08-21 | 0.4 | Roadmap revision: self-hosting dipindah ke long-term. Web backend jadi prioritas — F8 (FFI), F9 (error handling), F10 (TCP/UDP), F11 (HTTP), F12 (JSON), F13 (async I/O). Game engine foundation (F14). Gap analysis ditambahkan. |
+| 2026-08-21 | 0.4 | F9 Error Handling SELESAI — `Result<T, E>` built-in type (`{i64 tag, i64 payload}`), `ok()`/`err()` constructors, `?` postfix operator. Parser distinguishes Result from Map via identifier name. Type inference handles ok/err as Result. 6 tests. |
+| 2026-08-21 | 0.4.1 | F8 FFI SELESAI — `extern fn` declaration, `*void` raw pointer, typed pointers (`*int`, `*string`, `*bool`), string→pointer coercion, JIT native calls via `add_global_mapping`. 5 tests. v1.6.1. |
+| 2026-08-22 | 0.4.2 | F10 TCP/UDP Sockets SELESAI — 12 AHA builtins (tcp_socket, tcp_connect, tcp_bind_listen, tcp_accept, tcp_send, tcp_recv, udp_socket, udp_send, udp_recv, close_fd, ip4_addr, ip4_str) + 14 C runtime functions. `ip4_str` returns String. 9 compile-only tests. v1.6.4. |
+| 2026-08-24 | 0.5 | F8-F10 documentation update — PRD roadmap restructured (F8=FFI, F9=Error, F10=TCP/UDP, F11-F15 planned), README updated, CHANGELOG v1.6.4, docs site networking page (en+id). |
+| 2026-08-24 | 0.5.1 | F11 HTTP Server SELESAI (v1.6.5) + F12 JSON Parser/Serializer SELESAI (v1.6.6) — 9 HTTP builtins + 5 Rust runtime functions, 4 JSON builtins dengan dot-path navigation. |
+| 2026-08-25 | 0.6 | F13 String Builtins SELESAI (v1.7.0) — 7 builtins (str_split/count/get/free, str_to_int, str_contains, str_substring) via StringResult struct. Roadmap renumber: F13 = string manipulation (bukan async I/O). |
+| 2026-09-09 | 0.6.1 | v1.7.1 hardening — systemic null-termination fix (semua runtime string return lewat `new_aha_string` len+1), string `==`/`!=` mengembalikan Int (bukan Bool), if-without-else phi type-consistent. REST API tutorial examples + regression tests di CI. Community health files (CODE_OF_CONDUCT, SECURITY, issue/PR templates). |

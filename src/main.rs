@@ -23,6 +23,10 @@ struct Args {
     /// Compile to native executable (AOT)
     #[arg(long)]
     emit_exe: Option<String>,
+
+    /// Extra linker flags (e.g. --ldflags "-lm -lpthread")
+    #[arg(long)]
+    ldflags: Option<String>,
 }
 
 fn main() {
@@ -105,11 +109,18 @@ fn main() {
         }
         println!("Object file: {}", obj_path.display());
 
-        // Link with cc
-        let status = std::process::Command::new("cc")
-            .arg("-o").arg(output_path)
-            .arg(&obj_path)
-            .status();
+        // Link with cc — always link libc, add user ldflags
+        let mut cmd = std::process::Command::new("cc");
+        cmd.arg("-o").arg(output_path)
+           .arg(&obj_path)
+           .arg("-lc");
+        // Append user-provided linker flags
+        if let Some(ref flags) = args.ldflags {
+            for flag in flags.split_whitespace() {
+                cmd.arg(flag);
+            }
+        }
+        let status = cmd.status();
         match status {
             Ok(s) if s.success() => {
                 println!("Native executable: {}", output_path);
