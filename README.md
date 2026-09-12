@@ -11,9 +11,10 @@
 A modern programming language with an LLVM backend — designed to be understood at a glance, yet strong enough to build real software.
 
 [![CI/CD](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/qwetls/aha-lang/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/qwetls/aha-lang?label=release)](https://github.com/qwetls/aha-lang/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-598%20passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
+[![Tests](https://img.shields.io/badge/tests-600%2B_passing-brightgreen.svg)](https://github.com/qwetls/aha-lang/actions)
 
 </div>
 
@@ -215,6 +216,9 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 | `String` | `"..."` with escape sequences (`\n`, `\t`, `\\`, `\"`, `\r`, `\0`) |
 | `Enum` | `enum Name { A, B(int), C(int, int) }` — unit or tuple variants, matched with `match` |
 | `Struct` | `struct Name { field: type }` — named fields, created with `Name { field: val }` |
+| `List<T>` / `Map<K,V>` | Heap-allocated generics — handles with `*_new`/`*_set`/`*_get`/`*_free` builtins, compiler-inserted auto-free |
+| `Result<T,E>` | Error handling — `ok()`/`err()` constructors, `?` early-return operator |
+| `*void` / typed ptrs | Raw pointers for FFI (`*int`, `*string`, …) |
 
 ### Operators
 
@@ -240,6 +244,8 @@ Source Code → Lexer → Parser (Pratt) → AST → Code Generator → LLVM IR 
 | `print_str(string)` | Print a string |
 | `len(string)` | Length in O(1) |
 | `abs(x)`, `min(a, b)`, `max(a, b)` | Numeric helpers |
+
+Plus ~50 more builtins for collections, strings, FFI, sockets, HTTP, and JSON — see the [builtins reference](https://aha-lang-tau.vercel.app/en/builtins).
 
 ### Modules (v1.5.0)
 
@@ -276,9 +282,9 @@ let result = add(2, 3);
 - [x] CLI (`--file`, `--emit-ir`, `--version`)
 - [x] VS Code syntax-highlighting extension (`editors/vscode`)
 - [x] Module system: `use "file"` for multi-file compilation (v1.5.0)
-- [x] CI: `cargo check`, 581+ tests, `cargo build --release`
+- [x] CI: `cargo check`, 600+ tests, `cargo build --release`
 
-### 🚧 Planned (Phase 2)
+### ✅ Phase 2 (Complete)
 
 - [x] Struct codegen & field access at runtime
 - [x] Type inference & annotations
@@ -289,15 +295,16 @@ let result = add(2, 3);
 - [x] Enum keyword + pattern matching (`match`, destructuring, wildcards) — v1.6.0
 - [x] AOT compilation (`--emit-exe`)
 
-### 🌐 Web Backend Roadmap
+### 🌐 Web Backend — Complete (v1.6.1 → v1.7.1)
 
-- [ ] FFI support — call C libraries from AHA!
-- [ ] Error handling — `Result<T, E>` type
-- [ ] TCP/UDP sockets — networking foundation
-- [ ] HTTP server — built-in HTTP/1.1
-- [ ] JSON ser/deser — data interchange
-- [ ] Async I/O — event loop, non-blocking
-- [ ] String builder — efficient response building
+- [x] FFI support — call C libraries from AHA! (`extern fn`, raw pointers, string coercion) — v1.6.1
+- [x] Error handling — `Result<T, E>` with `ok()`/`err()` and `?` operator — v1.6.3
+- [x] TCP/UDP sockets — 12 network builtins + C runtime — v1.6.4
+- [x] HTTP server — built-in HTTP/1.1 (9 builtins: listen/accept/recv/send + request parsing + response builder) — v1.6.5
+- [x] JSON ser/deser — `json_parse`/`json_stringify`/`json_get` with dot-path navigation — v1.6.6
+- [x] String builtins — split/to_int/contains/substring (dynamic routing, query parsing, input validation) — v1.7.0
+- [x] v1.7.1 hardening — null-terminated runtime strings, string `==`/`!=` return `Int`, type-consistent `if` phis; REST API examples (`examples/*.aha`) compiled in CI with exact-length regression tests
+- Async I/O: deferred — actor-model concurrency (v1.5.7) already covers the practical cases
 
 ### 🎮 Game Engine Roadmap
 
